@@ -1,0 +1,11 @@
+.{
+    .name = .rawr,
+    .version = "0.0.1",
+    .fingerprint = 0x7712e93dd4cec9aa,
+    .minimum_zig_version = "0.15.2",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
