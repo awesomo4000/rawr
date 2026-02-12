@@ -31,13 +31,18 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_tests.step);
 
-    // Benchmark executable
+    // Benchmark executable (always ReleaseFast, including the library)
+    const bench_lib_mod = b.createModule(.{
+        .root_source_file = b.path("src/roaring.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("src/bench.zig"),
         .target = target,
         .optimize = .ReleaseFast,
     });
-    bench_mod.addImport("rawr", lib_mod);
+    bench_mod.addImport("rawr", bench_lib_mod);
 
     const bench_exe = b.addExecutable(.{
         .name = "bench",
