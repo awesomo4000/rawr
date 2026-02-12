@@ -872,8 +872,9 @@ pub const RoaringBitmap = struct {
                 }
             } else {
                 // Mixed word - count transitions
+                // Carry in_run state: if previous word ended in a run, first bit continues it
                 var w = word;
-                var prev_bit: u1 = 0;
+                var prev_bit: u1 = if (in_run) 1 else 0;
                 while (true) {
                     const bit: u1 = @truncate(w);
                     if (bit == 1 and prev_bit == 0) {
@@ -1802,13 +1803,17 @@ pub const FrozenBitmap = struct {
     }
 
     /// Get the data offset for container at index.
+    /// Note: When offsets_offset == 0 (no offset header), this calls getContainerSize
+    /// which may call back here. Recursion terminates because:
+    /// 1. idx=0 in getContainerSize uses self.data_offset directly (base case)
+    /// 2. No offset header only occurs when size < NO_OFFSET_THRESHOLD (4 containers max)
     fn getContainerDataOffset(self: *const Self, idx: usize) usize {
         if (self.offsets_offset != 0) {
             const offset = self.offsets_offset + idx * 4;
             return self.data_offset + std.mem.readInt(u32, self.data[offset..][0..4], .little);
         }
 
-        // Calculate offset by summing previous container sizes
+        // Calculate offset by summing previous container sizes (small bitmap path)
         var offset = self.data_offset;
         for (0..idx) |i| {
             offset += self.getContainerSize(i);
@@ -1820,7 +1825,8 @@ pub const FrozenBitmap = struct {
     fn getContainerSize(self: *const Self, idx: usize) usize {
         const card = self.getCardinality(idx);
         if (self.isRunContainer(idx)) {
-            // Run: read n_runs from data prefix
+            // Run: read n_runs from data prefix. For idx=0, use data_offset directly
+            // to avoid mutual recursion with getContainerDataOffset.
             const data_offset = if (idx == 0) self.data_offset else self.getContainerDataOffset(idx);
             const n_runs = std.mem.readInt(u16, self.data[data_offset..][0..2], .little);
             return 2 + @as(usize, n_runs) * 4;
@@ -2964,6 +2970,42 @@ test "runOptimize converts bitset with long run" {
     try std.testing.expectEqual(@as(u64, 10001), bm.cardinality());
     try std.testing.expect(bm.contains(0));
     try std.testing.expect(bm.contains(10000));
+}
+
+test "runOptimize counts runs correctly across word boundaries" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    // Create bitset with runs spanning word boundaries
+    // Word 0 has 64 bits (0-63), word 1 starts at bit 64
+    // Run 1: bits 0-65 (spans word boundary between words 0 and 1)
+    // Run 2: bits 5000-5065 (another run spanning a word boundary)
+    // Total: 132 values in 2 runs, plus we need >4096 to stay as bitset
+    _ = try bm.addRange(0, 65); // 66 values spanning word 0-1 boundary
+    _ = try bm.addRange(5000, 5065); // 66 values spanning another word boundary
+    _ = try bm.addRange(10000, 14000); // 4001 values to force bitset
+
+    const container = Container.fromTagged(bm.containers[0]);
+    try std.testing.expect(container == .bitset);
+
+    // This should count as 3 runs. The word boundary bug would overcount.
+    // 3 runs * 4 bytes = 12 bytes << 8192 bytes, so should convert.
+    const converted = try bm.runOptimize();
+    try std.testing.expectEqual(@as(u32, 1), converted);
+
+    // Verify it's now a run container with correct data
+    const container_after = Container.fromTagged(bm.containers[0]);
+    try std.testing.expect(container_after == .run);
+
+    // Data preserved
+    try std.testing.expect(bm.contains(0));
+    try std.testing.expect(bm.contains(65));
+    try std.testing.expect(!bm.contains(66));
+    try std.testing.expect(bm.contains(5000));
+    try std.testing.expect(bm.contains(10000));
+    try std.testing.expect(bm.contains(14000));
 }
 
 test "runOptimize no-op on run containers" {
