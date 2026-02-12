@@ -147,6 +147,192 @@ pub const RoaringBitmap = struct {
         return true;
     }
 
+    /// Add a range of values [lo, hi] inclusive. Returns count of newly added values.
+    pub fn addRange(self: *Self, lo: u32, hi: u32) !u64 {
+        if (lo > hi) return 0;
+
+        var added: u64 = 0;
+        var current = lo;
+
+        while (current <= hi) {
+            const key = highBits(current);
+            const start_low = lowBits(current);
+
+            // End of this chunk or end of range, whichever comes first
+            const chunk_end = combine(key, 0xFFFF);
+            const range_end_in_chunk = @min(hi, chunk_end);
+            const end_low = lowBits(range_end_in_chunk);
+
+            // Add range [start_low, end_low] to this chunk
+            added += try self.addRangeToChunk(key, start_low, end_low);
+
+            // Move to next chunk
+            if (range_end_in_chunk >= hi) break;
+            current = combine(key + 1, 0);
+        }
+
+        return added;
+    }
+
+    /// Add a range within a single chunk.
+    fn addRangeToChunk(self: *Self, key: u16, start: u16, end: u16) !u64 {
+        const range_size: u32 = @as(u32, end) - start + 1;
+
+        if (self.findKey(key)) |idx| {
+            return self.addRangeToContainer(idx, start, end);
+        }
+
+        // Need to create new container
+        const insert_idx = self.lowerBound(key);
+        try self.ensureCapacity(self.size + 1);
+
+        // Shift right to make room
+        if (insert_idx < self.size) {
+            std.mem.copyBackwards(u16, self.keys[insert_idx + 1 .. self.size + 1], self.keys[insert_idx..self.size]);
+            std.mem.copyBackwards(TaggedPtr, self.containers[insert_idx + 1 .. self.size + 1], self.containers[insert_idx..self.size]);
+        }
+
+        // Choose container type based on range size
+        if (range_size > ArrayContainer.MAX_CARDINALITY) {
+            // Use bitset for large ranges
+            const bc = try BitsetContainer.init(self.allocator);
+            bc.setRange(start, end);
+            self.keys[insert_idx] = key;
+            self.containers[insert_idx] = TaggedPtr.initBitset(bc);
+        } else {
+            // Use array for small ranges
+            const ac = try ArrayContainer.init(self.allocator, @intCast(range_size));
+            var i: u32 = 0;
+            var v: u32 = start;
+            while (v <= end) : (v += 1) {
+                ac.values[i] = @intCast(v);
+                i += 1;
+            }
+            ac.cardinality = @intCast(range_size);
+            self.keys[insert_idx] = key;
+            self.containers[insert_idx] = TaggedPtr.initArray(ac);
+        }
+        self.size += 1;
+        return range_size;
+    }
+
+    /// Add a range to an existing container.
+    fn addRangeToContainer(self: *Self, idx: usize, start: u16, end: u16) !u64 {
+        const tp = self.containers[idx];
+        const container = Container.fromTagged(tp);
+
+        switch (container) {
+            .bitset => |bc| {
+                const before: u64 = if (bc.cardinality >= 0) @intCast(bc.cardinality) else bc.computeCardinality();
+                bc.setRange(start, end);
+                _ = bc.computeCardinality();
+                return @as(u64, @intCast(bc.cardinality)) - before;
+            },
+            .array => |ac| {
+                // Check if adding range would overflow
+                const range_size: u32 = @as(u32, end) - start + 1;
+                if (ac.cardinality + range_size > ArrayContainer.MAX_CARDINALITY) {
+                    // Convert to bitset first
+                    const bc = try self.arrayToBitset(ac);
+                    const before: u64 = @intCast(bc.cardinality);
+                    bc.setRange(start, end);
+                    _ = bc.computeCardinality();
+                    self.containers[idx] = TaggedPtr.initBitset(bc);
+                    return @as(u64, @intCast(bc.cardinality)) - before;
+                }
+                // Add values one by one (could optimize with sorted merge)
+                var added: u64 = 0;
+                var v: u32 = start;
+                while (v <= end) : (v += 1) {
+                    if (try ac.add(self.allocator, @intCast(v))) {
+                        added += 1;
+                    }
+                }
+                return added;
+            },
+            .run => |rc| {
+                // For run containers, add values one by one (run container handles merging)
+                var added: u64 = 0;
+                var v: u32 = start;
+                while (v <= end) : (v += 1) {
+                    if (try rc.add(self.allocator, @intCast(v))) {
+                        added += 1;
+                    }
+                }
+                return added;
+            },
+            .reserved => unreachable,
+        }
+    }
+
+    /// Create a bitmap from a pre-sorted slice of values. O(n) construction.
+    pub fn fromSorted(allocator: std.mem.Allocator, values: []const u32) !Self {
+        if (values.len == 0) {
+            return Self.init(allocator);
+        }
+
+        // Count containers needed
+        var container_count: u32 = 1;
+        var prev_key = highBits(values[0]);
+        for (values[1..]) |v| {
+            const key = highBits(v);
+            if (key != prev_key) {
+                container_count += 1;
+                prev_key = key;
+            }
+        }
+
+        var result = try Self.init(allocator);
+        errdefer result.deinit();
+        try result.ensureCapacity(container_count);
+
+        // Process each chunk
+        var chunk_start: usize = 0;
+        while (chunk_start < values.len) {
+            const key = highBits(values[chunk_start]);
+
+            // Find end of this chunk
+            var chunk_end = chunk_start + 1;
+            while (chunk_end < values.len and highBits(values[chunk_end]) == key) {
+                chunk_end += 1;
+            }
+
+            const chunk_size = chunk_end - chunk_start;
+
+            // Choose container type
+            if (chunk_size > ArrayContainer.MAX_CARDINALITY) {
+                // Bitset container
+                const bc = try BitsetContainer.init(allocator);
+                errdefer bc.deinit(allocator);
+
+                for (values[chunk_start..chunk_end]) |v| {
+                    _ = bc.add(lowBits(v));
+                }
+                _ = bc.computeCardinality();
+
+                result.keys[result.size] = key;
+                result.containers[result.size] = TaggedPtr.initBitset(bc);
+            } else {
+                // Array container - values already sorted, just copy low bits
+                const ac = try ArrayContainer.init(allocator, @intCast(chunk_size));
+                errdefer ac.deinit(allocator);
+
+                for (values[chunk_start..chunk_end], 0..) |v, i| {
+                    ac.values[i] = lowBits(v);
+                }
+                ac.cardinality = @intCast(chunk_size);
+
+                result.keys[result.size] = key;
+                result.containers[result.size] = TaggedPtr.initArray(ac);
+            }
+            result.size += 1;
+
+            chunk_start = chunk_end;
+        }
+
+        return result;
+    }
+
     /// Add value to existing container at index, handling type conversion.
     fn addToContainer(self: *Self, idx: usize, low: u16) !bool {
         const tp = self.containers[idx];
@@ -2011,4 +2197,126 @@ test "serialize round-trip preserves all values" {
         try std.testing.expectEqual(v1, v2.?);
     }
     try std.testing.expectEqual(@as(?u32, null), it2.next());
+}
+
+// ============================================================================
+// addRange and fromSorted Tests
+// ============================================================================
+
+test "addRange single chunk" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    const added = try bm.addRange(10, 20);
+    try std.testing.expectEqual(@as(u64, 11), added);
+    try std.testing.expectEqual(@as(u64, 11), bm.cardinality());
+
+    for (10..21) |i| {
+        try std.testing.expect(bm.contains(@intCast(i)));
+    }
+    try std.testing.expect(!bm.contains(9));
+    try std.testing.expect(!bm.contains(21));
+}
+
+test "addRange spanning chunks" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    // Range spanning chunk boundary
+    const added = try bm.addRange(65530, 65545);
+    try std.testing.expectEqual(@as(u64, 16), added);
+
+    try std.testing.expect(bm.contains(65530));
+    try std.testing.expect(bm.contains(65535)); // last of chunk 0
+    try std.testing.expect(bm.contains(65536)); // first of chunk 1
+    try std.testing.expect(bm.contains(65545));
+    try std.testing.expectEqual(@as(u32, 2), bm.size); // two containers
+}
+
+test "addRange large range creates bitset" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    // Large range > 4096 should create bitset
+    const added = try bm.addRange(0, 5000);
+    try std.testing.expectEqual(@as(u64, 5001), added);
+    try std.testing.expectEqual(@as(u64, 5001), bm.cardinality());
+}
+
+test "addRange to existing container" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    _ = try bm.add(5);
+    _ = try bm.add(15);
+
+    const added = try bm.addRange(10, 20);
+    try std.testing.expectEqual(@as(u64, 10), added); // 15 was already there
+    try std.testing.expectEqual(@as(u64, 12), bm.cardinality()); // 5, 10-20
+}
+
+test "fromSorted empty" {
+    const allocator = std.testing.allocator;
+    const empty: []const u32 = &.{};
+
+    var bm = try RoaringBitmap.fromSorted(allocator, empty);
+    defer bm.deinit();
+
+    try std.testing.expect(bm.isEmpty());
+}
+
+test "fromSorted single chunk" {
+    const allocator = std.testing.allocator;
+    const values = [_]u32{ 1, 5, 10, 100, 1000 };
+
+    var bm = try RoaringBitmap.fromSorted(allocator, &values);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u64, 5), bm.cardinality());
+    try std.testing.expectEqual(@as(u32, 1), bm.size); // one container
+
+    for (values) |v| {
+        try std.testing.expect(bm.contains(v));
+    }
+}
+
+test "fromSorted multiple chunks" {
+    const allocator = std.testing.allocator;
+    const values = [_]u32{ 100, 200, 65536 + 50, 65536 + 100, 131072 + 1 };
+
+    var bm = try RoaringBitmap.fromSorted(allocator, &values);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u64, 5), bm.cardinality());
+    try std.testing.expectEqual(@as(u32, 3), bm.size); // three containers
+
+    for (values) |v| {
+        try std.testing.expect(bm.contains(v));
+    }
+}
+
+test "fromSorted matches individual adds" {
+    const allocator = std.testing.allocator;
+    const values = [_]u32{ 0, 1, 100, 1000, 65535, 65536, 100000 };
+
+    // Build with fromSorted
+    var bm1 = try RoaringBitmap.fromSorted(allocator, &values);
+    defer bm1.deinit();
+
+    // Build with individual adds
+    var bm2 = try RoaringBitmap.init(allocator);
+    defer bm2.deinit();
+    for (values) |v| {
+        _ = try bm2.add(v);
+    }
+
+    try std.testing.expect(bm1.equals(&bm2));
 }

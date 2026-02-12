@@ -71,6 +71,39 @@ pub const BitsetContainer = struct {
         return was_present;
     }
 
+    /// Set a range of bits [start, end] inclusive.
+    pub fn setRange(self: *Self, start: u16, end: u16) void {
+        if (start > end) return;
+
+        const start_word = start >> 6;
+        const end_word = end >> 6;
+        const start_bit: u6 = @truncate(start);
+        const end_bit: u6 = @truncate(end);
+
+        // Invalidate cardinality cache (would need to track changes precisely)
+        self.cardinality = -1;
+
+        if (start_word == end_word) {
+            // Same word: set bits from start_bit to end_bit
+            // For end_bit=63, we need all bits from start_bit to 63
+            const end_mask: u64 = if (end_bit == 63) ~@as(u64, 0) else (@as(u64, 1) << (end_bit + 1)) - 1;
+            const start_mask: u64 = (@as(u64, 1) << start_bit) - 1;
+            self.words[start_word] |= end_mask & ~start_mask;
+        } else {
+            // First word: set bits from start_bit to 63
+            self.words[start_word] |= ~((@as(u64, 1) << start_bit) - 1);
+
+            // Middle words: set all bits
+            for (self.words[start_word + 1 .. end_word]) |*w| {
+                w.* = 0xFFFFFFFFFFFFFFFF;
+            }
+
+            // Last word: set bits from 0 to end_bit
+            const end_mask: u64 = if (end_bit == 63) ~@as(u64, 0) else (@as(u64, 1) << (end_bit + 1)) - 1;
+            self.words[end_word] |= end_mask;
+        }
+    }
+
     /// Compute cardinality by counting all set bits.
     pub fn computeCardinality(self: *Self) u32 {
         var count: u32 = 0;
