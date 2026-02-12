@@ -477,6 +477,9 @@ pub const RoaringBitmap = struct {
 
     /// Check if self is a subset of other. O(n) where n is total container size.
     pub fn isSubsetOf(self: *const Self, other: *const Self) bool {
+        // Fast-path: if self has more keys, it can't be a subset
+        if (self.size > other.size) return false;
+
         var j: usize = 0;
         for (0..self.size) |i| {
             // Find matching key in other
@@ -527,8 +530,8 @@ pub const RoaringBitmap = struct {
                 .reserved => false,
             },
             .bitset => |ac| switch (b) {
-                // bitset ⊆ array: impossible if cardinality check passed (bitset >= 4096)
-                .array => false,
+                // bitset ⊆ array: bitset can have <4096 cardinality, check each bit
+                .array => |bc| bitsetSubsetArray(ac, bc),
                 // bitset ⊆ bitset: (a & ~b) == 0, O(1024) words
                 .bitset => |bc| bitsetSubsetBitset(ac, bc),
                 // bitset ⊆ run: check each set bit
@@ -579,6 +582,20 @@ pub const RoaringBitmap = struct {
         // (a & ~b) == 0 means all bits in a are also in b
         for (a.words, b.words) |aw, bw| {
             if ((aw & ~bw) != 0) return false;
+        }
+        return true;
+    }
+
+    fn bitsetSubsetArray(a: *BitsetContainer, b: *ArrayContainer) bool {
+        // Check each set bit in bitset is present in array
+        for (a.words, 0..) |word, word_idx| {
+            var w = word;
+            while (w != 0) {
+                const bit = @ctz(w);
+                const v: u16 = @intCast(word_idx * 64 + bit);
+                if (!b.contains(v)) return false;
+                w &= w - 1;
+            }
         }
         return true;
     }
@@ -651,7 +668,8 @@ pub const RoaringBitmap = struct {
             .run => |ac| switch (b) {
                 .array => |bc| arrayEqualsRun(bc, ac),
                 .bitset => |bc| bitsetEqualsRun(bc, ac),
-                .run => |rc| std.mem.eql(RunContainer.RunPair, ac.runs[0..ac.n_runs], rc.runs[0..rc.n_runs]),
+                // Same values can have different run encodings, so compare element-by-element
+                .run => |rc| runEqualsRun(ac, rc),
                 .reserved => false,
             },
             .reserved => false,
@@ -681,6 +699,18 @@ pub const RoaringBitmap = struct {
                 const v: u16 = @intCast(word_idx * 64 + bit);
                 if (!b.contains(v)) return false;
                 w &= w - 1;
+            }
+        }
+        return true;
+    }
+
+    fn runEqualsRun(a: *RunContainer, b: *RunContainer) bool {
+        // Same values can have different run encodings (e.g., {[0,5],[6,10]} vs {[0,10]})
+        // Cardinality already checked equal, so just verify each value in a is in b
+        for (a.runs[0..a.n_runs]) |run| {
+            var v: u32 = run.start;
+            while (v <= run.end()) : (v += 1) {
+                if (!b.contains(@intCast(v))) return false;
             }
         }
         return true;
