@@ -2,6 +2,11 @@
 zig-out/
 zig-cache/
 .zig-cache/
+*.tar.gz
+
+# Project
+misc/
+CLAUDE.md
 
 # Editor
 .vscode/

@@ -47,4 +47,11 @@ pub fn build(b: *std.Build) void {
 
     const bench_step = b.step("bench", "Build benchmarks");
     bench_step.dependOn(&b.addInstallArtifact(bench_exe, .{}).step);
+
+    // Tarball
+    const tarball_step = b.step("tarball", "Create source tarball from git HEAD");
+    const tarball_cmd = b.addSystemCommand(&.{
+        "git", "archive", "--format=tar.gz", "--prefix=rawr/", "HEAD", "-o", "rawr.tar.gz",
+    });
+    tarball_step.dependOn(&tarball_cmd.step);
 }

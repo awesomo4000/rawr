@@ -18,4 +18,5 @@ test {
     _ = @import("container.zig");
     _ = @import("container_ops.zig");
     _ = @import("bitmap.zig");
+    _ = @import("property_tests.zig");
 }
