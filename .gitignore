@@ -7,6 +7,7 @@ zig-cache/
 # Project
 misc/
 CLAUDE.md
+.claude/
 
 # Editor
 .vscode/
@@ -18,3 +19,4 @@ CLAUDE.md
 # OS
 .DS_Store
 Thumbs.db
+
