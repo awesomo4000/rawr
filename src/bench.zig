@@ -354,9 +354,9 @@ fn benchRunOptimize(allocator: std.mem.Allocator) void {
 // ============================================================================
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // Use c_allocator for benchmarks to measure algorithm performance,
+    // not GPA bookkeeping overhead. GPA is better for tests (leak detection).
+    const allocator = std.heap.c_allocator;
 
     std.debug.print("Rawr Roaring Bitmap Benchmarks\n", .{});
     std.debug.print("==============================\n", .{});

@@ -1460,8 +1460,10 @@ pub const RoaringBitmap = struct {
         // Descriptive header: 4 bytes per container (key + cardinality-1)
         size += @as(usize, self.size) * 4;
 
-        // Offset header for large bitmaps (>= NO_OFFSET_THRESHOLD containers with runs)
-        if (has_runs and self.size >= NO_OFFSET_THRESHOLD) {
+        // Offset header:
+        // - Always for no-run format (RoaringFormatSpec requirement)
+        // - For run format only when size >= NO_OFFSET_THRESHOLD
+        if (!has_runs or self.size >= NO_OFFSET_THRESHOLD) {
             size += @as(usize, self.size) * 4; // 4 bytes per container offset
         }
 
@@ -1533,8 +1535,10 @@ pub const RoaringBitmap = struct {
             try writer.writeInt(u16, @intCast(card - 1), .little);
         }
 
-        // Offset header (only for runs with >= 4 containers)
-        if (has_runs and self.size >= NO_OFFSET_THRESHOLD) {
+        // Offset header:
+        // - Always for no-run format (RoaringFormatSpec requirement)
+        // - For run format only when size >= NO_OFFSET_THRESHOLD
+        if (!has_runs or self.size >= NO_OFFSET_THRESHOLD) {
             var offset: u32 = 0;
             for (self.containers[0..self.size]) |tp| {
                 try writer.writeInt(u32, offset, .little);
@@ -1631,8 +1635,10 @@ pub const RoaringBitmap = struct {
             cardinalities[i] = @as(u32, try reader.readInt(u16, .little)) + 1;
         }
 
-        // Skip offset header if present
-        if (has_runs and size >= NO_OFFSET_THRESHOLD) {
+        // Skip offset header if present:
+        // - Always for no-run format (RoaringFormatSpec requirement)
+        // - For run format only when size >= NO_OFFSET_THRESHOLD
+        if (!has_runs or size >= NO_OFFSET_THRESHOLD) {
             for (0..size) |_| {
                 _ = try reader.readInt(u32, .little);
             }
@@ -1734,8 +1740,11 @@ pub const FrozenBitmap = struct {
         const keys_offset = pos;
         pos += @as(usize, size) * 4; // key + cardinality-1 pairs
 
+        // Offset header:
+        // - Always for no-run format (RoaringFormatSpec requirement)
+        // - For run format only when size >= NO_OFFSET_THRESHOLD
         var offsets_offset: usize = 0;
-        if (has_runs and size >= RoaringBitmap.NO_OFFSET_THRESHOLD) {
+        if (!has_runs or size >= RoaringBitmap.NO_OFFSET_THRESHOLD) {
             offsets_offset = pos;
             pos += @as(usize, size) * 4;
         }
@@ -1802,18 +1811,15 @@ pub const FrozenBitmap = struct {
         return null;
     }
 
-    /// Get the data offset for container at index.
-    /// Note: When offsets_offset == 0 (no offset header), this calls getContainerSize
-    /// which may call back here. Recursion terminates because:
-    /// 1. idx=0 in getContainerSize uses self.data_offset directly (base case)
-    /// 2. No offset header only occurs when size < NO_OFFSET_THRESHOLD (4 containers max)
+    /// Get the data offset for container at index. O(1) using offset header.
+    /// Fallback O(n) path only for small run-format bitmaps (size < 4 with runs).
     fn getContainerDataOffset(self: *const Self, idx: usize) usize {
         if (self.offsets_offset != 0) {
             const offset = self.offsets_offset + idx * 4;
             return self.data_offset + std.mem.readInt(u32, self.data[offset..][0..4], .little);
         }
 
-        // Calculate offset by summing previous container sizes (small bitmap path)
+        // Fallback for small run-format bitmaps without offset header (size < 4)
         var offset = self.data_offset;
         for (0..idx) |i| {
             offset += self.getContainerSize(i);
