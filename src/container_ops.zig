@@ -765,15 +765,12 @@ pub fn bitsetToArray(allocator: std.mem.Allocator, bc: *BitsetContainer) !*Array
 
     var k: usize = 0;
     for (bc.words, 0..) |word, word_idx| {
-        if (word == 0) continue;
         var w = word;
-        var bit: u6 = 0;
-        while (w != 0) : (bit += 1) {
-            if (w & 1 == 1) {
-                result.values[k] = @intCast(word_idx * 64 + bit);
-                k += 1;
-            }
-            w >>= 1;
+        while (w != 0) {
+            const bit = @ctz(w);
+            result.values[k] = @intCast(word_idx * 64 + bit);
+            k += 1;
+            w &= w - 1; // clear lowest set bit
         }
     }
     result.cardinality = @intCast(k);
@@ -929,4 +926,25 @@ test "bitset to array conversion on small intersection" {
     // Result should be array since cardinality is small
     try std.testing.expectEqual(Container.array, std.meta.activeTag(result));
     try std.testing.expectEqual(@as(u32, 2), result.getCardinality());
+}
+
+test "bitsetToArray with full word (regression: u6 overflow)" {
+    const allocator = std.testing.allocator;
+
+    const bc = try BitsetContainer.init(allocator);
+    defer bc.deinit(allocator);
+
+    // Set all 64 bits in word 0 (values 0-63)
+    bc.words[0] = 0xFFFFFFFFFFFFFFFF;
+    bc.cardinality = 64;
+
+    const ac = try bitsetToArray(allocator, bc);
+    defer ac.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u16, 64), ac.cardinality);
+
+    // Verify all values present and in order
+    for (0..64) |i| {
+        try std.testing.expectEqual(@as(u16, @intCast(i)), ac.values[i]);
+    }
 }

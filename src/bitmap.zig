@@ -475,10 +475,8 @@ pub const RoaringBitmap = struct {
         return result;
     }
 
-    /// Check if self is a subset of other.
+    /// Check if self is a subset of other. O(n) where n is total container size.
     pub fn isSubsetOf(self: *const Self, other: *const Self) bool {
-        if (self.size > other.size) return false;
-
         var j: usize = 0;
         for (0..self.size) |i| {
             // Find matching key in other
@@ -488,56 +486,204 @@ pub const RoaringBitmap = struct {
                 return false; // Key not found in other
             }
 
-            // Check all values in self's container are in other's container
-            const self_container = Container.fromTagged(self.containers[i]);
-            const other_container = Container.fromTagged(other.containers[j]);
-
-            // Quick cardinality check
-            if (self_container.getCardinality() > other_container.getCardinality()) {
+            // Check container subset with O(n) algorithms per container type
+            if (!containerIsSubset(self.containers[i], other.containers[j])) {
                 return false;
-            }
-
-            // Check containment (iterate self's values)
-            switch (self_container) {
-                .array => |ac| {
-                    for (ac.values[0..ac.cardinality]) |v| {
-                        if (!other_container.contains(v)) return false;
-                    }
-                },
-                .bitset => |bc| {
-                    for (bc.words, 0..) |word, word_idx| {
-                        if (word == 0) continue;
-                        var w = word;
-                        var bit: u6 = 0;
-                        while (w != 0) : (bit += 1) {
-                            if (w & 1 == 1) {
-                                const v: u16 = @intCast(word_idx * 64 + bit);
-                                if (!other_container.contains(v)) return false;
-                            }
-                            w >>= 1;
-                        }
-                    }
-                },
-                .run => |rc| {
-                    for (rc.runs[0..rc.n_runs]) |run| {
-                        var v: u32 = run.start;
-                        while (v <= run.end()) : (v += 1) {
-                            if (!other_container.contains(@intCast(v))) return false;
-                        }
-                    }
-                },
-                .reserved => {},
             }
             j += 1;
         }
         return true;
     }
 
-    /// Check if two bitmaps are equal.
+    /// Check if two bitmaps are equal. Single pass O(n).
     pub fn equals(self: *const Self, other: *const Self) bool {
         if (self.size != other.size) return false;
-        if (self.cardinality() != other.cardinality()) return false;
-        return self.isSubsetOf(other);
+
+        for (0..self.size) |i| {
+            if (self.keys[i] != other.keys[i]) return false;
+            if (!containerEquals(self.containers[i], other.containers[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// O(n) container subset check.
+    fn containerIsSubset(a_tp: TaggedPtr, b_tp: TaggedPtr) bool {
+        const a = Container.fromTagged(a_tp);
+        const b = Container.fromTagged(b_tp);
+
+        // Quick cardinality check
+        if (a.getCardinality() > b.getCardinality()) return false;
+
+        return switch (a) {
+            .array => |ac| switch (b) {
+                // array ⊆ array: merge-walk O(n+m)
+                .array => |bc| arraySubsetArray(ac, bc),
+                // array ⊆ bitset: O(n) lookups, each O(1)
+                .bitset => |bc| arraySubsetBitset(ac, bc),
+                // array ⊆ run: O(n) lookups
+                .run => |rc| arraySubsetRun(ac, rc),
+                .reserved => false,
+            },
+            .bitset => |ac| switch (b) {
+                // bitset ⊆ array: impossible if cardinality check passed (bitset >= 4096)
+                .array => false,
+                // bitset ⊆ bitset: (a & ~b) == 0, O(1024) words
+                .bitset => |bc| bitsetSubsetBitset(ac, bc),
+                // bitset ⊆ run: check each set bit
+                .run => |rc| bitsetSubsetRun(ac, rc),
+                .reserved => false,
+            },
+            .run => |ac| switch (b) {
+                // run ⊆ array: check each run value
+                .array => |bc| runSubsetArray(ac, bc),
+                // run ⊆ bitset: check each run value
+                .bitset => |bc| runSubsetBitset(ac, bc),
+                // run ⊆ run: check each run
+                .run => |rc| runSubsetRun(ac, rc),
+                .reserved => false,
+            },
+            .reserved => false,
+        };
+    }
+
+    fn arraySubsetArray(a: *ArrayContainer, b: *ArrayContainer) bool {
+        // Merge-walk: O(n+m)
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < a.cardinality) {
+            if (j >= b.cardinality) return false;
+            if (a.values[i] < b.values[j]) return false; // a has element not in b
+            if (a.values[i] == b.values[j]) i += 1;
+            j += 1;
+        }
+        return true;
+    }
+
+    fn arraySubsetBitset(a: *ArrayContainer, b: *BitsetContainer) bool {
+        for (a.values[0..a.cardinality]) |v| {
+            if (!b.contains(v)) return false;
+        }
+        return true;
+    }
+
+    fn arraySubsetRun(a: *ArrayContainer, b: *RunContainer) bool {
+        for (a.values[0..a.cardinality]) |v| {
+            if (!b.contains(v)) return false;
+        }
+        return true;
+    }
+
+    fn bitsetSubsetBitset(a: *BitsetContainer, b: *BitsetContainer) bool {
+        // (a & ~b) == 0 means all bits in a are also in b
+        for (a.words, b.words) |aw, bw| {
+            if ((aw & ~bw) != 0) return false;
+        }
+        return true;
+    }
+
+    fn bitsetSubsetRun(a: *BitsetContainer, b: *RunContainer) bool {
+        for (a.words, 0..) |word, word_idx| {
+            var w = word;
+            while (w != 0) {
+                const bit = @ctz(w);
+                const v: u16 = @intCast(word_idx * 64 + bit);
+                if (!b.contains(v)) return false;
+                w &= w - 1;
+            }
+        }
+        return true;
+    }
+
+    fn runSubsetArray(a: *RunContainer, b: *ArrayContainer) bool {
+        for (a.runs[0..a.n_runs]) |run| {
+            var v: u32 = run.start;
+            while (v <= run.end()) : (v += 1) {
+                if (!b.contains(@intCast(v))) return false;
+            }
+        }
+        return true;
+    }
+
+    fn runSubsetBitset(a: *RunContainer, b: *BitsetContainer) bool {
+        for (a.runs[0..a.n_runs]) |run| {
+            var v: u32 = run.start;
+            while (v <= run.end()) : (v += 1) {
+                if (!b.contains(@intCast(v))) return false;
+            }
+        }
+        return true;
+    }
+
+    fn runSubsetRun(a: *RunContainer, b: *RunContainer) bool {
+        // For each run in a, check it's covered by runs in b
+        for (a.runs[0..a.n_runs]) |run| {
+            var v: u32 = run.start;
+            while (v <= run.end()) : (v += 1) {
+                if (!b.contains(@intCast(v))) return false;
+            }
+        }
+        return true;
+    }
+
+    /// O(n) container equality check.
+    fn containerEquals(a_tp: TaggedPtr, b_tp: TaggedPtr) bool {
+        const a = Container.fromTagged(a_tp);
+        const b = Container.fromTagged(b_tp);
+
+        // Different types can still be equal if same cardinality and same values
+        if (a.getCardinality() != b.getCardinality()) return false;
+
+        return switch (a) {
+            .array => |ac| switch (b) {
+                .array => |bc| std.mem.eql(u16, ac.values[0..ac.cardinality], bc.values[0..bc.cardinality]),
+                .bitset => |bc| arrayEqualsBitset(ac, bc),
+                .run => |rc| arrayEqualsRun(ac, rc),
+                .reserved => false,
+            },
+            .bitset => |ac| switch (b) {
+                .array => |bc| arrayEqualsBitset(bc, ac),
+                .bitset => |bc| std.mem.eql(u64, ac.words, bc.words),
+                .run => |rc| bitsetEqualsRun(ac, rc),
+                .reserved => false,
+            },
+            .run => |ac| switch (b) {
+                .array => |bc| arrayEqualsRun(bc, ac),
+                .bitset => |bc| bitsetEqualsRun(bc, ac),
+                .run => |rc| std.mem.eql(RunContainer.RunPair, ac.runs[0..ac.n_runs], rc.runs[0..rc.n_runs]),
+                .reserved => false,
+            },
+            .reserved => false,
+        };
+    }
+
+    fn arrayEqualsBitset(a: *ArrayContainer, b: *BitsetContainer) bool {
+        // Cardinality already checked equal
+        for (a.values[0..a.cardinality]) |v| {
+            if (!b.contains(v)) return false;
+        }
+        return true;
+    }
+
+    fn arrayEqualsRun(a: *ArrayContainer, b: *RunContainer) bool {
+        for (a.values[0..a.cardinality]) |v| {
+            if (!b.contains(v)) return false;
+        }
+        return true;
+    }
+
+    fn bitsetEqualsRun(a: *BitsetContainer, b: *RunContainer) bool {
+        for (a.words, 0..) |word, word_idx| {
+            var w = word;
+            while (w != 0) {
+                const bit = @ctz(w);
+                const v: u16 = @intCast(word_idx * 64 + bit);
+                if (!b.contains(v)) return false;
+                w &= w - 1;
+            }
+        }
+        return true;
     }
 
     // ========================================================================
