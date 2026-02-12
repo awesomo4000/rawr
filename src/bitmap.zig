@@ -1167,13 +1167,19 @@ pub const RoaringBitmap = struct {
                             const high: u32 = @as(u32, self.bm.keys[self.container_idx]) << 16;
                             const low: u32 = @as(u32, run.start) + s.pos_in_run;
 
-                            if (s.pos_in_run < run.length) {
-                                s.pos_in_run += 1;
-                                return high | low;
+                            // run.length is the count beyond start, so {start=10, length=2} covers 10,11,12
+                            if (s.pos_in_run <= run.length) {
+                                const result = high | low;
+                                if (s.pos_in_run < run.length) {
+                                    s.pos_in_run += 1;
+                                } else {
+                                    // Move to next run
+                                    s.run_idx += 1;
+                                    s.pos_in_run = 0;
+                                }
+                                return result;
                             } else {
-                                // Move to next run
-                                s.run_idx += 1;
-                                s.pos_in_run = 0;
+                                self.advanceContainer();
                             }
                         } else {
                             self.advanceContainer();
@@ -1287,7 +1293,7 @@ pub const RoaringBitmap = struct {
             size += switch (container) {
                 .array => |ac| @as(usize, ac.cardinality) * 2,
                 .bitset => 8192, // 1024 * 8 bytes
-                .run => |rc| @as(usize, rc.n_runs) * 4, // 2 bytes start + 2 bytes length
+                .run => |rc| 2 + @as(usize, rc.n_runs) * 4, // n_runs prefix + pairs
                 .reserved => 0,
             };
         }
@@ -1325,10 +1331,10 @@ pub const RoaringBitmap = struct {
             const cookie: u32 = SERIAL_COOKIE | (@as(u32, self.size - 1) << 16);
             try writer.writeInt(u32, cookie, .little);
 
-            // Run container bitset
+            // Run container bitset (max 8KB for 65536 containers)
             const bitset_bytes = (self.size + 7) / 8;
-            var run_bitset = try std.heap.page_allocator.alloc(u8, bitset_bytes);
-            defer std.heap.page_allocator.free(run_bitset);
+            var run_bitset_buf: [8192]u8 = undefined;
+            const run_bitset = run_bitset_buf[0..bitset_bytes];
             @memset(run_bitset, 0);
 
             for (self.containers[0..self.size], 0..) |tp, i| {
@@ -1358,7 +1364,7 @@ pub const RoaringBitmap = struct {
                 offset += switch (container) {
                     .array => |ac| @as(u32, ac.cardinality) * 2,
                     .bitset => 8192,
-                    .run => |rc| @as(u32, rc.n_runs) * 4,
+                    .run => |rc| 2 + @as(u32, rc.n_runs) * 4, // n_runs prefix + pairs
                     .reserved => 0,
                 };
             }
@@ -1379,6 +1385,8 @@ pub const RoaringBitmap = struct {
                     }
                 },
                 .run => |rc| {
+                    // RoaringFormatSpec: n_runs prefix followed by run pairs
+                    try writer.writeInt(u16, rc.n_runs, .little);
                     for (rc.runs[0..rc.n_runs]) |run| {
                         try writer.writeInt(u16, run.start, .little);
                         try writer.writeInt(u16, run.length, .little);
@@ -1462,16 +1470,17 @@ pub const RoaringBitmap = struct {
             const card = cardinalities[i];
 
             if (is_run) {
-                // Run container: cardinality field is actually n_runs - 1
-                const n_runs = card; // Already +1'd above, but for runs it's n_runs
-                const rc = try RunContainer.init(allocator, @intCast(n_runs));
+                // Run container: n_runs is in the data section prefix, not the header
+                // (header stores cardinality-1 which is sum of run lengths, not n_runs)
+                const n_runs = try reader.readInt(u16, .little);
+                const rc = try RunContainer.init(allocator, n_runs);
                 errdefer rc.deinit(allocator);
 
                 for (0..n_runs) |r| {
                     rc.runs[r].start = try reader.readInt(u16, .little);
                     rc.runs[r].length = try reader.readInt(u16, .little);
                 }
-                rc.n_runs = @intCast(n_runs);
+                rc.n_runs = n_runs;
                 result.containers[i] = TaggedPtr.initRun(rc);
             } else if (card > ArrayContainer.MAX_CARDINALITY) {
                 // Bitset container
