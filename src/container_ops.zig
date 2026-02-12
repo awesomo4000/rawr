@@ -492,7 +492,7 @@ fn runDifferenceBitset(allocator: std.mem.Allocator, rc: *RunContainer, bc: *Bit
     errdefer result.deinit(allocator);
 
     var k: usize = 0;
-    for (rc.runs[0..rc.n_runs]) |run| {
+    for (rc.runs[0..rc.n_runs], 0..) |run, run_idx| {
         var v: u32 = run.start;
         while (v <= run.end()) : (v += 1) {
             if (!bc.contains(@intCast(v))) {
@@ -500,12 +500,22 @@ fn runDifferenceBitset(allocator: std.mem.Allocator, rc: *RunContainer, bc: *Bit
                     // Need to convert to bitset
                     const bs = try arrayToBitset(allocator, result);
                     result.deinit(allocator);
-                    // Continue adding remaining
+                    // Finish current run
                     while (v <= run.end()) : (v += 1) {
                         if (!bc.contains(@intCast(v))) {
                             _ = bs.add(@intCast(v));
                         }
                     }
+                    // Process remaining runs
+                    for (rc.runs[run_idx + 1 .. rc.n_runs]) |remaining_run| {
+                        var rv: u32 = remaining_run.start;
+                        while (rv <= remaining_run.end()) : (rv += 1) {
+                            if (!bc.contains(@intCast(rv))) {
+                                _ = bs.add(@intCast(rv));
+                            }
+                        }
+                    }
+                    _ = bs.computeCardinality();
                     return .{ .bitset = bs };
                 }
                 result.values[k] = @intCast(v);
@@ -522,22 +532,38 @@ fn runDifferenceRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunConta
     errdefer result.deinit(allocator);
 
     var k: usize = 0;
-    for (a.runs[0..a.n_runs]) |run| {
+    for (a.runs[0..a.n_runs], 0..) |run, run_idx| {
         var v: u32 = run.start;
         while (v <= run.end()) : (v += 1) {
             if (!b.contains(@intCast(v))) {
+                if (k >= ArrayContainer.MAX_CARDINALITY) {
+                    // Convert to bitset and continue
+                    const bs = try arrayToBitset(allocator, result);
+                    result.deinit(allocator);
+                    // Finish current run
+                    while (v <= run.end()) : (v += 1) {
+                        if (!b.contains(@intCast(v))) {
+                            _ = bs.add(@intCast(v));
+                        }
+                    }
+                    // Process remaining runs
+                    for (a.runs[run_idx + 1 .. a.n_runs]) |remaining_run| {
+                        var rv: u32 = remaining_run.start;
+                        while (rv <= remaining_run.end()) : (rv += 1) {
+                            if (!b.contains(@intCast(rv))) {
+                                _ = bs.add(@intCast(rv));
+                            }
+                        }
+                    }
+                    _ = bs.computeCardinality();
+                    return .{ .bitset = bs };
+                }
                 result.values[k] = @intCast(v);
                 k += 1;
             }
         }
     }
     result.cardinality = @intCast(k);
-
-    if (result.cardinality > ArrayContainer.MAX_CARDINALITY) {
-        const bs = try arrayToBitset(allocator, result);
-        result.deinit(allocator);
-        return .{ .bitset = bs };
-    }
     return .{ .array = result };
 }
 
