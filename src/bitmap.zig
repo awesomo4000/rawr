@@ -475,6 +475,153 @@ pub const RoaringBitmap = struct {
         return result;
     }
 
+    // ========================================================================
+    // In-Place Set Operations
+    // ========================================================================
+
+    /// In-place union: self |= other. Modifies self to contain all values from both.
+    pub fn bitwiseOrInPlace(self: *Self, other: *const Self) !void {
+        if (other.size == 0) return;
+
+        // We need to merge other's containers into self. This may require:
+        // 1. Inserting new containers for keys only in other
+        // 2. Merging containers for keys in both
+        // Strategy: work backwards to avoid shifting issues, or use a temp array
+
+        var j: usize = 0; // index into other
+        var i: usize = 0; // index into self
+
+        while (j < other.size) {
+            const key_b = other.keys[j];
+
+            // Find position in self for this key
+            while (i < self.size and self.keys[i] < key_b) : (i += 1) {}
+
+            if (i < self.size and self.keys[i] == key_b) {
+                // Key exists in both - merge containers
+                const old_container = Container.fromTagged(self.containers[i]);
+                const other_container = Container.fromTagged(other.containers[j]);
+                const merged = try ops.containerUnion(self.allocator, old_container, other_container);
+                old_container.deinit(self.allocator);
+                self.containers[i] = merged.toTagged();
+                i += 1;
+            } else {
+                // Key only in other - insert cloned container
+                const cloned = try cloneContainer(self.allocator, other.containers[j]);
+                try self.insertTaggedContainerAt(i, key_b, cloned);
+                i += 1; // skip past inserted
+            }
+            j += 1;
+        }
+    }
+
+    /// In-place intersection: self &= other. Modifies self to contain only values in both.
+    pub fn bitwiseAndInPlace(self: *Self, other: *const Self) !void {
+        if (other.size == 0) {
+            // Clear self
+            for (self.containers[0..self.size]) |tp| {
+                Container.fromTagged(tp).deinit(self.allocator);
+            }
+            self.size = 0;
+            return;
+        }
+
+        var write_idx: usize = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < self.size and j < other.size) {
+            const key_a = self.keys[i];
+            const key_b = other.keys[j];
+
+            if (key_a < key_b) {
+                // Key only in self - remove it
+                Container.fromTagged(self.containers[i]).deinit(self.allocator);
+                i += 1;
+            } else if (key_a > key_b) {
+                j += 1;
+            } else {
+                // Key in both - intersect containers
+                const self_container = Container.fromTagged(self.containers[i]);
+                const other_container = Container.fromTagged(other.containers[j]);
+                const intersected = try ops.containerIntersection(self.allocator, self_container, other_container);
+                self_container.deinit(self.allocator);
+
+                if (intersected.getCardinality() > 0) {
+                    self.keys[write_idx] = key_a;
+                    self.containers[write_idx] = intersected.toTagged();
+                    write_idx += 1;
+                } else {
+                    intersected.deinit(self.allocator);
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+
+        // Remove remaining containers from self (not in other)
+        while (i < self.size) : (i += 1) {
+            Container.fromTagged(self.containers[i]).deinit(self.allocator);
+        }
+
+        self.size = @intCast(write_idx);
+    }
+
+    /// In-place difference: self -= other. Modifies self to remove values in other.
+    pub fn bitwiseDifferenceInPlace(self: *Self, other: *const Self) !void {
+        if (other.size == 0) return;
+
+        var write_idx: usize = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < self.size) {
+            const key_a = self.keys[i];
+
+            // Advance j to key_a or past it
+            while (j < other.size and other.keys[j] < key_a) : (j += 1) {}
+
+            if (j >= other.size or other.keys[j] > key_a) {
+                // No matching key in other - keep container as-is
+                self.keys[write_idx] = key_a;
+                self.containers[write_idx] = self.containers[i];
+                write_idx += 1;
+            } else {
+                // Matching key - compute difference
+                const self_container = Container.fromTagged(self.containers[i]);
+                const other_container = Container.fromTagged(other.containers[j]);
+                const diff = try ops.containerDifference(self.allocator, self_container, other_container);
+                self_container.deinit(self.allocator);
+
+                if (diff.getCardinality() > 0) {
+                    self.keys[write_idx] = key_a;
+                    self.containers[write_idx] = diff.toTagged();
+                    write_idx += 1;
+                } else {
+                    diff.deinit(self.allocator);
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+
+        self.size = @intCast(write_idx);
+    }
+
+    /// Insert a tagged container at the given position, shifting existing containers.
+    fn insertTaggedContainerAt(self: *Self, pos: usize, key: u16, tp: TaggedPtr) !void {
+        try self.ensureCapacity(self.size + 1);
+        // Shift elements right
+        var k: usize = self.size;
+        while (k > pos) : (k -= 1) {
+            self.keys[k] = self.keys[k - 1];
+            self.containers[k] = self.containers[k - 1];
+        }
+        self.keys[pos] = key;
+        self.containers[pos] = tp;
+        self.size += 1;
+    }
+
     /// Check if self is a subset of other. O(n) where n is total container size.
     pub fn isSubsetOf(self: *const Self, other: *const Self) bool {
         // Fast-path: if self has more keys, it can't be a subset
@@ -634,11 +781,23 @@ pub const RoaringBitmap = struct {
     }
 
     fn runSubsetRun(a: *RunContainer, b: *RunContainer) bool {
-        // For each run in a, check it's covered by runs in b
-        for (a.runs[0..a.n_runs]) |run| {
-            var v: u32 = run.start;
-            while (v <= run.end()) : (v += 1) {
-                if (!b.contains(@intCast(v))) return false;
+        // Merge-walk: O(n_runs_a + n_runs_b) instead of O(cardinality × log(n_runs))
+        var j: usize = 0;
+        for (a.runs[0..a.n_runs]) |run_a| {
+            const start_a = run_a.start;
+            const end_a = run_a.end();
+
+            // Skip B runs that end before A's run starts
+            while (j < b.n_runs and b.runs[j].end() < start_a) : (j += 1) {}
+
+            // Check that B's runs fully cover [start_a, end_a]
+            var pos: u32 = start_a;
+            while (pos <= end_a) {
+                if (j >= b.n_runs) return false; // No more runs in B
+                if (b.runs[j].start > pos) return false; // Gap in B's coverage
+                // B.runs[j] covers up to its end
+                pos = b.runs[j].end() + 1;
+                if (pos <= end_a) j += 1; // Need next run in B
             }
         }
         return true;
@@ -705,15 +864,8 @@ pub const RoaringBitmap = struct {
     }
 
     fn runEqualsRun(a: *RunContainer, b: *RunContainer) bool {
-        // Same values can have different run encodings (e.g., {[0,5],[6,10]} vs {[0,10]})
-        // Cardinality already checked equal, so just verify each value in a is in b
-        for (a.runs[0..a.n_runs]) |run| {
-            var v: u32 = run.start;
-            while (v <= run.end()) : (v += 1) {
-                if (!b.contains(@intCast(v))) return false;
-            }
-        }
-        return true;
+        // Cardinality already checked equal, so |A|=|B| ∧ A⊆B → A=B
+        return runSubsetRun(a, b);
     }
 
     // ========================================================================
@@ -752,6 +904,154 @@ pub const RoaringBitmap = struct {
             },
             .reserved => unreachable,
         };
+    }
+
+    // ========================================================================
+    // Iterator
+    // ========================================================================
+
+    /// Iterator over all values in the bitmap in ascending order.
+    pub const Iterator = struct {
+        bm: *const Self,
+        container_idx: u32,
+        /// Per-container iteration state
+        state: ContainerState,
+
+        const ContainerState = union(enum) {
+            empty: void,
+            array: ArrayState,
+            bitset: BitsetState,
+            run: RunState,
+        };
+
+        const ArrayState = struct {
+            values: []const u16,
+            pos: u32,
+        };
+
+        const BitsetState = struct {
+            words: []const u64,
+            word_idx: u32,
+            current_word: u64,
+        };
+
+        const RunState = struct {
+            runs: []const RunContainer.RunPair,
+            run_idx: u32,
+            pos_in_run: u16, // offset within current run
+        };
+
+        pub fn next(self: *Iterator) ?u32 {
+            while (true) {
+                switch (self.state) {
+                    .empty => {
+                        // Move to next container
+                        if (self.container_idx >= self.bm.size) return null;
+                        self.initContainer(self.container_idx);
+                    },
+                    .array => |*s| {
+                        if (s.pos < s.values.len) {
+                            const high: u32 = @as(u32, self.bm.keys[self.container_idx]) << 16;
+                            const low: u32 = s.values[s.pos];
+                            s.pos += 1;
+                            return high | low;
+                        }
+                        self.advanceContainer();
+                    },
+                    .bitset => |*s| {
+                        // Find next set bit
+                        while (s.current_word == 0) {
+                            s.word_idx += 1;
+                            if (s.word_idx >= 1024) {
+                                self.advanceContainer();
+                                break;
+                            }
+                            s.current_word = s.words[s.word_idx];
+                        } else {
+                            const bit = @ctz(s.current_word);
+                            s.current_word &= s.current_word - 1; // clear lowest bit
+                            const high: u32 = @as(u32, self.bm.keys[self.container_idx]) << 16;
+                            const low: u32 = @as(u32, s.word_idx) * 64 + bit;
+                            return high | low;
+                        }
+                    },
+                    .run => |*s| {
+                        if (s.run_idx < s.runs.len) {
+                            const run = s.runs[s.run_idx];
+                            const high: u32 = @as(u32, self.bm.keys[self.container_idx]) << 16;
+                            const low: u32 = @as(u32, run.start) + s.pos_in_run;
+
+                            if (s.pos_in_run < run.length) {
+                                s.pos_in_run += 1;
+                                return high | low;
+                            } else {
+                                // Move to next run
+                                s.run_idx += 1;
+                                s.pos_in_run = 0;
+                            }
+                        } else {
+                            self.advanceContainer();
+                        }
+                    },
+                }
+            }
+        }
+
+        fn initContainer(self: *Iterator, idx: u32) void {
+            const container = Container.fromTagged(self.bm.containers[idx]);
+            switch (container) {
+                .array => |ac| {
+                    self.state = .{ .array = .{
+                        .values = ac.values[0..ac.cardinality],
+                        .pos = 0,
+                    } };
+                },
+                .bitset => |bc| {
+                    // Find first non-zero word
+                    var word_idx: u32 = 0;
+                    while (word_idx < 1024 and bc.words[word_idx] == 0) : (word_idx += 1) {}
+                    if (word_idx < 1024) {
+                        self.state = .{ .bitset = .{
+                            .words = bc.words,
+                            .word_idx = word_idx,
+                            .current_word = bc.words[word_idx],
+                        } };
+                    } else {
+                        self.state = .empty;
+                    }
+                },
+                .run => |rc| {
+                    if (rc.n_runs > 0) {
+                        self.state = .{ .run = .{
+                            .runs = rc.runs[0..rc.n_runs],
+                            .run_idx = 0,
+                            .pos_in_run = 0,
+                        } };
+                    } else {
+                        self.state = .empty;
+                    }
+                },
+                .reserved => self.state = .empty,
+            }
+        }
+
+        fn advanceContainer(self: *Iterator) void {
+            self.container_idx += 1;
+            self.state = .empty;
+        }
+    };
+
+    /// Returns an iterator over all values in the bitmap.
+    pub fn iterator(self: *const Self) Iterator {
+        var it = Iterator{
+            .bm = self,
+            .container_idx = 0,
+            .state = .empty,
+        };
+        if (self.size > 0) {
+            it.initContainer(0);
+        }
+        return it;
     }
 };
 
@@ -1133,4 +1433,225 @@ test "A ∪ A = A" {
     defer union_aa.deinit();
 
     try std.testing.expect(union_aa.equals(&a));
+}
+
+// ============================================================================
+// Iterator Tests
+// ============================================================================
+
+test "iterator empty bitmap" {
+    const allocator = std.testing.allocator;
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    var it = bm.iterator();
+    try std.testing.expectEqual(@as(?u32, null), it.next());
+}
+
+test "iterator single container (array)" {
+    const allocator = std.testing.allocator;
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    _ = try bm.add(5);
+    _ = try bm.add(10);
+    _ = try bm.add(15);
+
+    var it = bm.iterator();
+    try std.testing.expectEqual(@as(?u32, 5), it.next());
+    try std.testing.expectEqual(@as(?u32, 10), it.next());
+    try std.testing.expectEqual(@as(?u32, 15), it.next());
+    try std.testing.expectEqual(@as(?u32, null), it.next());
+}
+
+test "iterator multiple containers" {
+    const allocator = std.testing.allocator;
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    // Values in different chunks
+    _ = try bm.add(100); // chunk 0
+    _ = try bm.add(65536 + 200); // chunk 1
+    _ = try bm.add(131072 + 300); // chunk 2
+
+    var it = bm.iterator();
+    try std.testing.expectEqual(@as(?u32, 100), it.next());
+    try std.testing.expectEqual(@as(?u32, 65536 + 200), it.next());
+    try std.testing.expectEqual(@as(?u32, 131072 + 300), it.next());
+    try std.testing.expectEqual(@as(?u32, null), it.next());
+}
+
+test "iterator collects all values" {
+    const allocator = std.testing.allocator;
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    // Add various values
+    const values = [_]u32{ 0, 1, 100, 1000, 65535, 65536, 100000, 0xFFFFFFFF };
+    for (values) |v| {
+        _ = try bm.add(v);
+    }
+
+    // Collect via iterator
+    var collected: [8]u32 = undefined;
+    var count: usize = 0;
+    var it = bm.iterator();
+    while (it.next()) |v| {
+        collected[count] = v;
+        count += 1;
+    }
+
+    try std.testing.expectEqual(@as(usize, 8), count);
+    // Values should be in sorted order
+    try std.testing.expectEqual(@as(u32, 0), collected[0]);
+    try std.testing.expectEqual(@as(u32, 1), collected[1]);
+    try std.testing.expectEqual(@as(u32, 100), collected[2]);
+    try std.testing.expectEqual(@as(u32, 1000), collected[3]);
+    try std.testing.expectEqual(@as(u32, 65535), collected[4]);
+    try std.testing.expectEqual(@as(u32, 65536), collected[5]);
+    try std.testing.expectEqual(@as(u32, 100000), collected[6]);
+    try std.testing.expectEqual(@as(u32, 0xFFFFFFFF), collected[7]);
+}
+
+// ============================================================================
+// In-Place Operation Tests
+// ============================================================================
+
+test "bitwiseOrInPlace" {
+    const allocator = std.testing.allocator;
+
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    _ = try a.add(1);
+    _ = try a.add(2);
+    _ = try a.add(3);
+
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+    _ = try b.add(3);
+    _ = try b.add(4);
+    _ = try b.add(5);
+
+    try a.bitwiseOrInPlace(&b);
+
+    try std.testing.expectEqual(@as(u64, 5), a.cardinality());
+    try std.testing.expect(a.contains(1));
+    try std.testing.expect(a.contains(2));
+    try std.testing.expect(a.contains(3));
+    try std.testing.expect(a.contains(4));
+    try std.testing.expect(a.contains(5));
+}
+
+test "bitwiseOrInPlace with new chunk" {
+    const allocator = std.testing.allocator;
+
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    _ = try a.add(100); // chunk 0
+
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+    _ = try b.add(65536 + 100); // chunk 1
+
+    try a.bitwiseOrInPlace(&b);
+
+    try std.testing.expectEqual(@as(u64, 2), a.cardinality());
+    try std.testing.expect(a.contains(100));
+    try std.testing.expect(a.contains(65536 + 100));
+    try std.testing.expectEqual(@as(u32, 2), a.size); // two containers
+}
+
+test "bitwiseAndInPlace" {
+    const allocator = std.testing.allocator;
+
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    _ = try a.add(1);
+    _ = try a.add(2);
+    _ = try a.add(3);
+    _ = try a.add(4);
+
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+    _ = try b.add(2);
+    _ = try b.add(3);
+    _ = try b.add(5);
+
+    try a.bitwiseAndInPlace(&b);
+
+    try std.testing.expectEqual(@as(u64, 2), a.cardinality());
+    try std.testing.expect(a.contains(2));
+    try std.testing.expect(a.contains(3));
+    try std.testing.expect(!a.contains(1));
+    try std.testing.expect(!a.contains(4));
+}
+
+test "bitwiseAndInPlace with empty other" {
+    const allocator = std.testing.allocator;
+
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    _ = try a.add(1);
+    _ = try a.add(2);
+
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    try a.bitwiseAndInPlace(&b);
+
+    try std.testing.expect(a.isEmpty());
+}
+
+test "bitwiseDifferenceInPlace" {
+    const allocator = std.testing.allocator;
+
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    _ = try a.add(1);
+    _ = try a.add(2);
+    _ = try a.add(3);
+    _ = try a.add(4);
+
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+    _ = try b.add(2);
+    _ = try b.add(4);
+
+    try a.bitwiseDifferenceInPlace(&b);
+
+    try std.testing.expectEqual(@as(u64, 2), a.cardinality());
+    try std.testing.expect(a.contains(1));
+    try std.testing.expect(a.contains(3));
+    try std.testing.expect(!a.contains(2));
+    try std.testing.expect(!a.contains(4));
+}
+
+test "in-place operations match non-in-place" {
+    const allocator = std.testing.allocator;
+
+    // Create two bitmaps
+    var a1 = try RoaringBitmap.init(allocator);
+    defer a1.deinit();
+    var a2 = try RoaringBitmap.init(allocator);
+    defer a2.deinit();
+
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    const vals_a = [_]u32{ 1, 2, 3, 65536, 65537 };
+    const vals_b = [_]u32{ 2, 3, 4, 65537, 131072 };
+
+    for (vals_a) |v| {
+        _ = try a1.add(v);
+        _ = try a2.add(v);
+    }
+    for (vals_b) |v| {
+        _ = try b.add(v);
+    }
+
+    // Compare OR
+    var or_result = try a1.bitwiseOr(allocator, &b);
+    defer or_result.deinit();
+    try a2.bitwiseOrInPlace(&b);
+    try std.testing.expect(a2.equals(&or_result));
 }
