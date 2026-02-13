@@ -112,8 +112,20 @@ pub fn serializeToWriter(bm: *const RoaringBitmap, writer: anytype) !void {
     // Offset header:
     // - Always for no-run format (RoaringFormatSpec requirement)
     // - For run format only when size >= NO_OFFSET_THRESHOLD
+    // Offsets are ABSOLUTE positions from buffer start per RoaringFormatSpec
     if (!has_runs or bm.size >= fmt.NO_OFFSET_THRESHOLD) {
-        var offset: u32 = 0;
+        // Calculate where container data begins (absolute position from buffer start)
+        var data_start: u32 = undefined;
+        if (has_runs) {
+            // Cookie(4) + run_bitset((size+7)/8) + descriptive(size*4) + offsets(size*4)
+            const bitset_bytes: u32 = (bm.size + 7) / 8;
+            data_start = 4 + bitset_bytes + (@as(u32, bm.size) * 4) + (@as(u32, bm.size) * 4);
+        } else {
+            // Cookie(4) + size(4) + descriptive(size*4) + offsets(size*4)
+            data_start = 8 + (@as(u32, bm.size) * 4) + (@as(u32, bm.size) * 4);
+        }
+
+        var offset: u32 = data_start;
         for (bm.containers[0..bm.size]) |tp| {
             try writer.writeInt(u32, offset, .little);
             const container = Container.fromTagged(tp);

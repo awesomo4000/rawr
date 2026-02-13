@@ -121,7 +121,8 @@ pub const FrozenBitmap = struct {
     fn getContainerDataOffset(self: *const Self, idx: usize) usize {
         if (self.offsets_offset != 0) {
             const offset = self.offsets_offset + idx * 4;
-            return self.data_offset + std.mem.readInt(u32, self.data[offset..][0..4], .little);
+            // Offsets are absolute positions from buffer start (per RoaringFormatSpec)
+            return std.mem.readInt(u32, self.data[offset..][0..4], .little);
         }
 
         // Fallback for small run-format bitmaps without offset header (size < 4)
