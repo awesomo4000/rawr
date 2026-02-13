@@ -1567,10 +1567,11 @@ pub const RoaringBitmap = struct {
     // Serialization (RoaringFormatSpec compatible)
     // ========================================================================
 
-    /// Cookie values for RoaringFormatSpec
-    const SERIAL_COOKIE_NO_RUNCONTAINER: u32 = 12346;
-    const SERIAL_COOKIE: u32 = 12347;
-    const NO_OFFSET_THRESHOLD: u32 = 4; // Containers below this don't use offset header
+    /// Cookie values for RoaringFormatSpec (imported from format.zig)
+    const fmt = @import("format.zig");
+    pub const SERIAL_COOKIE_NO_RUNCONTAINER = fmt.SERIAL_COOKIE_NO_RUNCONTAINER;
+    pub const SERIAL_COOKIE = fmt.SERIAL_COOKIE;
+    pub const NO_OFFSET_THRESHOLD = fmt.NO_OFFSET_THRESHOLD;
 
     /// Returns true if any container is a run container.
     fn hasRunContainers(self: *const Self) bool {
