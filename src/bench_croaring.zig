@@ -427,8 +427,23 @@ fn benchCRoaringCardinality() void {
 // ============================================================================
 
 pub fn main() !void {
+    // Print header with timestamp
+    const ts = std.time.timestamp();
+    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = @intCast(ts) };
+    const day_seconds = epoch_seconds.getDaySeconds();
+    const year_day = epoch_seconds.getEpochDay().calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+
     std.debug.print("Rawr vs CRoaring Benchmark Comparison\n", .{});
     std.debug.print("======================================\n", .{});
+    std.debug.print("Run: {d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC\n", .{
+        year_day.year,
+        @intFromEnum(month_day.month),
+        month_day.day_index + 1,
+        day_seconds.getHoursIntoDay(),
+        day_seconds.getMinutesIntoHour(),
+        day_seconds.getSecondsIntoMinute(),
+    });
     std.debug.print("N = {d} values, {d} warmup, {d} timed runs (median)\n", .{ N_VALUES, WARMUP_RUNS, BENCH_RUNS });
 
     std.debug.print("\nInitializing test data...\n", .{});
