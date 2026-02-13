@@ -147,9 +147,10 @@ pub const BitsetContainer = struct {
         self.cardinality = -1;
     }
 
-    /// SIMD-accelerated OR: dst |= src
-    pub fn unionWith(dst: *Self, src: *const Self) void {
-        const VEC_SIZE = 8; // 512 bits = 64 bytes = 1 cache line
+    const BitwiseOp = enum { bor, band, xor, andnot };
+
+    fn simdBitsetOp(comptime op: BitwiseOp, dst: *Self, src: *const Self) void {
+        const VEC_SIZE = 8;
         const vec_count = NUM_WORDS / VEC_SIZE;
 
         var card: u64 = 0;
@@ -157,75 +158,38 @@ pub const BitsetContainer = struct {
             const base = i * VEC_SIZE;
             const a: @Vector(VEC_SIZE, u64) = dst.words[base..][0..VEC_SIZE].*;
             const b: @Vector(VEC_SIZE, u64) = src.words[base..][0..VEC_SIZE].*;
-            const result = a | b;
+            const result = switch (op) {
+                .bor => a | b,
+                .band => a & b,
+                .xor => a ^ b,
+                .andnot => a & ~b,
+            };
             dst.words[base..][0..VEC_SIZE].* = result;
-
-            // Accumulate popcount
             inline for (0..VEC_SIZE) |j| {
                 card += @popCount(result[j]);
             }
         }
         dst.cardinality = @intCast(card);
+    }
+
+    /// SIMD-accelerated OR: dst |= src
+    pub fn unionWith(dst: *Self, src: *const Self) void {
+        simdBitsetOp(.bor, dst, src);
     }
 
     /// SIMD-accelerated AND: dst &= src
     pub fn intersectionWith(dst: *Self, src: *const Self) void {
-        const VEC_SIZE = 8;
-        const vec_count = NUM_WORDS / VEC_SIZE;
-
-        var card: u64 = 0;
-        for (0..vec_count) |i| {
-            const base = i * VEC_SIZE;
-            const a: @Vector(VEC_SIZE, u64) = dst.words[base..][0..VEC_SIZE].*;
-            const b: @Vector(VEC_SIZE, u64) = src.words[base..][0..VEC_SIZE].*;
-            const result = a & b;
-            dst.words[base..][0..VEC_SIZE].* = result;
-
-            inline for (0..VEC_SIZE) |j| {
-                card += @popCount(result[j]);
-            }
-        }
-        dst.cardinality = @intCast(card);
+        simdBitsetOp(.band, dst, src);
     }
 
     /// SIMD-accelerated XOR: dst ^= src
     pub fn symmetricDifferenceWith(dst: *Self, src: *const Self) void {
-        const VEC_SIZE = 8;
-        const vec_count = NUM_WORDS / VEC_SIZE;
-
-        var card: u64 = 0;
-        for (0..vec_count) |i| {
-            const base = i * VEC_SIZE;
-            const a: @Vector(VEC_SIZE, u64) = dst.words[base..][0..VEC_SIZE].*;
-            const b: @Vector(VEC_SIZE, u64) = src.words[base..][0..VEC_SIZE].*;
-            const result = a ^ b;
-            dst.words[base..][0..VEC_SIZE].* = result;
-
-            inline for (0..VEC_SIZE) |j| {
-                card += @popCount(result[j]);
-            }
-        }
-        dst.cardinality = @intCast(card);
+        simdBitsetOp(.xor, dst, src);
     }
 
     /// SIMD-accelerated AND-NOT: dst &= ~src (difference)
     pub fn differenceWith(dst: *Self, src: *const Self) void {
-        const VEC_SIZE = 8;
-        const vec_count = NUM_WORDS / VEC_SIZE;
-
-        var card: u64 = 0;
-        for (0..vec_count) |i| {
-            const base = i * VEC_SIZE;
-            const a: @Vector(VEC_SIZE, u64) = dst.words[base..][0..VEC_SIZE].*;
-            const b: @Vector(VEC_SIZE, u64) = src.words[base..][0..VEC_SIZE].*;
-            const result = a & ~b;
-            dst.words[base..][0..VEC_SIZE].* = result;
-
-            inline for (0..VEC_SIZE) |j| {
-                card += @popCount(result[j]);
-            }
-        }
-        dst.cardinality = @intCast(card);
+        simdBitsetOp(.andnot, dst, src);
     }
 };
 
