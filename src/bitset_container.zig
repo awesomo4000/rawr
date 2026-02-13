@@ -32,6 +32,21 @@ pub const BitsetContainer = struct {
         allocator.destroy(self);
     }
 
+    /// Create a deep copy.
+    pub fn clone(self: *const Self, allocator: std.mem.Allocator) !*Self {
+        const copy = try allocator.create(Self);
+        errdefer allocator.destroy(copy);
+
+        const words = try allocator.alignedAlloc(u64, .@"64", 1024);
+        @memcpy(words, self.words);
+
+        copy.* = .{
+            .words = words[0..1024],
+            .cardinality = self.cardinality,
+        };
+        return copy;
+    }
+
     /// Check if a value (low 16 bits) is present.
     pub fn contains(self: *const Self, value: u16) bool {
         const word_idx = value >> 6; // value / 64

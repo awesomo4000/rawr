@@ -54,6 +54,23 @@ pub const RoaringBitmap = struct {
         self.allocator.free(self.containers[0..self.capacity]);
     }
 
+    /// Create a deep copy of the bitmap.
+    pub fn clone(self: *const Self, allocator: std.mem.Allocator) !Self {
+        var result = try Self.init(allocator);
+        errdefer result.deinit();
+
+        try result.ensureCapacity(self.size);
+
+        for (self.containers[0..self.size], self.keys[0..self.size], 0..) |tp, key, i| {
+            const cloned = try Container.fromTagged(tp).clone(allocator);
+            result.containers[i] = cloned.toTagged();
+            result.keys[i] = key;
+        }
+        result.size = self.size;
+
+        return result;
+    }
+
     /// Extract high 16 bits (chunk key) from a 32-bit value.
     inline fn highBits(value: u32) u16 {
         return @truncate(value >> 16);
@@ -550,6 +567,12 @@ pub const RoaringBitmap = struct {
         var result = try Self.init(allocator);
         errdefer result.deinit();
 
+        // Scratch buffer for temporary array containers (avoids malloc/free churn for empty results)
+        // Most sparse intersections produce empty arrays, so this eliminates ~65K malloc/free cycles.
+        // Size: ArrayContainer struct (~24 bytes) + max values (4096 * 2 = 8192 bytes) + alignment padding
+        var scratch_buf: [8448]u8 = undefined;
+        var scratch = std.heap.FixedBufferAllocator.init(&scratch_buf);
+
         var i: usize = 0;
         var j: usize = 0;
 
@@ -562,16 +585,44 @@ pub const RoaringBitmap = struct {
             } else if (key_a > key_b) {
                 j += 1;
             } else {
-                const c = try ops.containerIntersection(
-                    allocator,
+                // Try scratch allocator first (works for array containers)
+                // Falls back to real allocator for bitset/run containers that don't fit
+                const scratch_alloc = scratch.allocator();
+                const c = ops.containerIntersection(
+                    scratch_alloc,
                     Container.fromTagged(self.containers[i]),
                     Container.fromTagged(other.containers[j]),
-                );
+                ) catch |err| blk: {
+                    if (err == error.OutOfMemory) {
+                        // Scratch too small (bitset container), use real allocator
+                        break :blk try ops.containerIntersection(
+                            allocator,
+                            Container.fromTagged(self.containers[i]),
+                            Container.fromTagged(other.containers[j]),
+                        );
+                    }
+                    return err;
+                };
+
+                const used_scratch = scratch.end_index > 0;
+
                 if (c.getCardinality() > 0) {
-                    try result.appendContainer(key_a, c.toTagged());
-                } else {
+                    if (used_scratch) {
+                        // Non-empty from scratch: clone into real allocator
+                        const permanent = try c.clone(allocator);
+                        try result.appendContainer(key_a, permanent.toTagged());
+                    } else {
+                        // Already in real allocator
+                        try result.appendContainer(key_a, c.toTagged());
+                    }
+                } else if (!used_scratch) {
+                    // Empty but allocated from real allocator, free it
                     c.deinit(allocator);
                 }
+
+                // Reset scratch for next iteration
+                scratch.reset();
+
                 i += 1;
                 j += 1;
             }
@@ -666,39 +717,72 @@ pub const RoaringBitmap = struct {
     // ========================================================================
 
     /// In-place union: self |= other. Modifies self to contain all values from both.
+    /// Uses O(n) merge algorithm instead of O(n²) incremental insertion.
     pub fn bitwiseOrInPlace(self: *Self, other: *const Self) !void {
         if (other.size == 0) return;
 
-        // We need to merge other's containers into self. This may require:
-        // 1. Inserting new containers for keys only in other
-        // 2. Merging containers for keys in both
-        // Strategy: work backwards to avoid shifting issues, or use a temp array
+        // Pre-merge into new arrays to avoid O(n²) shifting
+        const max_size = self.size + other.size;
+        const new_keys = try self.allocator.alloc(u16, max_size);
+        errdefer self.allocator.free(new_keys);
+        const new_containers = try self.allocator.alloc(TaggedPtr, max_size);
+        errdefer self.allocator.free(new_containers);
 
-        var j: usize = 0; // index into other
         var i: usize = 0; // index into self
+        var j: usize = 0; // index into other
+        var k: usize = 0; // index into new arrays
 
-        while (j < other.size) {
+        while (i < self.size and j < other.size) {
+            const key_a = self.keys[i];
             const key_b = other.keys[j];
 
-            // Find position in self for this key
-            while (i < self.size and self.keys[i] < key_b) : (i += 1) {}
-
-            if (i < self.size and self.keys[i] == key_b) {
-                // Key exists in both - merge containers
+            if (key_a < key_b) {
+                // Key only in self - move it
+                new_keys[k] = key_a;
+                new_containers[k] = self.containers[i];
+                k += 1;
+                i += 1;
+            } else if (key_a > key_b) {
+                // Key only in other - clone it
+                new_keys[k] = key_b;
+                new_containers[k] = try cloneContainer(self.allocator, other.containers[j]);
+                k += 1;
+                j += 1;
+            } else {
+                // Key in both - merge containers
                 const old_container = Container.fromTagged(self.containers[i]);
                 const other_container = Container.fromTagged(other.containers[j]);
                 const merged = try ops.containerUnion(self.allocator, old_container, other_container);
                 old_container.deinit(self.allocator);
-                self.containers[i] = merged.toTagged();
+                new_keys[k] = key_a;
+                new_containers[k] = merged.toTagged();
+                k += 1;
                 i += 1;
-            } else {
-                // Key only in other - insert cloned container
-                const cloned = try cloneContainer(self.allocator, other.containers[j]);
-                try self.insertTaggedContainerAt(i, key_b, cloned);
-                i += 1; // skip past inserted
+                j += 1;
             }
-            j += 1;
         }
+
+        // Copy remaining from self
+        while (i < self.size) : (i += 1) {
+            new_keys[k] = self.keys[i];
+            new_containers[k] = self.containers[i];
+            k += 1;
+        }
+
+        // Clone remaining from other
+        while (j < other.size) : (j += 1) {
+            new_keys[k] = other.keys[j];
+            new_containers[k] = try cloneContainer(self.allocator, other.containers[j]);
+            k += 1;
+        }
+
+        // Swap in new arrays, free old
+        self.allocator.free(self.keys[0..self.capacity]);
+        self.allocator.free(self.containers[0..self.capacity]);
+        self.keys = new_keys;
+        self.containers = new_containers;
+        self.size = @intCast(k);
+        self.capacity = @intCast(max_size);
     }
 
     /// In-place intersection: self &= other. Modifies self to contain only values in both.

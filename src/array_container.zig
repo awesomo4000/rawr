@@ -45,6 +45,22 @@ pub const ArrayContainer = struct {
         allocator.destroy(self);
     }
 
+    /// Create a deep copy.
+    pub fn clone(self: *const Self, allocator: std.mem.Allocator) !*Self {
+        const copy = try allocator.create(Self);
+        errdefer allocator.destroy(copy);
+
+        const values = try allocator.alignedAlloc(u16, .@"32", self.capacity);
+        @memcpy(values[0..self.cardinality], self.values[0..self.cardinality]);
+
+        copy.* = .{
+            .values = values,
+            .cardinality = self.cardinality,
+            .capacity = self.capacity,
+        };
+        return copy;
+    }
+
     /// Binary search for a value. Returns index if found, null otherwise.
     fn binarySearch(self: *const Self, value: u16) ?usize {
         if (self.cardinality == 0) return null;

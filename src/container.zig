@@ -115,6 +115,16 @@ pub const Container = union(TaggedPtr.ContainerType) {
             .reserved => {},
         }
     }
+
+    /// Create a deep copy.
+    pub fn clone(self: Self, allocator: std.mem.Allocator) !Self {
+        return switch (self) {
+            .array => |c| .{ .array = try c.clone(allocator) },
+            .bitset => |c| .{ .bitset = try c.clone(allocator) },
+            .run => |c| .{ .run = try c.clone(allocator) },
+            .reserved => .{ .reserved = {} },
+        };
+    }
 };
 
 // ============================================================================

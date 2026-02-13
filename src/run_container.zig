@@ -53,6 +53,22 @@ pub const RunContainer = struct {
         allocator.destroy(self);
     }
 
+    /// Create a deep copy.
+    pub fn clone(self: *const Self, allocator: std.mem.Allocator) !*Self {
+        const copy = try allocator.create(Self);
+        errdefer allocator.destroy(copy);
+
+        const runs = try allocator.alloc(RunPair, self.capacity);
+        @memcpy(runs[0..self.n_runs], self.runs[0..self.n_runs]);
+
+        copy.* = .{
+            .runs = runs,
+            .n_runs = self.n_runs,
+            .capacity = self.capacity,
+        };
+        return copy;
+    }
+
     /// Binary search for the run containing or after value.
     /// Returns the index of the run that might contain value,
     /// or n_runs if value is greater than all runs.
