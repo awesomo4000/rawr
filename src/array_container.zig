@@ -227,22 +227,17 @@ pub const ArrayContainer = struct {
         const self_end: usize = max_card;
         const other_end: usize = other.cardinality;
 
+        // Branchless merge: always write the smaller value, advance contributing pointer(s).
+        // On aarch64, LLVM emits csel for the output and cset for advances — no branches.
         while (si < self_end and oi < other_end) {
             const sv = self.values[si];
             const ov = other.values[oi];
-            if (sv < ov) {
-                self.values[k] = sv;
-                si += 1;
-            } else if (sv > ov) {
-                self.values[k] = ov;
-                oi += 1;
-            } else {
-                // Duplicate - write once, advance both
-                self.values[k] = sv;
-                si += 1;
-                oi += 1;
-            }
+
+            self.values[k] = if (sv <= ov) sv else ov;
             k += 1;
+
+            si += @intFromBool(sv <= ov);
+            oi += @intFromBool(ov <= sv);
         }
 
         // Drain remaining from self (shift left if there were duplicates)

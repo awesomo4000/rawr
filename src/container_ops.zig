@@ -134,20 +134,19 @@ fn arrayUnionArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayCo
     const sa = a.values[0..a.cardinality];
     const sb = b.values[0..b.cardinality];
 
+    // Branchless merge: always write the smaller value, advance contributing pointer(s).
+    // On aarch64, LLVM emits csel for the output and cset for advances — no branches.
     while (i < sa.len and j < sb.len) {
-        if (sa[i] < sb[j]) {
-            result.values[k] = sa[i];
-            i += 1;
-        } else if (sa[i] > sb[j]) {
-            result.values[k] = sb[j];
-            j += 1;
-        } else {
-            result.values[k] = sa[i];
-            i += 1;
-            j += 1;
-        }
+        const a_val = sa[i];
+        const b_val = sb[j];
+
+        result.values[k] = if (a_val <= b_val) a_val else b_val;
         k += 1;
+
+        i += @intFromBool(a_val <= b_val);
+        j += @intFromBool(b_val <= a_val);
     }
+    // Drain remaining elements
     while (i < sa.len) : (i += 1) {
         result.values[k] = sa[i];
         k += 1;
@@ -291,15 +290,18 @@ fn arrayIntersectArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *Arr
     const sa = a.values[0..a.cardinality];
     const sb = b.values[0..b.cardinality];
 
+    // Branchless merge: always advance whichever pointer is behind (or both if equal).
+    // On aarch64, LLVM emits csel/cset for these — no branch, no mispredict.
     while (i < sa.len and j < sb.len) {
-        if (sa[i] < sb[j]) {
-            i += 1;
-        } else if (sa[i] > sb[j]) {
-            j += 1;
-        } else {
-            result.values[k] = sa[i];
-            i += 1;
-            j += 1;
+        const a_val = sa[i];
+        const b_val = sb[j];
+
+        i += @intFromBool(a_val <= b_val);
+        j += @intFromBool(b_val <= a_val);
+
+        // Only write on match. This branch is well-predicted (matches are sparse).
+        if (a_val == b_val) {
+            result.values[k] = a_val;
             k += 1;
         }
     }
@@ -438,17 +440,25 @@ fn arrayDifferenceArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *Ar
     const sa = a.values[0..a.cardinality];
     const sb = b.values[0..b.cardinality];
 
-    while (i < sa.len) {
-        if (j >= sb.len or sa[i] < sb[j]) {
-            result.values[k] = sa[i];
-            i += 1;
+    // Branchless merge: keep element from A only when A < B (not in B).
+    while (i < sa.len and j < sb.len) {
+        const a_val = sa[i];
+        const b_val = sb[j];
+
+        // Write a_val only when strictly less than b_val (not in B).
+        if (a_val < b_val) {
+            result.values[k] = a_val;
             k += 1;
-        } else if (sa[i] > sb[j]) {
-            j += 1;
-        } else {
-            i += 1;
-            j += 1;
         }
+
+        // Advance pointers branchlessly.
+        i += @intFromBool(a_val <= b_val);
+        j += @intFromBool(b_val <= a_val);
+    }
+    // Drain remaining from A (all not in B since B is exhausted).
+    while (i < sa.len) : (i += 1) {
+        result.values[k] = sa[i];
+        k += 1;
     }
     result.cardinality = @intCast(k);
     return .{ .array = result };
