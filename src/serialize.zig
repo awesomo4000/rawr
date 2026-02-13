@@ -245,7 +245,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             const bc = try BitsetContainer.init(allocator);
             errdefer bc.deinit(allocator);
 
-            for (0..1024) |w| {
+            for (0..BitsetContainer.NUM_WORDS) |w| {
                 bc.words[w] = try reader.readInt(u64, .little);
             }
             bc.cardinality = @intCast(card);

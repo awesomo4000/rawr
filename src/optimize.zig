@@ -31,7 +31,7 @@ pub fn runOptimize(bm: *RoaringBitmap) !u32 {
                 // Count runs in bitset
                 const n_runs = countRunsInBitset(bc);
                 // Bitset: 8192 bytes, Run: n_runs * 4 bytes
-                if (n_runs * 4 < 8192) {
+                if (n_runs * 4 < BitsetContainer.SIZE_BYTES) {
                     const rc = try bitsetToRunContainer(bm.allocator, bc);
                     bc.deinit(bm.allocator);
                     bm.containers[i] = TaggedPtr.initRun(rc);

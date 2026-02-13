@@ -1,6 +1,7 @@
 const std = @import("std");
 const fmt = @import("format.zig");
 const ArrayContainer = @import("array_container.zig").ArrayContainer;
+const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
 
 /// A read-only bitmap view over serialized bytes. Zero-copy - no allocation for container data.
 /// Use this for zero-copy reads from mmap'd LMDB values.
@@ -282,7 +283,7 @@ pub const FrozenBitmap = struct {
                     .bitset => |*s| {
                         while (s.current_word == 0) {
                             s.word_idx += 1;
-                            if (s.word_idx >= 1024) {
+                            if (s.word_idx >= BitsetContainer.NUM_WORDS) {
                                 self.advanceContainer();
                                 break;
                             }
@@ -340,7 +341,7 @@ pub const FrozenBitmap = struct {
             } else if (card > ArrayContainer.MAX_CARDINALITY) {
                 // Find first non-zero word
                 var word_idx: u32 = 0;
-                while (word_idx < 1024) : (word_idx += 1) {
+                while (word_idx < BitsetContainer.NUM_WORDS) : (word_idx += 1) {
                     const word_offset = data_offset + @as(usize, word_idx) * 8;
                     const word = std.mem.readInt(u64, self.fb.data[word_offset..][0..8], .little);
                     if (word != 0) {
