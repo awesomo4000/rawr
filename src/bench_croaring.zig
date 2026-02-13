@@ -180,6 +180,25 @@ fn benchRawrOrSparse() void {
     std.mem.doNotOptimizeAway(&result);
 }
 
+fn benchRawrAndSparseArena() void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const a = &rawr_sparse_a.?;
+    const b = &rawr_sparse_b.?;
+    var result = a.bitwiseAnd(arena.allocator(), b) catch unreachable;
+    // Don't call result.deinit() — arena.deinit() handles cleanup
+    std.mem.doNotOptimizeAway(&result);
+}
+
+fn benchRawrOrSparseArena() void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const a = &rawr_sparse_a.?;
+    const b = &rawr_sparse_b.?;
+    var result = a.bitwiseOr(arena.allocator(), b) catch unreachable;
+    std.mem.doNotOptimizeAway(&result);
+}
+
 var rawr_dense_a: ?RoaringBitmap = null;
 var rawr_dense_b: ?RoaringBitmap = null;
 
@@ -497,6 +516,9 @@ pub fn main() !void {
     cr = benchmark(benchCRoaringAndSparse, .{});
     printResult("bitwiseAnd (sparse)", r.median_ns, cr.median_ns);
 
+    r = benchmark(benchRawrAndSparseArena, .{});
+    printResult("bitwiseAnd (sparse, arena)", r.median_ns, cr.median_ns);
+
     r = benchmark(benchRawrAndDense, .{});
     cr = benchmark(benchCRoaringAndDense, .{});
     printResult("bitwiseAnd (dense)", r.median_ns, cr.median_ns);
@@ -504,6 +526,9 @@ pub fn main() !void {
     r = benchmark(benchRawrOrSparse, .{});
     cr = benchmark(benchCRoaringOrSparse, .{});
     printResult("bitwiseOr (sparse)", r.median_ns, cr.median_ns);
+
+    r = benchmark(benchRawrOrSparseArena, .{});
+    printResult("bitwiseOr (sparse, arena)", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrOrDense, .{});
     cr = benchmark(benchCRoaringOrDense, .{});
