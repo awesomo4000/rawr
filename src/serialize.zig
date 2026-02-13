@@ -109,12 +109,15 @@ pub fn serializeToWriter(bm: *const RoaringBitmap, writer: anytype) !void {
         try writer.writeInt(u32, bm.size, .little);
     }
 
-    // Descriptive header: key (u16) + cardinality-1 (u16) per container
-    for (bm.containers[0..bm.size], bm.keys[0..bm.size]) |tp, key| {
-        try writer.writeInt(u16, key, .little);
+    // Descriptive header: key (u16) + cardinality-1 (u16) per container (bulk write)
+    var desc_buf = try bm.allocator.alloc(u16, bm.size * 2);
+    defer bm.allocator.free(desc_buf);
+    for (bm.containers[0..bm.size], bm.keys[0..bm.size], 0..) |tp, key, i| {
+        desc_buf[i * 2] = key;
         const card = Container.fromTagged(tp).getCardinality();
-        try writer.writeInt(u16, @intCast(card - 1), .little);
+        desc_buf[i * 2 + 1] = @intCast(card - 1);
     }
+    try writer.writeAll(std.mem.sliceAsBytes(desc_buf[0 .. bm.size * 2]));
 
     // Offset header:
     // - Always for no-run format (RoaringFormatSpec requirement)
@@ -212,13 +215,18 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
 
     try result.ensureCapacity(size);
 
-    // Read descriptive header
+    // Read descriptive header (bulk read as packed u16 pairs)
     var cardinalities = try allocator.alloc(u32, size);
     defer allocator.free(cardinalities);
 
+    const desc_buf = try allocator.alloc(u16, size * 2);
+    defer allocator.free(desc_buf);
+    const bytes_read = try reader.readAll(std.mem.sliceAsBytes(desc_buf));
+    if (bytes_read != size * 4) return error.InvalidFormat;
+
     for (0..size) |i| {
-        result.keys[i] = try reader.readInt(u16, .little);
-        cardinalities[i] = @as(u32, try reader.readInt(u16, .little)) + 1;
+        result.keys[i] = desc_buf[i * 2];
+        cardinalities[i] = @as(u32, desc_buf[i * 2 + 1]) + 1;
     }
 
     // Skip offset header if present:
@@ -244,9 +252,9 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             const rc = try RunContainer.init(allocator, n_runs);
             errdefer rc.deinit(allocator);
 
-            const bytes_needed = @as(usize, n_runs) * 4;
-            const bytes_read = try reader.readAll(std.mem.sliceAsBytes(rc.runs[0..n_runs]));
-            if (bytes_read != bytes_needed) return error.InvalidFormat;
+            const run_bytes = @as(usize, n_runs) * 4;
+            const n = try reader.readAll(std.mem.sliceAsBytes(rc.runs[0..n_runs]));
+            if (n != run_bytes) return error.InvalidFormat;
             rc.n_runs = n_runs;
             result.containers[i] = TaggedPtr.initRun(rc);
         } else if (card > ArrayContainer.MAX_CARDINALITY) {
@@ -254,8 +262,8 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             const bc = try BitsetContainer.init(allocator);
             errdefer bc.deinit(allocator);
 
-            const bytes_read = try reader.readAll(std.mem.sliceAsBytes(bc.words));
-            if (bytes_read != BitsetContainer.SIZE_BYTES) return error.InvalidFormat;
+            const n = try reader.readAll(std.mem.sliceAsBytes(bc.words));
+            if (n != BitsetContainer.SIZE_BYTES) return error.InvalidFormat;
             bc.cardinality = @intCast(card);
             result.containers[i] = TaggedPtr.initBitset(bc);
         } else {
@@ -263,9 +271,9 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             const ac = try ArrayContainer.init(allocator, @intCast(card));
             errdefer ac.deinit(allocator);
 
-            const bytes_needed = card * 2;
-            const bytes_read = try reader.readAll(std.mem.sliceAsBytes(ac.values[0..card]));
-            if (bytes_read != bytes_needed) return error.InvalidFormat;
+            const arr_bytes = card * 2;
+            const n = try reader.readAll(std.mem.sliceAsBytes(ac.values[0..card]));
+            if (n != arr_bytes) return error.InvalidFormat;
             ac.cardinality = @intCast(card);
             result.containers[i] = TaggedPtr.initArray(ac);
         }
