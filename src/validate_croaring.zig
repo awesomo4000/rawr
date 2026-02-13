@@ -1,6 +1,7 @@
 const std = @import("std");
 const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
+const FrozenBitmap = rawr.FrozenBitmap;
 const c = @cImport(@cInclude("croaring_wrapper.h"));
 
 const allocator = std.heap.c_allocator;
@@ -175,6 +176,67 @@ fn validateRangeRoundTrip(name: []const u8, start: u32, end: u32, run_optimize: 
     std.debug.print("  PASS: {s}{s} ({d} values, {d} bytes)\n", .{ name, suffix, end - start + 1, rawr_bytes.len });
 }
 
+/// Validate FrozenBitmap can read serialized bytes and contains() works correctly.
+fn validateFrozenContains(name: []const u8, values: []const u32, run_optimize: bool) !void {
+    // --- Build rawr bitmap and serialize ---
+    var rbm = try RoaringBitmap.init(allocator);
+    defer rbm.deinit();
+    for (values) |v| {
+        _ = try rbm.add(v);
+    }
+    if (run_optimize) {
+        _ = try rbm.runOptimize();
+    }
+
+    const rawr_bytes = try rawr.RoaringBitmap.serialize(&rbm, allocator);
+    defer allocator.free(rawr_bytes);
+
+    // --- Wrap in FrozenBitmap and verify contains ---
+    const frozen = FrozenBitmap.init(rawr_bytes) catch |err| {
+        std.debug.print("FAIL: {s} - FrozenBitmap.init failed: {s}\n", .{ name, @errorName(err) });
+        tests_failed += 1;
+        return error.FrozenInitFailed;
+    };
+
+    // Check cardinality
+    if (frozen.cardinality() != rbm.cardinality()) {
+        std.debug.print("FAIL: {s} - FrozenBitmap cardinality mismatch\n", .{name});
+        tests_failed += 1;
+        return error.CardinalityMismatch;
+    }
+
+    // Check all values are present
+    for (values) |v| {
+        if (!frozen.contains(v)) {
+            std.debug.print("FAIL: {s} - FrozenBitmap missing value {d}\n", .{ name, v });
+            tests_failed += 1;
+            return error.MissingValue;
+        }
+    }
+
+    // Spot check some values that should NOT be present
+    const absent_values = [_]u32{ 0xDEADBEEF, 0xCAFEBABE, 0x12345678 };
+    for (absent_values) |v| {
+        // Only check if the value wasn't in our input
+        var found = false;
+        for (values) |input_v| {
+            if (input_v == v) {
+                found = true;
+                break;
+            }
+        }
+        if (!found and frozen.contains(v)) {
+            std.debug.print("FAIL: {s} - FrozenBitmap false positive for {d}\n", .{ name, v });
+            tests_failed += 1;
+            return error.FalsePositive;
+        }
+    }
+
+    tests_passed += 1;
+    const suffix = if (run_optimize) " [run-optimized]" else "";
+    std.debug.print("  PASS: {s}{s} (FrozenBitmap, {d} values)\n", .{ name, suffix, values.len });
+}
+
 pub fn main() !void {
     std.debug.print("CRoaring Interop Validation\n", .{});
     std.debug.print("===========================\n\n", .{});
@@ -211,8 +273,9 @@ pub fn main() !void {
     for (0..5000) |i| bitset5000[i] = @intCast(i);
     try validateRoundTrip("bitset_5000", &bitset5000, false);
 
-    // Full chunk (65536 values) - CRoaring auto-optimizes to run, so we must too
-    try validateRangeRoundTrip("bitset_full_chunk", 0, 65535, true);
+    // Full chunk as run (65536 values) - CRoaring auto-optimizes to run, so we must too
+    // (This tests run serialization, not bitset - renamed to avoid confusion)
+    try validateRangeRoundTrip("run_full_chunk", 0, 65535, true);
 
     // ========== Multiple container tests ==========
     std.debug.print("\nMultiple container tests:\n", .{});
@@ -251,6 +314,15 @@ pub fn main() !void {
     for (0..100) |i| alternating[i] = @intCast(i * 2); // 0, 2, 4, 6...
     try validateRoundTrip("alternating_no_runs", &alternating, true);
 
+    // 4+ containers with run_optimize - exercises run format WITH offset header
+    // (NO_OFFSET_THRESHOLD = 4, so this triggers offset header in run format)
+    var four_chunks_runs: [400]u32 = undefined;
+    for (0..100) |i| four_chunks_runs[i] = @intCast(i); // chunk 0: 0-99
+    for (0..100) |i| four_chunks_runs[100 + i] = @intCast(65536 + i); // chunk 1
+    for (0..100) |i| four_chunks_runs[200 + i] = @intCast(131072 + i); // chunk 2
+    for (0..100) |i| four_chunks_runs[300 + i] = @intCast(196608 + i); // chunk 3
+    try validateRoundTrip("four_chunks_run_optimized", &four_chunks_runs, true);
+
     // ========== Large scale tests ==========
     std.debug.print("\nLarge scale tests:\n", .{});
 
@@ -273,6 +345,25 @@ pub fn main() !void {
         }
     }
     try validateRoundTrip("sparse_500k", sparse_500k[0..deduped_len], false);
+
+    // ========== FrozenBitmap tests ==========
+    // Gap 1 fix: validate FrozenBitmap can read serialized bytes correctly
+    std.debug.print("\nFrozenBitmap tests:\n", .{});
+
+    // Array container
+    try validateFrozenContains("frozen_array", &arr100, false);
+
+    // Bitset container
+    try validateFrozenContains("frozen_bitset", &bitset5000, false);
+
+    // Run container (single chunk)
+    try validateFrozenContains("frozen_run_single", &multi_range, true);
+
+    // Run container with offset header (4+ chunks)
+    try validateFrozenContains("frozen_run_with_offsets", &four_chunks_runs, true);
+
+    // Multiple containers without run optimize
+    try validateFrozenContains("frozen_multi_container", &five_containers, false);
 
     // ========== Summary ==========
     std.debug.print("\n===========================\n", .{});
