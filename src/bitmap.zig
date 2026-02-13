@@ -123,7 +123,7 @@ pub const RoaringBitmap = struct {
     }
 
     /// Grow capacity if needed.
-    fn ensureCapacity(self: *Self, needed: u32) !void {
+    pub fn ensureCapacity(self: *Self, needed: u32) !void {
         if (needed <= self.capacity) return;
 
         const new_cap = @max(self.capacity * 2, needed);
@@ -1334,273 +1334,40 @@ pub const RoaringBitmap = struct {
     }
 
     // ========================================================================
-    // Serialization (RoaringFormatSpec compatible)
+    // Serialization (delegated to serialize.zig)
     // ========================================================================
 
-    /// Cookie values for RoaringFormatSpec (imported from format.zig)
+    /// Cookie values for RoaringFormatSpec (re-exported for FrozenBitmap compatibility)
     const fmt = @import("format.zig");
     pub const SERIAL_COOKIE_NO_RUNCONTAINER = fmt.SERIAL_COOKIE_NO_RUNCONTAINER;
     pub const SERIAL_COOKIE = fmt.SERIAL_COOKIE;
     pub const NO_OFFSET_THRESHOLD = fmt.NO_OFFSET_THRESHOLD;
 
-    /// Returns true if any container is a run container.
-    fn hasRunContainers(self: *const Self) bool {
-        for (self.containers[0..self.size]) |tp| {
-            if (TaggedPtr.getType(tp) == .run) return true;
-        }
-        return false;
-    }
+    const ser = @import("serialize.zig");
 
     /// Compute serialized size in bytes.
     pub fn serializedSizeInBytes(self: *const Self) usize {
-        if (self.size == 0) return 8; // Just header
-
-        const has_runs = self.hasRunContainers();
-        var size: usize = 0;
-
-        // Cookie + size (or cookie with embedded size for run format)
-        if (has_runs) {
-            size += 4; // cookie with size embedded
-            // Run container bitset: ceil(size / 8) bytes
-            size += (self.size + 7) / 8;
-        } else {
-            size += 8; // cookie + size
-        }
-
-        // Descriptive header: 4 bytes per container (key + cardinality-1)
-        size += @as(usize, self.size) * 4;
-
-        // Offset header:
-        // - Always for no-run format (RoaringFormatSpec requirement)
-        // - For run format only when size >= NO_OFFSET_THRESHOLD
-        if (!has_runs or self.size >= NO_OFFSET_THRESHOLD) {
-            size += @as(usize, self.size) * 4; // 4 bytes per container offset
-        }
-
-        // Container data
-        for (self.containers[0..self.size]) |tp| {
-            const container = Container.fromTagged(tp);
-            size += switch (container) {
-                .array => |ac| @as(usize, ac.cardinality) * 2,
-                .bitset => 8192, // 1024 * 8 bytes
-                .run => |rc| 2 + @as(usize, rc.n_runs) * 4, // n_runs prefix + pairs
-                .reserved => 0,
-            };
-        }
-
-        return size;
+        return ser.serializedSizeInBytes(self);
     }
 
     /// Serialize the bitmap to a byte slice (RoaringFormatSpec compatible).
     pub fn serialize(self: *const Self, allocator: std.mem.Allocator) ![]u8 {
-        const size_bytes = self.serializedSizeInBytes();
-        const buf = try allocator.alloc(u8, size_bytes);
-        errdefer allocator.free(buf);
-
-        var stream = std.io.fixedBufferStream(buf);
-        const writer = stream.writer();
-
-        try self.serializeToWriter(writer);
-
-        return buf;
+        return ser.serialize(self, allocator);
     }
 
     /// Serialize to any writer.
     pub fn serializeToWriter(self: *const Self, writer: anytype) !void {
-        if (self.size == 0) {
-            // Empty bitmap
-            try writer.writeInt(u32, SERIAL_COOKIE_NO_RUNCONTAINER, .little);
-            try writer.writeInt(u32, 0, .little);
-            return;
-        }
-
-        const has_runs = self.hasRunContainers();
-
-        if (has_runs) {
-            // Cookie with size embedded in high 16 bits
-            const cookie: u32 = SERIAL_COOKIE | (@as(u32, self.size - 1) << 16);
-            try writer.writeInt(u32, cookie, .little);
-
-            // Run container bitset (max 8KB for 65536 containers)
-            const bitset_bytes = (self.size + 7) / 8;
-            var run_bitset_buf: [8192]u8 = undefined;
-            const run_bitset = run_bitset_buf[0..bitset_bytes];
-            @memset(run_bitset, 0);
-
-            for (self.containers[0..self.size], 0..) |tp, i| {
-                if (TaggedPtr.getType(tp) == .run) {
-                    run_bitset[i / 8] |= @as(u8, 1) << @intCast(i % 8);
-                }
-            }
-            try writer.writeAll(run_bitset);
-        } else {
-            try writer.writeInt(u32, SERIAL_COOKIE_NO_RUNCONTAINER, .little);
-            try writer.writeInt(u32, self.size, .little);
-        }
-
-        // Descriptive header: key (u16) + cardinality-1 (u16) per container
-        for (self.containers[0..self.size], self.keys[0..self.size]) |tp, key| {
-            try writer.writeInt(u16, key, .little);
-            const card = Container.fromTagged(tp).getCardinality();
-            try writer.writeInt(u16, @intCast(card - 1), .little);
-        }
-
-        // Offset header:
-        // - Always for no-run format (RoaringFormatSpec requirement)
-        // - For run format only when size >= NO_OFFSET_THRESHOLD
-        if (!has_runs or self.size >= NO_OFFSET_THRESHOLD) {
-            var offset: u32 = 0;
-            for (self.containers[0..self.size]) |tp| {
-                try writer.writeInt(u32, offset, .little);
-                const container = Container.fromTagged(tp);
-                offset += switch (container) {
-                    .array => |ac| @as(u32, ac.cardinality) * 2,
-                    .bitset => 8192,
-                    .run => |rc| 2 + @as(u32, rc.n_runs) * 4, // n_runs prefix + pairs
-                    .reserved => 0,
-                };
-            }
-        }
-
-        // Container data
-        for (self.containers[0..self.size]) |tp| {
-            const container = Container.fromTagged(tp);
-            switch (container) {
-                .array => |ac| {
-                    for (ac.values[0..ac.cardinality]) |v| {
-                        try writer.writeInt(u16, v, .little);
-                    }
-                },
-                .bitset => |bc| {
-                    for (bc.words) |word| {
-                        try writer.writeInt(u64, word, .little);
-                    }
-                },
-                .run => |rc| {
-                    // RoaringFormatSpec: n_runs prefix followed by run pairs
-                    try writer.writeInt(u16, rc.n_runs, .little);
-                    for (rc.runs[0..rc.n_runs]) |run| {
-                        try writer.writeInt(u16, run.start, .little);
-                        try writer.writeInt(u16, run.length, .little);
-                    }
-                },
-                .reserved => {},
-            }
-        }
+        return ser.serializeToWriter(self, writer);
     }
 
     /// Deserialize a bitmap from bytes (RoaringFormatSpec compatible).
     pub fn deserialize(allocator: std.mem.Allocator, data: []const u8) !Self {
-        if (data.len < 4) return error.InvalidFormat;
-
-        var stream = std.io.fixedBufferStream(data);
-        const reader = stream.reader();
-
-        return deserializeFromReader(allocator, reader, data.len);
+        return ser.deserialize(allocator, data);
     }
 
     /// Deserialize from any reader.
     pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data_len: usize) !Self {
-        _ = data_len;
-
-        const cookie = try reader.readInt(u32, .little);
-
-        var size: u32 = undefined;
-        var has_runs = false;
-        var run_bitset: ?[]u8 = null;
-        defer if (run_bitset) |rb| allocator.free(rb);
-
-        if ((cookie & 0xFFFF) == SERIAL_COOKIE) {
-            // Format with run containers
-            has_runs = true;
-            size = ((cookie >> 16) & 0xFFFF) + 1;
-
-            // Read run container bitset
-            const bitset_bytes = (size + 7) / 8;
-            run_bitset = try allocator.alloc(u8, bitset_bytes);
-            const bytes_read = try reader.readAll(run_bitset.?);
-            if (bytes_read != bitset_bytes) return error.InvalidFormat;
-        } else if (cookie == SERIAL_COOKIE_NO_RUNCONTAINER) {
-            // Format without run containers
-            size = try reader.readInt(u32, .little);
-        } else {
-            return error.InvalidFormat;
-        }
-
-        if (size == 0) {
-            return Self.init(allocator);
-        }
-
-        var result = try Self.init(allocator);
-        errdefer result.deinit();
-
-        try result.ensureCapacity(size);
-
-        // Read descriptive header
-        var cardinalities = try allocator.alloc(u32, size);
-        defer allocator.free(cardinalities);
-
-        for (0..size) |i| {
-            result.keys[i] = try reader.readInt(u16, .little);
-            cardinalities[i] = @as(u32, try reader.readInt(u16, .little)) + 1;
-        }
-
-        // Skip offset header if present:
-        // - Always for no-run format (RoaringFormatSpec requirement)
-        // - For run format only when size >= NO_OFFSET_THRESHOLD
-        if (!has_runs or size >= NO_OFFSET_THRESHOLD) {
-            for (0..size) |_| {
-                _ = try reader.readInt(u32, .little);
-            }
-        }
-
-        // Read container data
-        for (0..size) |i| {
-            const is_run = if (run_bitset) |rb|
-                (rb[i / 8] & (@as(u8, 1) << @intCast(i % 8))) != 0
-            else
-                false;
-
-            const card = cardinalities[i];
-
-            if (is_run) {
-                // Run container: n_runs is in the data section prefix, not the header
-                // (header stores cardinality-1 which is sum of run lengths, not n_runs)
-                const n_runs = try reader.readInt(u16, .little);
-                const rc = try RunContainer.init(allocator, n_runs);
-                errdefer rc.deinit(allocator);
-
-                for (0..n_runs) |r| {
-                    rc.runs[r].start = try reader.readInt(u16, .little);
-                    rc.runs[r].length = try reader.readInt(u16, .little);
-                }
-                rc.n_runs = n_runs;
-                result.containers[i] = TaggedPtr.initRun(rc);
-            } else if (card > ArrayContainer.MAX_CARDINALITY) {
-                // Bitset container
-                const bc = try BitsetContainer.init(allocator);
-                errdefer bc.deinit(allocator);
-
-                for (0..1024) |w| {
-                    bc.words[w] = try reader.readInt(u64, .little);
-                }
-                bc.cardinality = @intCast(card);
-                result.containers[i] = TaggedPtr.initBitset(bc);
-            } else {
-                // Array container
-                const ac = try ArrayContainer.init(allocator, @intCast(card));
-                errdefer ac.deinit(allocator);
-
-                for (0..card) |v| {
-                    ac.values[v] = try reader.readInt(u16, .little);
-                }
-                ac.cardinality = @intCast(card);
-                result.containers[i] = TaggedPtr.initArray(ac);
-            }
-        }
-
-        result.size = size;
-        return result;
+        return ser.deserializeFromReader(allocator, reader, data_len);
     }
 };
 
@@ -2203,103 +1970,6 @@ test "in-place operations match non-in-place" {
     defer or_result.deinit();
     try a2.bitwiseOrInPlace(&b);
     try std.testing.expect(a2.equals(&or_result));
-}
-
-// ============================================================================
-// Serialization Tests
-// ============================================================================
-
-test "serialize and deserialize empty bitmap" {
-    const allocator = std.testing.allocator;
-
-    var bm = try RoaringBitmap.init(allocator);
-    defer bm.deinit();
-
-    const bytes = try bm.serialize(allocator);
-    defer allocator.free(bytes);
-
-    var restored = try RoaringBitmap.deserialize(allocator, bytes);
-    defer restored.deinit();
-
-    try std.testing.expect(restored.isEmpty());
-    try std.testing.expect(bm.equals(&restored));
-}
-
-test "serialize and deserialize array container" {
-    const allocator = std.testing.allocator;
-
-    var bm = try RoaringBitmap.init(allocator);
-    defer bm.deinit();
-
-    _ = try bm.add(1);
-    _ = try bm.add(100);
-    _ = try bm.add(1000);
-
-    const bytes = try bm.serialize(allocator);
-    defer allocator.free(bytes);
-
-    var restored = try RoaringBitmap.deserialize(allocator, bytes);
-    defer restored.deinit();
-
-    try std.testing.expectEqual(bm.cardinality(), restored.cardinality());
-    try std.testing.expect(restored.contains(1));
-    try std.testing.expect(restored.contains(100));
-    try std.testing.expect(restored.contains(1000));
-    try std.testing.expect(bm.equals(&restored));
-}
-
-test "serialize and deserialize multiple containers" {
-    const allocator = std.testing.allocator;
-
-    var bm = try RoaringBitmap.init(allocator);
-    defer bm.deinit();
-
-    // Values in different chunks
-    _ = try bm.add(100); // chunk 0
-    _ = try bm.add(65536 + 200); // chunk 1
-    _ = try bm.add(131072 + 300); // chunk 2
-
-    const bytes = try bm.serialize(allocator);
-    defer allocator.free(bytes);
-
-    var restored = try RoaringBitmap.deserialize(allocator, bytes);
-    defer restored.deinit();
-
-    try std.testing.expectEqual(@as(u32, 3), restored.size);
-    try std.testing.expect(restored.contains(100));
-    try std.testing.expect(restored.contains(65536 + 200));
-    try std.testing.expect(restored.contains(131072 + 300));
-    try std.testing.expect(bm.equals(&restored));
-}
-
-test "serialize round-trip preserves all values" {
-    const allocator = std.testing.allocator;
-
-    var bm = try RoaringBitmap.init(allocator);
-    defer bm.deinit();
-
-    // Add various values across chunks
-    const values = [_]u32{ 0, 1, 100, 1000, 65535, 65536, 100000, 0xFFFFFFFF };
-    for (values) |v| {
-        _ = try bm.add(v);
-    }
-
-    const bytes = try bm.serialize(allocator);
-    defer allocator.free(bytes);
-
-    var restored = try RoaringBitmap.deserialize(allocator, bytes);
-    defer restored.deinit();
-
-    try std.testing.expectEqual(bm.cardinality(), restored.cardinality());
-
-    // Verify all values via iterator
-    var it1 = bm.iterator();
-    var it2 = restored.iterator();
-    while (it1.next()) |v1| {
-        const v2 = it2.next();
-        try std.testing.expectEqual(v1, v2.?);
-    }
-    try std.testing.expectEqual(@as(?u32, null), it2.next());
 }
 
 // ============================================================================

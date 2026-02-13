@@ -21,5 +21,6 @@ test {
     _ = @import("bitmap.zig");
     _ = @import("frozen.zig");
     _ = @import("compare.zig");
+    _ = @import("serialize.zig");
     _ = @import("property_tests.zig");
 }
