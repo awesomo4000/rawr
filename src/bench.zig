@@ -1,3 +1,5 @@
+// TODO: Add timestamped header to benchmark output (like bench_croaring.zig)
+
 const std = @import("std");
 const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
