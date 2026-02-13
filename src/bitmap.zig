@@ -1198,8 +1198,7 @@ pub const RoaringBitmap = struct {
     ///
     /// **Performance note:** For best performance, use an `ArenaAllocator`. Deserialization
     /// creates many small allocations (one per container), and arena allocation reduces
-    /// this overhead by 5-6x. With arena allocation, rawr deserialize is ~2x faster than
-    /// CRoaring; without it, ~2.5x slower.
+    /// this overhead significantly. Consider using `deserializeOwned` for convenience.
     ///
     /// ```zig
     /// // Fast path (recommended):
@@ -1221,6 +1220,82 @@ pub const RoaringBitmap = struct {
     /// See `deserialize` for performance notes on arena allocation.
     pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data_len: usize) !Self {
         return ser.deserializeFromReader(allocator, reader, data_len);
+    }
+
+    // =========================================================================
+    // Arena-backed convenience methods (return OwnedBitmap)
+    // =========================================================================
+
+    /// Deserialize a bitmap using arena allocation (recommended for speed).
+    /// Returns an OwnedBitmap that frees all memory in one operation via deinit().
+    pub fn deserializeOwned(backing: std.mem.Allocator, data: []const u8) !OwnedBitmap {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        errdefer arena.deinit();
+        const bm = try Self.deserialize(arena.allocator(), data);
+        return .{ .bitmap = bm, .arena = arena };
+    }
+
+    /// Compute intersection using arena allocation (recommended for speed).
+    /// Returns an OwnedBitmap.
+    pub fn bitwiseAndOwned(self: *const Self, backing: std.mem.Allocator, other: *const Self) !OwnedBitmap {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        errdefer arena.deinit();
+        const result = try self.bitwiseAnd(arena.allocator(), other);
+        return .{ .bitmap = result, .arena = arena };
+    }
+
+    /// Compute union using arena allocation (recommended for speed).
+    /// Returns an OwnedBitmap.
+    pub fn bitwiseOrOwned(self: *const Self, backing: std.mem.Allocator, other: *const Self) !OwnedBitmap {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        errdefer arena.deinit();
+        const result = try self.bitwiseOr(arena.allocator(), other);
+        return .{ .bitmap = result, .arena = arena };
+    }
+
+    /// Compute difference (self \ other) using arena allocation.
+    pub fn bitwiseDifferenceOwned(self: *const Self, backing: std.mem.Allocator, other: *const Self) !OwnedBitmap {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        errdefer arena.deinit();
+        const result = try self.bitwiseDifference(arena.allocator(), other);
+        return .{ .bitmap = result, .arena = arena };
+    }
+};
+
+/// A RoaringBitmap that owns its memory via an arena allocator.
+/// All internal allocations use bump-pointer allocation for speed.
+/// Call `deinit()` to free everything in one operation.
+///
+/// Returned by `deserializeOwned`, `bitwiseAndOwned`, `bitwiseOrOwned`.
+pub const OwnedBitmap = struct {
+    bitmap: RoaringBitmap,
+    arena: std.heap.ArenaAllocator,
+
+    /// Free all memory in one bulk operation.
+    pub fn deinit(self: *OwnedBitmap) void {
+        // Don't call bitmap.deinit() — arena owns all allocations.
+        self.arena.deinit();
+    }
+
+    /// Check if a value is in the bitmap.
+    pub fn contains(self: *const OwnedBitmap, value: u32) bool {
+        return self.bitmap.contains(value);
+    }
+
+    /// Return the number of values in the bitmap.
+    pub fn cardinality(self: *const OwnedBitmap) u64 {
+        return self.bitmap.cardinality();
+    }
+
+    /// Iterate over all values in sorted order.
+    pub fn iterator(self: *const OwnedBitmap) RoaringBitmap.Iterator {
+        return self.bitmap.iterator();
+    }
+
+    /// Serialize to bytes. The output is allocated with the provided
+    /// allocator (NOT the internal arena), so the caller owns it.
+    pub fn serialize(self: *const OwnedBitmap, out_allocator: std.mem.Allocator) ![]u8 {
+        return self.bitmap.serialize(out_allocator);
     }
 };
 
@@ -1983,4 +2058,114 @@ test "bitwiseOrInPlace no leak on allocation failure" {
     bm1_copy.deinit();
 
     // If we get here without the testing allocator detecting leaks, the test passes
+}
+
+test "OwnedBitmap bitwiseAndOwned" {
+    const allocator = std.testing.allocator;
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    _ = try a.add(1);
+    _ = try a.add(2);
+    _ = try a.add(3);
+    _ = try b.add(2);
+    _ = try b.add(3);
+    _ = try b.add(4);
+
+    var result = try a.bitwiseAndOwned(allocator, &b);
+    defer result.deinit();
+
+    try std.testing.expect(result.contains(2));
+    try std.testing.expect(result.contains(3));
+    try std.testing.expect(!result.contains(1));
+    try std.testing.expect(!result.contains(4));
+    try std.testing.expectEqual(@as(u64, 2), result.cardinality());
+}
+
+test "OwnedBitmap bitwiseOrOwned" {
+    const allocator = std.testing.allocator;
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    _ = try a.add(1);
+    _ = try a.add(2);
+    _ = try b.add(3);
+    _ = try b.add(4);
+
+    var result = try a.bitwiseOrOwned(allocator, &b);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(u64, 4), result.cardinality());
+    try std.testing.expect(result.contains(1));
+    try std.testing.expect(result.contains(4));
+}
+
+test "OwnedBitmap deserializeOwned" {
+    const allocator = std.testing.allocator;
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    _ = try bm.add(42);
+    _ = try bm.add(1000);
+
+    const data = try bm.serialize(allocator);
+    defer allocator.free(data);
+
+    var owned = try RoaringBitmap.deserializeOwned(allocator, data);
+    defer owned.deinit();
+
+    try std.testing.expect(owned.contains(42));
+    try std.testing.expect(owned.contains(1000));
+    try std.testing.expectEqual(@as(u64, 2), owned.cardinality());
+}
+
+test "OwnedBitmap bitwiseDifferenceOwned" {
+    const allocator = std.testing.allocator;
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    _ = try a.add(1);
+    _ = try a.add(2);
+    _ = try a.add(3);
+    _ = try b.add(2);
+    _ = try b.add(3);
+    _ = try b.add(4);
+
+    var result = try a.bitwiseDifferenceOwned(allocator, &b);
+    defer result.deinit();
+
+    try std.testing.expect(result.contains(1));
+    try std.testing.expect(!result.contains(2));
+    try std.testing.expect(!result.contains(3));
+    try std.testing.expect(!result.contains(4));
+    try std.testing.expectEqual(@as(u64, 1), result.cardinality());
+}
+
+test "OwnedBitmap iterator" {
+    const allocator = std.testing.allocator;
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    _ = try a.add(10);
+    _ = try a.add(20);
+    _ = try a.add(30);
+    _ = try b.add(20);
+    _ = try b.add(30);
+    _ = try b.add(40);
+
+    var result = try a.bitwiseAndOwned(allocator, &b);
+    defer result.deinit();
+
+    var iter = result.iterator();
+    try std.testing.expectEqual(@as(?u32, 20), iter.next());
+    try std.testing.expectEqual(@as(?u32, 30), iter.next());
+    try std.testing.expectEqual(@as(?u32, null), iter.next());
 }
