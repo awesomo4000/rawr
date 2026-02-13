@@ -4,7 +4,7 @@
 //! Each chunk uses the optimal container type based on cardinality.
 
 pub const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
-pub const FrozenBitmap = @import("bitmap.zig").FrozenBitmap;
+pub const FrozenBitmap = @import("frozen.zig").FrozenBitmap;
 pub const ArrayContainer = @import("array_container.zig").ArrayContainer;
 pub const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
 pub const RunContainer = @import("run_container.zig").RunContainer;
@@ -19,5 +19,6 @@ test {
     _ = @import("container.zig");
     _ = @import("container_ops.zig");
     _ = @import("bitmap.zig");
+    _ = @import("frozen.zig");
     _ = @import("property_tests.zig");
 }
