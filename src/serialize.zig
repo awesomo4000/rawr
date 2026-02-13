@@ -135,9 +135,11 @@ pub fn serializeToWriter(bm: *const RoaringBitmap, writer: anytype) !void {
             data_start = 8 + (@as(u32, bm.size) * 4) + (@as(u32, bm.size) * 4);
         }
 
+        const offset_buf = try bm.allocator.alloc(u32, bm.size);
+        defer bm.allocator.free(offset_buf);
         var offset: u32 = data_start;
-        for (bm.containers[0..bm.size]) |tp| {
-            try writer.writeInt(u32, offset, .little);
+        for (bm.containers[0..bm.size], 0..) |tp, i| {
+            offset_buf[i] = offset;
             const container = Container.fromTagged(tp);
             offset += switch (container) {
                 .array => |ac| @as(u32, ac.cardinality) * 2,
@@ -146,6 +148,7 @@ pub fn serializeToWriter(bm: *const RoaringBitmap, writer: anytype) !void {
                 .reserved => 0,
             };
         }
+        try writer.writeAll(std.mem.sliceAsBytes(offset_buf));
     }
 
     // Container data (bulk write - assumes little-endian, checked at comptime)
