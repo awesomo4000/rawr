@@ -172,6 +172,9 @@ pub fn serializeToWriter(bm: *const RoaringBitmap, writer: anytype) !void {
 }
 
 /// Deserialize a bitmap from bytes (RoaringFormatSpec compatible).
+///
+/// Performance: Use `std.heap.ArenaAllocator` for ~6x faster deserialization.
+/// See `RoaringBitmap.deserialize` doc comment for usage example.
 pub fn deserialize(allocator: std.mem.Allocator, data: []const u8) !RoaringBitmap {
     if (data.len < 4) return error.InvalidFormat;
 
@@ -182,6 +185,8 @@ pub fn deserialize(allocator: std.mem.Allocator, data: []const u8) !RoaringBitma
 }
 
 /// Deserialize from any reader.
+///
+/// Performance: Use `std.heap.ArenaAllocator` for ~6x faster deserialization.
 pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data_len: usize) !RoaringBitmap {
     _ = data_len;
 

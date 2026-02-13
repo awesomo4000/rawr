@@ -243,6 +243,14 @@ fn benchRawrDeserialize() void {
     std.mem.doNotOptimizeAway(&bm);
 }
 
+fn benchRawrDeserializeArena() void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    var bm = RoaringBitmap.deserialize(arena.allocator(), rawr_serialized.?) catch unreachable;
+    // Don't call bm.deinit() — arena.deinit() handles cleanup
+    std.mem.doNotOptimizeAway(&bm);
+}
+
 fn benchRawrCardinality() void {
     const bm = &rawr_contains_bm.?;
     const card = bm.cardinality();
@@ -520,6 +528,9 @@ pub fn main() !void {
     r = benchmark(benchRawrDeserialize, .{});
     cr = benchmark(benchCRoaringDeserialize, .{});
     printResult("deserialize", r.median_ns, cr.median_ns);
+
+    r = benchmark(benchRawrDeserializeArena, .{});
+    printResult("deserialize (arena)", r.median_ns, cr.median_ns);
 
     // --- Cardinality ---
     std.debug.print("\nCARDINALITY\n", .{});

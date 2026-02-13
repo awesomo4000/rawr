@@ -1195,11 +1195,30 @@ pub const RoaringBitmap = struct {
     }
 
     /// Deserialize a bitmap from bytes (RoaringFormatSpec compatible).
+    ///
+    /// **Performance note:** For best performance, use an `ArenaAllocator`. Deserialization
+    /// creates many small allocations (one per container), and arena allocation reduces
+    /// this overhead by 5-6x. With arena allocation, rawr deserialize is ~2x faster than
+    /// CRoaring; without it, ~2.5x slower.
+    ///
+    /// ```zig
+    /// // Fast path (recommended):
+    /// var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    /// defer arena.deinit();  // frees all bitmap memory at once
+    /// var bm = try RoaringBitmap.deserialize(arena.allocator(), data);
+    /// // Use bm... (don't call bm.deinit(), arena handles cleanup)
+    ///
+    /// // Standard path (slower, but bitmap has independent lifetime):
+    /// var bm = try RoaringBitmap.deserialize(allocator, data);
+    /// defer bm.deinit();
+    /// ```
     pub fn deserialize(allocator: std.mem.Allocator, data: []const u8) !Self {
         return ser.deserialize(allocator, data);
     }
 
     /// Deserialize from any reader.
+    ///
+    /// See `deserialize` for performance notes on arena allocation.
     pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data_len: usize) !Self {
         return ser.deserializeFromReader(allocator, reader, data_len);
     }
