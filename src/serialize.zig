@@ -7,6 +7,13 @@ const ArrayContainer = @import("array_container.zig").ArrayContainer;
 const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
 const RunContainer = @import("run_container.zig").RunContainer;
 
+// Serialization format is little-endian; bulk I/O requires matching host endianness
+comptime {
+    if (@import("builtin").cpu.arch.endian() != .little) {
+        @compileError("rawr serialization assumes little-endian byte order");
+    }
+}
+
 /// Returns true if any container is a run container.
 fn hasRunContainers(bm: *const RoaringBitmap) bool {
     for (bm.containers[0..bm.size]) |tp| {
@@ -138,27 +145,20 @@ pub fn serializeToWriter(bm: *const RoaringBitmap, writer: anytype) !void {
         }
     }
 
-    // Container data
+    // Container data (bulk write - assumes little-endian, checked at comptime)
     for (bm.containers[0..bm.size]) |tp| {
         const container = Container.fromTagged(tp);
         switch (container) {
             .array => |ac| {
-                for (ac.values[0..ac.cardinality]) |v| {
-                    try writer.writeInt(u16, v, .little);
-                }
+                try writer.writeAll(std.mem.sliceAsBytes(ac.values[0..ac.cardinality]));
             },
             .bitset => |bc| {
-                for (bc.words) |word| {
-                    try writer.writeInt(u64, word, .little);
-                }
+                try writer.writeAll(std.mem.sliceAsBytes(bc.words));
             },
             .run => |rc| {
                 // RoaringFormatSpec: n_runs prefix followed by run pairs
                 try writer.writeInt(u16, rc.n_runs, .little);
-                for (rc.runs[0..rc.n_runs]) |run| {
-                    try writer.writeInt(u16, run.start, .little);
-                    try writer.writeInt(u16, run.length, .little);
-                }
+                try writer.writeAll(std.mem.sliceAsBytes(rc.runs[0..rc.n_runs]));
             },
             .reserved => {},
         }
@@ -225,12 +225,10 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
     // - Always for no-run format (RoaringFormatSpec requirement)
     // - For run format only when size >= NO_OFFSET_THRESHOLD
     if (!has_runs or size >= fmt.NO_OFFSET_THRESHOLD) {
-        for (0..size) |_| {
-            _ = try reader.readInt(u32, .little);
-        }
+        try reader.skipBytes(size * 4, .{});
     }
 
-    // Read container data
+    // Read container data (bulk read - assumes little-endian, checked at comptime)
     for (0..size) |i| {
         const is_run = if (run_bitset) |rb|
             (rb[i / 8] & (@as(u8, 1) << @intCast(i % 8))) != 0
@@ -246,10 +244,9 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             const rc = try RunContainer.init(allocator, n_runs);
             errdefer rc.deinit(allocator);
 
-            for (0..n_runs) |r| {
-                rc.runs[r].start = try reader.readInt(u16, .little);
-                rc.runs[r].length = try reader.readInt(u16, .little);
-            }
+            const bytes_needed = @as(usize, n_runs) * 4;
+            const bytes_read = try reader.readAll(std.mem.sliceAsBytes(rc.runs[0..n_runs]));
+            if (bytes_read != bytes_needed) return error.InvalidFormat;
             rc.n_runs = n_runs;
             result.containers[i] = TaggedPtr.initRun(rc);
         } else if (card > ArrayContainer.MAX_CARDINALITY) {
@@ -257,9 +254,8 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             const bc = try BitsetContainer.init(allocator);
             errdefer bc.deinit(allocator);
 
-            for (0..BitsetContainer.NUM_WORDS) |w| {
-                bc.words[w] = try reader.readInt(u64, .little);
-            }
+            const bytes_read = try reader.readAll(std.mem.sliceAsBytes(bc.words));
+            if (bytes_read != BitsetContainer.SIZE_BYTES) return error.InvalidFormat;
             bc.cardinality = @intCast(card);
             result.containers[i] = TaggedPtr.initBitset(bc);
         } else {
@@ -267,9 +263,9 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             const ac = try ArrayContainer.init(allocator, @intCast(card));
             errdefer ac.deinit(allocator);
 
-            for (0..card) |v| {
-                ac.values[v] = try reader.readInt(u16, .little);
-            }
+            const bytes_needed = card * 2;
+            const bytes_read = try reader.readAll(std.mem.sliceAsBytes(ac.values[0..card]));
+            if (bytes_read != bytes_needed) return error.InvalidFormat;
             ac.cardinality = @intCast(card);
             result.containers[i] = TaggedPtr.initArray(ac);
         }
