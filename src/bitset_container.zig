@@ -12,15 +12,20 @@ pub const BitsetContainer = struct {
 
     const Self = @This();
 
+    /// Number of 64-bit words in the bitset.
+    pub const NUM_WORDS = 1024;
+    /// Size in bytes (8192 = 8KB).
+    pub const SIZE_BYTES = NUM_WORDS * @sizeOf(u64);
+
     pub fn init(allocator: std.mem.Allocator) !*Self {
         const self = try allocator.create(Self);
         errdefer allocator.destroy(self);
 
-        const words = try allocator.alignedAlloc(u64, .@"64", 1024);
+        const words = try allocator.alignedAlloc(u64, .@"64", NUM_WORDS);
         @memset(words, 0);
 
         self.* = .{
-            .words = words[0..1024],
+            .words = words[0..NUM_WORDS],
             .cardinality = 0,
         };
         return self;
@@ -37,11 +42,11 @@ pub const BitsetContainer = struct {
         const copy = try allocator.create(Self);
         errdefer allocator.destroy(copy);
 
-        const words = try allocator.alignedAlloc(u64, .@"64", 1024);
+        const words = try allocator.alignedAlloc(u64, .@"64", NUM_WORDS);
         @memcpy(words, self.words);
 
         copy.* = .{
-            .words = words[0..1024],
+            .words = words[0..NUM_WORDS],
             .cardinality = self.cardinality,
         };
         return copy;
@@ -145,7 +150,7 @@ pub const BitsetContainer = struct {
     /// SIMD-accelerated OR: dst |= src
     pub fn unionWith(dst: *Self, src: *const Self) void {
         const VEC_SIZE = 8; // 512 bits = 64 bytes = 1 cache line
-        const vec_count = 1024 / VEC_SIZE;
+        const vec_count = NUM_WORDS / VEC_SIZE;
 
         var card: u64 = 0;
         for (0..vec_count) |i| {
@@ -166,7 +171,7 @@ pub const BitsetContainer = struct {
     /// SIMD-accelerated AND: dst &= src
     pub fn intersectionWith(dst: *Self, src: *const Self) void {
         const VEC_SIZE = 8;
-        const vec_count = 1024 / VEC_SIZE;
+        const vec_count = NUM_WORDS / VEC_SIZE;
 
         var card: u64 = 0;
         for (0..vec_count) |i| {
@@ -186,7 +191,7 @@ pub const BitsetContainer = struct {
     /// SIMD-accelerated XOR: dst ^= src
     pub fn symmetricDifferenceWith(dst: *Self, src: *const Self) void {
         const VEC_SIZE = 8;
-        const vec_count = 1024 / VEC_SIZE;
+        const vec_count = NUM_WORDS / VEC_SIZE;
 
         var card: u64 = 0;
         for (0..vec_count) |i| {
@@ -206,7 +211,7 @@ pub const BitsetContainer = struct {
     /// SIMD-accelerated AND-NOT: dst &= ~src (difference)
     pub fn differenceWith(dst: *Self, src: *const Self) void {
         const VEC_SIZE = 8;
-        const vec_count = 1024 / VEC_SIZE;
+        const vec_count = NUM_WORDS / VEC_SIZE;
 
         var card: u64 = 0;
         for (0..vec_count) |i| {

@@ -46,7 +46,7 @@ pub fn serializedSizeInBytes(bm: *const RoaringBitmap) usize {
         const container = Container.fromTagged(tp);
         size += switch (container) {
             .array => |ac| @as(usize, ac.cardinality) * 2,
-            .bitset => 8192, // 1024 * 8 bytes
+            .bitset => BitsetContainer.SIZE_BYTES,
             .run => |rc| 2 + @as(usize, rc.n_runs) * 4, // n_runs prefix + pairs
             .reserved => 0,
         };
@@ -119,7 +119,7 @@ pub fn serializeToWriter(bm: *const RoaringBitmap, writer: anytype) !void {
             const container = Container.fromTagged(tp);
             offset += switch (container) {
                 .array => |ac| @as(u32, ac.cardinality) * 2,
-                .bitset => 8192,
+                .bitset => BitsetContainer.SIZE_BYTES,
                 .run => |rc| 2 + @as(u32, rc.n_runs) * 4, // n_runs prefix + pairs
                 .reserved => 0,
             };

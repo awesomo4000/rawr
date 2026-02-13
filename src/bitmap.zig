@@ -502,7 +502,7 @@ pub const RoaringBitmap = struct {
         const low: ?u16 = switch (container) {
             .array => |ac| if (ac.cardinality > 0) ac.values[ac.cardinality - 1] else null,
             .bitset => |bc| blk: {
-                var i: usize = 1024;
+                var i: usize = BitsetContainer.NUM_WORDS;
                 while (i > 0) {
                     i -= 1;
                     if (bc.words[i] != 0) {
@@ -1069,7 +1069,7 @@ pub const RoaringBitmap = struct {
                         // Find next set bit
                         while (s.current_word == 0) {
                             s.word_idx += 1;
-                            if (s.word_idx >= 1024) {
+                            if (s.word_idx >= BitsetContainer.NUM_WORDS) {
                                 self.advanceContainer();
                                 break;
                             }
@@ -1122,8 +1122,8 @@ pub const RoaringBitmap = struct {
                 .bitset => |bc| {
                     // Find first non-zero word
                     var word_idx: u32 = 0;
-                    while (word_idx < 1024 and bc.words[word_idx] == 0) : (word_idx += 1) {}
-                    if (word_idx < 1024) {
+                    while (word_idx < BitsetContainer.NUM_WORDS and bc.words[word_idx] == 0) : (word_idx += 1) {}
+                    if (word_idx < BitsetContainer.NUM_WORDS) {
                         self.state = .{ .bitset = .{
                             .words = bc.words,
                             .word_idx = word_idx,
