@@ -12,6 +12,82 @@ const Container = container_mod.Container;
 // Union (OR)
 // ============================================================================
 
+/// In-place union: a |= b. Modifies a's container directly when possible.
+/// Returns the (possibly different) container to use. Caller should NOT free
+/// the original if it was modified in place (check pointer equality).
+/// For array∪array, this avoids allocating a new container entirely.
+pub fn containerUnionInPlace(allocator: std.mem.Allocator, a: Container, b: Container) !Container {
+    return switch (a) {
+        .array => |ac| switch (b) {
+            .array => |bc| arrayUnionArrayInPlace(allocator, ac, bc),
+            .bitset => |bc| arrayUnionBitsetInPlace(allocator, ac, bc),
+            .run => |rc| arrayUnionRun(allocator, ac, rc), // TODO: in-place version
+            .reserved => unreachable,
+        },
+        .bitset => |ac| switch (b) {
+            .array => |bc| bitsetUnionArrayInPlace(ac, bc),
+            .bitset => |bc| bitsetUnionBitsetInPlace(ac, bc),
+            .run => |rc| bitsetUnionRunInPlace(ac, rc),
+            .reserved => unreachable,
+        },
+        .run => |ac| switch (b) {
+            // Run containers convert to bitset/array, use non-in-place for now
+            .array => |bc| arrayUnionRun(allocator, bc, ac),
+            .bitset => |bc| bitsetUnionRun(allocator, bc, ac),
+            .run => |rc| runUnionRun(allocator, ac, rc),
+            .reserved => unreachable,
+        },
+        .reserved => unreachable,
+    };
+}
+
+fn arrayUnionArrayInPlace(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayContainer) !Container {
+    // Use ArrayContainer's in-place union
+    const maybe_bitset = try a.unionInPlace(allocator, b);
+    if (maybe_bitset) |bc| {
+        // Converted to bitset - caller must free the array
+        return .{ .bitset = bc };
+    }
+    // Stayed as array, same pointer
+    return .{ .array = a };
+}
+
+fn arrayUnionBitsetInPlace(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *BitsetContainer) !Container {
+    // Result is always a bitset - must allocate new one and copy
+    const result = try BitsetContainer.init(allocator);
+    errdefer result.deinit(allocator);
+    @memcpy(result.words, bc.words);
+    for (ac.values[0..ac.cardinality]) |v| {
+        _ = result.add(v);
+    }
+    _ = result.computeCardinality();
+    return .{ .bitset = result };
+}
+
+fn bitsetUnionArrayInPlace(bc: *BitsetContainer, ac: *ArrayContainer) Container {
+    // Add array elements to existing bitset - no allocation
+    // bc.add() already maintains cardinality correctly
+    for (ac.values[0..ac.cardinality]) |v| {
+        _ = bc.add(v);
+    }
+    return .{ .bitset = bc };
+}
+
+fn bitsetUnionBitsetInPlace(a: *BitsetContainer, b: *BitsetContainer) Container {
+    // OR words directly - no allocation
+    a.unionWith(b);
+    return .{ .bitset = a };
+}
+
+fn bitsetUnionRunInPlace(bc: *BitsetContainer, rc: *RunContainer) Container {
+    // Use setRange for efficient word-level fills instead of element-by-element
+    for (rc.runs[0..rc.n_runs]) |run| {
+        bc.setRange(run.start, run.end());
+    }
+    bc.cardinality = -1; // setRange doesn't track cardinality, so invalidate here
+    return .{ .bitset = bc };
+}
+
 pub fn containerUnion(allocator: std.mem.Allocator, a: Container, b: Container) !Container {
     return switch (a) {
         .array => |ac| switch (b) {

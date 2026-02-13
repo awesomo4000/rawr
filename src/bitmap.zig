@@ -759,14 +759,25 @@ pub const RoaringBitmap = struct {
                 k += 1;
                 j += 1;
             } else {
-                // Key in both - merge containers (owned by merge)
+                // Key in both - merge containers in-place when possible
                 const old_container = Container.fromTagged(self.containers[i]);
                 const other_container = Container.fromTagged(other.containers[j]);
-                const merged = try ops.containerUnion(self.allocator, old_container, other_container);
-                old_container.deinit(self.allocator);
+                const result = try ops.containerUnionInPlace(self.allocator, old_container, other_container);
+                const result_tp = result.toTagged();
+
+                // Check if a new container was allocated (e.g., array converted to bitset)
+                const is_same = (@as(u64, @bitCast(result_tp)) == @as(u64, @bitCast(self.containers[i])));
+                if (!is_same) {
+                    // New container allocated, free the old one
+                    old_container.deinit(self.allocator);
+                    owned[k] = true;
+                } else {
+                    // Same container, just modified in place
+                    owned[k] = false;
+                }
+
                 new_keys[k] = key_a;
-                new_containers[k] = merged.toTagged();
-                owned[k] = true;
+                new_containers[k] = result_tp;
                 k += 1;
                 i += 1;
                 j += 1;

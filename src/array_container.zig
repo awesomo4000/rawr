@@ -184,6 +184,82 @@ pub const ArrayContainer = struct {
         self.values = new_values;
         self.capacity = new_cap;
     }
+
+    /// In-place union: merge other's values into self's buffer.
+    /// Returns null if result stays as array, or a new BitsetContainer if
+    /// cardinality exceeds 4096 (caller must free self and use the bitset).
+    ///
+    /// Algorithm: Move self's values to end of buffer, then forward merge.
+    /// This avoids overlap issues and requires at most one realloc.
+    pub fn unionInPlace(self: *Self, allocator: std.mem.Allocator, other: *const Self) !?*@import("bitset_container.zig").BitsetContainer {
+        const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
+
+        const max_card = @as(u32, self.cardinality) + other.cardinality;
+
+        // If combined could exceed array threshold, convert to bitset
+        if (max_card > MAX_CARDINALITY) {
+            const bc = try BitsetContainer.init(allocator);
+            errdefer bc.deinit(allocator);
+            for (self.values[0..self.cardinality]) |v| _ = bc.add(v);
+            for (other.values[0..other.cardinality]) |v| _ = bc.add(v);
+            return bc;
+        }
+
+        // Ensure buffer has room for max_card elements (one possible realloc)
+        try self.ensureCapacity(allocator, @intCast(max_card));
+
+        // Move self's values to the END of the buffer using copyBackwards
+        // Before: [A B C D . . . .]  (self has 4 values, capacity for 8)
+        // After:  [. . . . A B C D]
+        const self_start: usize = max_card - self.cardinality;
+        std.mem.copyBackwards(
+            u16,
+            self.values[self_start..max_card],
+            self.values[0..self.cardinality],
+        );
+
+        // Forward merge from self (now at end) and other (separate buffer)
+        // Write cursor k is always <= read cursor si, so no overwrite hazard
+        var si: usize = self_start; // read cursor for self (in moved region)
+        var oi: usize = 0; // read cursor for other
+        var k: usize = 0; // write cursor
+
+        const self_end: usize = max_card;
+        const other_end: usize = other.cardinality;
+
+        while (si < self_end and oi < other_end) {
+            const sv = self.values[si];
+            const ov = other.values[oi];
+            if (sv < ov) {
+                self.values[k] = sv;
+                si += 1;
+            } else if (sv > ov) {
+                self.values[k] = ov;
+                oi += 1;
+            } else {
+                // Duplicate - write once, advance both
+                self.values[k] = sv;
+                si += 1;
+                oi += 1;
+            }
+            k += 1;
+        }
+
+        // Drain remaining from self (shift left if there were duplicates)
+        while (si < self_end) : (si += 1) {
+            self.values[k] = self.values[si];
+            k += 1;
+        }
+
+        // Drain remaining from other
+        while (oi < other_end) : (oi += 1) {
+            self.values[k] = other.values[oi];
+            k += 1;
+        }
+
+        self.cardinality = @intCast(k);
+        return null; // Stayed as array
+    }
 };
 
 // ============================================================================

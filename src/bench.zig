@@ -239,30 +239,59 @@ fn benchCloneDense(allocator: std.mem.Allocator) void {
     defer a.deinit();
 }
 
-// --- In-place operation benchmarks ---
+// --- In-place operation benchmarks (operation only, no clone in timed region) ---
 
-fn benchOrInPlaceSparse(allocator: std.mem.Allocator) void {
-    var a = sparse_a.?.clone(allocator) catch unreachable;
-    defer a.deinit();
-    a.bitwiseOrInPlace(&sparse_b.?) catch unreachable;
+var precloned_sparse: [BENCH_RUNS + WARMUP_RUNS]?RoaringBitmap = .{null} ** (BENCH_RUNS + WARMUP_RUNS);
+var precloned_dense: [BENCH_RUNS + WARMUP_RUNS]?RoaringBitmap = .{null} ** (BENCH_RUNS + WARMUP_RUNS);
+var preclone_idx: usize = 0;
+
+fn setupPreclonedSparse(allocator: std.mem.Allocator) void {
+    for (&precloned_sparse) |*slot| {
+        slot.* = sparse_a.?.clone(allocator) catch unreachable;
+    }
+    preclone_idx = 0;
 }
 
-fn benchOrInPlaceDense(allocator: std.mem.Allocator) void {
-    var a = dense_a.?.clone(allocator) catch unreachable;
-    defer a.deinit();
-    a.bitwiseOrInPlace(&dense_b.?) catch unreachable;
+fn setupPreclonedDense(allocator: std.mem.Allocator) void {
+    for (&precloned_dense) |*slot| {
+        slot.* = dense_a.?.clone(allocator) catch unreachable;
+    }
+    preclone_idx = 0;
 }
 
-fn benchAndInPlaceSparse(allocator: std.mem.Allocator) void {
-    var a = sparse_a.?.clone(allocator) catch unreachable;
-    defer a.deinit();
-    a.bitwiseAndInPlace(&sparse_b.?) catch unreachable;
+fn cleanupPrecloned() void {
+    for (&precloned_sparse) |*slot| {
+        if (slot.*) |*bm| {
+            bm.deinit();
+            slot.* = null;
+        }
+    }
+    for (&precloned_dense) |*slot| {
+        if (slot.*) |*bm| {
+            bm.deinit();
+            slot.* = null;
+        }
+    }
 }
 
-fn benchAndInPlaceDense(allocator: std.mem.Allocator) void {
-    var a = dense_a.?.clone(allocator) catch unreachable;
-    defer a.deinit();
-    a.bitwiseAndInPlace(&dense_b.?) catch unreachable;
+fn benchOrInPlaceSparseOpOnly(_: std.mem.Allocator) void {
+    precloned_sparse[preclone_idx].?.bitwiseOrInPlace(&sparse_b.?) catch unreachable;
+    preclone_idx += 1;
+}
+
+fn benchOrInPlaceDenseOpOnly(_: std.mem.Allocator) void {
+    precloned_dense[preclone_idx].?.bitwiseOrInPlace(&dense_b.?) catch unreachable;
+    preclone_idx += 1;
+}
+
+fn benchAndInPlaceSparseOpOnly(_: std.mem.Allocator) void {
+    precloned_sparse[preclone_idx].?.bitwiseAndInPlace(&sparse_b.?) catch unreachable;
+    preclone_idx += 1;
+}
+
+fn benchAndInPlaceDenseOpOnly(_: std.mem.Allocator) void {
+    precloned_dense[preclone_idx].?.bitwiseAndInPlace(&dense_b.?) catch unreachable;
+    preclone_idx += 1;
 }
 
 // --- Iterator benchmark ---
@@ -396,19 +425,30 @@ pub fn main() !void {
     printResult(benchmark("bitwiseDifference (sparse)", benchDiffSparse, .{allocator}, 1));
     printResult(benchmark("bitwiseDifference (dense)", benchDiffDense, .{allocator}, 1));
 
-    // --- Clone benchmarks (shows overhead for in-place ops) ---
-    std.debug.print("\nCLONE (overhead for in-place ops)\n", .{});
+    // --- Clone benchmarks ---
+    std.debug.print("\nCLONE\n", .{});
 
     printResult(benchmark("clone (sparse ~65K containers)", benchCloneSparse, .{allocator}, 1));
     printResult(benchmark("clone (dense 8 containers)", benchCloneDense, .{allocator}, 1));
 
-    // --- In-place operation benchmarks ---
-    std.debug.print("\nSET OPERATIONS (in-place, includes clone)\n", .{});
+    // --- In-place operation benchmarks (op only, clone done in setup) ---
+    std.debug.print("\nSET OPERATIONS (in-place, operation time only)\n", .{});
 
-    printResult(benchmark("bitwiseOrInPlace (sparse)", benchOrInPlaceSparse, .{allocator}, 1));
-    printResult(benchmark("bitwiseOrInPlace (dense)", benchOrInPlaceDense, .{allocator}, 1));
-    printResult(benchmark("bitwiseAndInPlace (sparse)", benchAndInPlaceSparse, .{allocator}, 1));
-    printResult(benchmark("bitwiseAndInPlace (dense)", benchAndInPlaceDense, .{allocator}, 1));
+    setupPreclonedSparse(allocator);
+    printResult(benchmark("bitwiseOrInPlace (sparse)", benchOrInPlaceSparseOpOnly, .{allocator}, 1));
+    cleanupPrecloned();
+
+    setupPreclonedDense(allocator);
+    printResult(benchmark("bitwiseOrInPlace (dense)", benchOrInPlaceDenseOpOnly, .{allocator}, 1));
+    cleanupPrecloned();
+
+    setupPreclonedSparse(allocator);
+    printResult(benchmark("bitwiseAndInPlace (sparse)", benchAndInPlaceSparseOpOnly, .{allocator}, 1));
+    cleanupPrecloned();
+
+    setupPreclonedDense(allocator);
+    printResult(benchmark("bitwiseAndInPlace (dense)", benchAndInPlaceDenseOpOnly, .{allocator}, 1));
+    cleanupPrecloned();
 
     // --- Iterator benchmark ---
     std.debug.print("\nITERATION\n", .{});
