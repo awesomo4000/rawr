@@ -11,6 +11,7 @@ pub const RunContainer = @import("run_container.zig").RunContainer;
 pub const Container = @import("container.zig").Container;
 pub const TaggedPtr = @import("container.zig").TaggedPtr;
 pub const container_ops = @import("container_ops.zig");
+pub const optimize = @import("optimize.zig");
 
 test {
     _ = @import("array_container.zig");

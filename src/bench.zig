@@ -360,6 +360,32 @@ fn benchFrozenIterator(_: std.mem.Allocator) void {
     std.mem.doNotOptimizeAway(sum);
 }
 
+// --- countRunsInBitset benchmark ---
+
+var bench_bitset: ?*rawr.BitsetContainer = null;
+
+fn initBenchBitset(allocator: std.mem.Allocator) void {
+    if (bench_bitset != null) return;
+    const bc = rawr.BitsetContainer.init(allocator) catch unreachable;
+    // Create pattern with many mixed words (alternating bits)
+    // This stresses the run counting - every bit is a separate run
+    for (0..512) |i| {
+        // 0xAAAAAAAAAAAAAAAA = alternating 1010... pattern
+        bc.words[i] = 0xAAAAAAAAAAAAAAAA;
+    }
+    // Other half: alternating 0101... pattern
+    for (512..1024) |i| {
+        bc.words[i] = 0x5555555555555555;
+    }
+    bc.cardinality = -1; // Unknown
+    bench_bitset = bc;
+}
+
+fn benchCountRunsInBitset() void {
+    const runs = rawr.optimize.countRunsInBitset(bench_bitset.?);
+    std.mem.doNotOptimizeAway(runs);
+}
+
 // --- runOptimize benchmark ---
 
 fn benchRunOptimize(allocator: std.mem.Allocator) void {
@@ -475,7 +501,13 @@ pub fn main() !void {
 
     printResult(benchmark("runOptimize (mixed containers)", benchRunOptimize, .{allocator}, 1));
 
+    // countRunsInBitset microbenchmark
+    initBenchBitset(allocator);
+    // 1024 words with alternating bits = 32768 runs (32 per word)
+    printResult(benchmark("countRunsInBitset (32K runs)", benchCountRunsInBitset, .{}, 32768));
+
     // Cleanup
+    if (bench_bitset) |bc| bc.deinit(allocator);
     if (contains_bitmap) |*bm| bm.deinit();
     if (sparse_a) |*bm| bm.deinit();
     if (sparse_b) |*bm| bm.deinit();

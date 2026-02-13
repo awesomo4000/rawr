@@ -65,7 +65,7 @@ fn countRunsInArray(ac: *ArrayContainer) u32 {
 
 /// Count the number of runs in a bitset container.
 /// Uses bit-parallel run-start detection: a run starts where bit=1 and previous bit=0.
-fn countRunsInBitset(bc: *BitsetContainer) u32 {
+pub fn countRunsInBitset(bc: *BitsetContainer) u32 {
     var n_runs: u32 = 0;
     var prev_high_bit: u64 = 0; // MSB of previous word carried forward
 
