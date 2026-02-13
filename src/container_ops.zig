@@ -243,7 +243,7 @@ fn runUnionRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer)
         if (use_a) i += 1 else j += 1;
 
         // Merge with previous run if adjacent or overlapping
-        if (k > 0 and result.runs[k - 1].end() + 1 >= run.start) {
+        if (k > 0 and result.runs[k - 1].end() +| 1 >= run.start) {
             // Extend previous run
             result.runs[k - 1].length = @max(result.runs[k - 1].end(), run.end()) - result.runs[k - 1].start;
         } else {
