@@ -64,40 +64,20 @@ fn countRunsInArray(ac: *ArrayContainer) u32 {
 }
 
 /// Count the number of runs in a bitset container.
+/// Uses bit-parallel run-start detection: a run starts where bit=1 and previous bit=0.
 fn countRunsInBitset(bc: *BitsetContainer) u32 {
     var n_runs: u32 = 0;
-    var in_run = false;
+    var prev_high_bit: u64 = 0; // MSB of previous word carried forward
 
     for (bc.words) |word| {
-        if (word == 0) {
-            if (in_run) {
-                in_run = false;
-            }
-        } else if (word == 0xFFFFFFFFFFFFFFFF) {
-            if (!in_run) {
-                n_runs += 1;
-                in_run = true;
-            }
-        } else {
-            // Mixed word - count transitions
-            // Carry in_run state: if previous word ended in a run, first bit continues it
-            var w = word;
-            var prev_bit: u1 = if (in_run) 1 else 0;
-            while (true) {
-                const bit: u1 = @truncate(w);
-                if (bit == 1 and prev_bit == 0) {
-                    n_runs += 1;
-                }
-                prev_bit = bit;
-                w >>= 1;
-                if (w == 0 and bit == 0) break;
-                if (w == 0) {
-                    // Remaining bits are 0, run ends
-                    break;
-                }
-            }
-            in_run = (word >> 63) == 1; // Last bit determines if run continues
-        }
+        // Shift word left by 1, filling bit 0 with the MSB of the previous word.
+        // This gives us the "previous bit" for each position.
+        const prev_bits = (word << 1) | prev_high_bit;
+        // A run starts wherever current=1 and previous=0.
+        const run_starts = word & ~prev_bits;
+        n_runs += @popCount(run_starts);
+        // Carry the MSB to the next word.
+        prev_high_bit = word >> 63;
     }
 
     return n_runs;
