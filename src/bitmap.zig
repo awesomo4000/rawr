@@ -209,26 +209,12 @@ pub const RoaringBitmap = struct {
             std.mem.copyBackwards(TaggedPtr, self.containers[insert_idx + 1 .. self.size + 1], self.containers[insert_idx..self.size]);
         }
 
-        // Choose container type based on range size
-        if (range_size > ArrayContainer.MAX_CARDINALITY) {
-            // Use bitset for large ranges
-            const bc = try BitsetContainer.init(self.allocator);
-            bc.setRange(start, end);
-            self.keys[insert_idx] = key;
-            self.containers[insert_idx] = TaggedPtr.initBitset(bc);
-        } else {
-            // Use array for small ranges
-            const ac = try ArrayContainer.init(self.allocator, @intCast(range_size));
-            var i: u32 = 0;
-            var v: u32 = start;
-            while (v <= end) : (v += 1) {
-                ac.values[i] = @intCast(v);
-                i += 1;
-            }
-            ac.cardinality = @intCast(range_size);
-            self.keys[insert_idx] = key;
-            self.containers[insert_idx] = TaggedPtr.initArray(ac);
-        }
+        // A contiguous range is always best as a run container (4 bytes per run)
+        const rc = try RunContainer.init(self.allocator, 1);
+        rc.runs[0] = .{ .start = start, .length = end - start };
+        rc.n_runs = 1;
+        self.keys[insert_idx] = key;
+        self.containers[insert_idx] = TaggedPtr.initRun(rc);
         self.size += 1;
         return range_size;
     }
@@ -268,15 +254,8 @@ pub const RoaringBitmap = struct {
                 return added;
             },
             .run => |rc| {
-                // For run containers, add values one by one (run container handles merging)
-                var added: u64 = 0;
-                var v: u32 = start;
-                while (v <= end) : (v += 1) {
-                    if (try rc.add(self.allocator, @intCast(v))) {
-                        added += 1;
-                    }
-                }
-                return added;
+                // Direct range merge: O(R) where R is number of affected runs
+                return try rc.addRange(self.allocator, start, end);
             },
             .reserved => unreachable,
         }

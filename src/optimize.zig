@@ -170,11 +170,13 @@ test "runOptimize converts array with runs" {
     var bm = try RoaringBitmap.init(allocator);
     defer bm.deinit();
 
-    // Add a range - creates array container with consecutive values
-    _ = try bm.addRange(100, 200);
+    // Add values individually to create array container with consecutive values
+    for (100..201) |v| {
+        _ = try bm.add(@intCast(v));
+    }
     try std.testing.expectEqual(@as(u64, 101), bm.cardinality());
 
-    // Initially should be array
+    // Initially should be array (individual adds create array containers)
     const container_before = Container.fromTagged(bm.containers[0]);
     try std.testing.expect(container_before == .array);
 
@@ -220,8 +222,10 @@ test "runOptimize converts bitset with long run" {
     var bm = try RoaringBitmap.init(allocator);
     defer bm.deinit();
 
-    // Add large range to create bitset (>4096 values)
-    _ = try bm.addRange(0, 10000);
+    // Add >4096 values individually to create a bitset container
+    for (0..10001) |v| {
+        _ = try bm.add(@intCast(v));
+    }
     try std.testing.expectEqual(@as(u64, 10001), bm.cardinality());
 
     // Should be bitset (8192 bytes) which is > 1 run * 4 bytes
@@ -246,14 +250,20 @@ test "runOptimize counts runs correctly across word boundaries" {
     var bm = try RoaringBitmap.init(allocator);
     defer bm.deinit();
 
-    // Create bitset with runs spanning word boundaries
+    // Create bitset by adding >4096 individual values with runs spanning word boundaries
     // Word 0 has 64 bits (0-63), word 1 starts at bit 64
     // Run 1: bits 0-65 (spans word boundary between words 0 and 1)
+    for (0..66) |v| {
+        _ = try bm.add(@intCast(v));
+    }
     // Run 2: bits 5000-5065 (another run spanning a word boundary)
-    // Total: 132 values in 2 runs, plus we need >4096 to stay as bitset
-    _ = try bm.addRange(0, 65); // 66 values spanning word 0-1 boundary
-    _ = try bm.addRange(5000, 5065); // 66 values spanning another word boundary
-    _ = try bm.addRange(10000, 14000); // 4001 values to force bitset
+    for (5000..5066) |v| {
+        _ = try bm.add(@intCast(v));
+    }
+    // Add enough values to force bitset (need >4096 total)
+    for (10000..14001) |v| {
+        _ = try bm.add(@intCast(v));
+    }
 
     const container = Container.fromTagged(bm.containers[0]);
     try std.testing.expect(container == .bitset);

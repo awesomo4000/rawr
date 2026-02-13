@@ -175,6 +175,92 @@ pub const RunContainer = struct {
         self.n_runs -= 1;
     }
 
+    /// Add a contiguous range [start, end] inclusive. Returns count of new values added.
+    /// O(R) where R is the number of runs that overlap or are adjacent to the range.
+    pub fn addRange(self: *Self, allocator: std.mem.Allocator, start: u16, end: u16) !u64 {
+        if (start > end) return 0;
+
+        if (self.n_runs == 0) {
+            try self.ensureCapacity(allocator, 1);
+            self.runs[0] = .{ .start = start, .length = end - start };
+            self.n_runs = 1;
+            return @as(u64, end - start) + 1;
+        }
+
+        // Find first run that could overlap or be adjacent to [start, end]
+        // Binary search for first run where run.end() >= start - 1 (adjacent or overlapping)
+        var lo: usize = 0;
+        var hi: usize = self.n_runs;
+
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            // Check if this run ends before start-1 (not adjacent, not overlapping)
+            if (self.runs[mid].end() < start -| 1) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+
+        // lo is now the first run that might be adjacent/overlapping with [start, end]
+        const merge_start = lo;
+        var merge_end = lo;
+
+        // Find all runs that overlap or are adjacent
+        var new_start = start;
+        var new_end = end;
+
+        while (merge_end < self.n_runs) {
+            const run = self.runs[merge_end];
+            // Check if run starts after end+1 (gap, no more merging)
+            if (run.start > new_end +| 1) break;
+            new_start = @min(new_start, run.start);
+            new_end = @max(new_end, run.end());
+            merge_end += 1;
+        }
+
+        // Count values before the merge
+        var before: u64 = 0;
+        for (self.runs[merge_start..merge_end]) |run| {
+            before += @as(u64, run.length) + 1;
+        }
+
+        // Create the new merged run
+        const new_run = RunPair{ .start = new_start, .length = new_end - new_start };
+        const runs_removed = merge_end - merge_start;
+
+        if (runs_removed == 0) {
+            // Insert new run at merge_start (no overlapping runs)
+            try self.ensureCapacity(allocator, self.n_runs + 1);
+            // Shift runs right
+            if (merge_start < self.n_runs) {
+                std.mem.copyBackwards(
+                    RunPair,
+                    self.runs[merge_start + 1 .. self.n_runs + 1],
+                    self.runs[merge_start..self.n_runs],
+                );
+            }
+            self.runs[merge_start] = new_run;
+            self.n_runs += 1;
+        } else {
+            // Replace first merged run with the new run
+            self.runs[merge_start] = new_run;
+            // Shift remaining runs left to fill gap
+            if (runs_removed > 1) {
+                const remaining = self.n_runs - merge_end;
+                std.mem.copyForwards(
+                    RunPair,
+                    self.runs[merge_start + 1 ..][0..remaining],
+                    self.runs[merge_end..self.n_runs],
+                );
+            }
+            self.n_runs -= @intCast(runs_removed - 1);
+        }
+
+        const after: u64 = @as(u64, new_run.length) + 1;
+        return after - before;
+    }
+
     /// Remove a value. Returns true if value was present.
     pub fn remove(self: *Self, allocator: std.mem.Allocator, value: u16) !bool {
         if (self.n_runs == 0) return false;

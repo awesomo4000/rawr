@@ -226,30 +226,34 @@ fn bitsetUnionRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *RunCo
 }
 
 fn runUnionRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
-    // Simple approach: convert to bitset, compute, maybe convert back
-    const result = try BitsetContainer.init(allocator);
+    // Merge runs directly - O(n_runs) instead of O(cardinality)
+    const max_runs = @as(usize, a.n_runs) + b.n_runs;
+    const result = try RunContainer.init(allocator, @intCast(@min(max_runs, 65535)));
     errdefer result.deinit(allocator);
 
-    for (a.runs[0..a.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            _ = result.add(@intCast(v));
-        }
-    }
-    for (b.runs[0..b.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            _ = result.add(@intCast(v));
-        }
-    }
+    var i: usize = 0;
+    var j: usize = 0;
+    var k: usize = 0;
 
-    const card = result.computeCardinality();
-    if (card <= ArrayContainer.MAX_CARDINALITY) {
-        const arr = try bitsetToArray(allocator, result);
-        result.deinit(allocator);
-        return .{ .array = arr };
+    while (i < a.n_runs or j < b.n_runs) {
+        // Pick the run that starts first (or only remaining)
+        const use_a = if (i >= a.n_runs) false else if (j >= b.n_runs) true else a.runs[i].start <= b.runs[j].start;
+
+        const run = if (use_a) a.runs[i] else b.runs[j];
+        if (use_a) i += 1 else j += 1;
+
+        // Merge with previous run if adjacent or overlapping
+        if (k > 0 and result.runs[k - 1].end() + 1 >= run.start) {
+            // Extend previous run
+            result.runs[k - 1].length = @max(result.runs[k - 1].end(), run.end()) - result.runs[k - 1].start;
+        } else {
+            // Add new run
+            result.runs[k] = run;
+            k += 1;
+        }
     }
-    return .{ .bitset = result };
+    result.n_runs = @intCast(k);
+    return .{ .run = result };
 }
 
 // ============================================================================
@@ -381,25 +385,37 @@ fn bitsetIntersectRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *R
 }
 
 fn runIntersectRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
-    // Simple: check each value in smaller run against larger
-    const result = try ArrayContainer.init(allocator, @intCast(@min(a.getCardinality(), b.getCardinality())));
+    // Intersect runs directly - find overlapping regions
+    const max_result_runs = @as(usize, a.n_runs) + b.n_runs;
+    const result = try RunContainer.init(allocator, @intCast(@min(max_result_runs, 65535)));
     errdefer result.deinit(allocator);
 
+    var i: usize = 0;
+    var j: usize = 0;
     var k: usize = 0;
-    const smaller = if (a.getCardinality() <= b.getCardinality()) a else b;
-    const larger = if (a.getCardinality() <= b.getCardinality()) b else a;
 
-    for (smaller.runs[0..smaller.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            if (larger.contains(@intCast(v))) {
-                result.values[k] = @intCast(v);
-                k += 1;
-            }
+    while (i < a.n_runs and j < b.n_runs) {
+        const ra = a.runs[i];
+        const rb = b.runs[j];
+
+        // Check if runs overlap
+        if (ra.start <= rb.end() and rb.start <= ra.end()) {
+            // Overlapping - create intersection run
+            const start = @max(ra.start, rb.start);
+            const end = @min(ra.end(), rb.end());
+            result.runs[k] = .{ .start = start, .length = end - start };
+            k += 1;
+        }
+
+        // Advance the run that ends first
+        if (ra.end() < rb.end()) {
+            i += 1;
+        } else {
+            j += 1;
         }
     }
-    result.cardinality = @intCast(k);
-    return .{ .array = result };
+    result.n_runs = @intCast(k);
+    return .{ .run = result };
 }
 
 // ============================================================================
