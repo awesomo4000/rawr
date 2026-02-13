@@ -592,17 +592,11 @@ pub const RoaringBitmap = struct {
                     scratch_alloc,
                     Container.fromTagged(self.containers[i]),
                     Container.fromTagged(other.containers[j]),
-                ) catch |err| blk: {
-                    if (err == error.OutOfMemory) {
-                        // Scratch too small (bitset container), use real allocator
-                        break :blk try ops.containerIntersection(
-                            allocator,
-                            Container.fromTagged(self.containers[i]),
-                            Container.fromTagged(other.containers[j]),
-                        );
-                    }
-                    return err;
-                };
+                ) catch try ops.containerIntersection(
+                    allocator,
+                    Container.fromTagged(self.containers[i]),
+                    Container.fromTagged(other.containers[j]),
+                );
 
                 const used_scratch = scratch.end_index > 0;
 
@@ -726,63 +720,90 @@ pub const RoaringBitmap = struct {
         const new_keys = try self.allocator.alloc(u16, max_size);
         errdefer self.allocator.free(new_keys);
         const new_containers = try self.allocator.alloc(TaggedPtr, max_size);
-        errdefer self.allocator.free(new_containers);
+
+        // Track which containers are newly allocated (not moved from self)
+        // On error, we must free these to avoid leaks
+        const owned = try self.allocator.alloc(bool, max_size);
+        defer self.allocator.free(owned);
 
         var i: usize = 0; // index into self
         var j: usize = 0; // index into other
         var k: usize = 0; // index into new arrays
+
+        errdefer {
+            // Free newly allocated containers (cloned/merged) but not moved ones
+            for (new_containers[0..k], owned[0..k]) |tp, is_owned| {
+                if (is_owned) {
+                    Container.fromTagged(tp).deinit(self.allocator);
+                }
+            }
+            self.allocator.free(new_containers);
+        }
 
         while (i < self.size and j < other.size) {
             const key_a = self.keys[i];
             const key_b = other.keys[j];
 
             if (key_a < key_b) {
-                // Key only in self - move it
+                // Key only in self - move it (not owned by merge)
                 new_keys[k] = key_a;
                 new_containers[k] = self.containers[i];
+                owned[k] = false;
                 k += 1;
                 i += 1;
             } else if (key_a > key_b) {
-                // Key only in other - clone it
+                // Key only in other - clone it (owned by merge)
                 new_keys[k] = key_b;
                 new_containers[k] = try cloneContainer(self.allocator, other.containers[j]);
+                owned[k] = true;
                 k += 1;
                 j += 1;
             } else {
-                // Key in both - merge containers
+                // Key in both - merge containers (owned by merge)
                 const old_container = Container.fromTagged(self.containers[i]);
                 const other_container = Container.fromTagged(other.containers[j]);
                 const merged = try ops.containerUnion(self.allocator, old_container, other_container);
                 old_container.deinit(self.allocator);
                 new_keys[k] = key_a;
                 new_containers[k] = merged.toTagged();
+                owned[k] = true;
                 k += 1;
                 i += 1;
                 j += 1;
             }
         }
 
-        // Copy remaining from self
+        // Copy remaining from self (not owned)
         while (i < self.size) : (i += 1) {
             new_keys[k] = self.keys[i];
             new_containers[k] = self.containers[i];
+            owned[k] = false;
             k += 1;
         }
 
-        // Clone remaining from other
+        // Clone remaining from other (owned)
         while (j < other.size) : (j += 1) {
             new_keys[k] = other.keys[j];
             new_containers[k] = try cloneContainer(self.allocator, other.containers[j]);
+            owned[k] = true;
             k += 1;
         }
 
-        // Swap in new arrays, free old
+        // Success - free old arrays (containers were moved, not freed)
         self.allocator.free(self.keys[0..self.capacity]);
         self.allocator.free(self.containers[0..self.capacity]);
-        self.keys = new_keys;
-        self.containers = new_containers;
+
+        // Right-size the arrays if there's significant slack
+        if (k < max_size) {
+            self.keys = self.allocator.realloc(new_keys, k) catch new_keys;
+            self.containers = self.allocator.realloc(new_containers, k) catch new_containers;
+            self.capacity = @intCast(k);
+        } else {
+            self.keys = new_keys;
+            self.containers = new_containers;
+            self.capacity = @intCast(max_size);
+        }
         self.size = @intCast(k);
-        self.capacity = @intCast(max_size);
     }
 
     /// In-place intersection: self &= other. Modifies self to contain only values in both.
@@ -795,6 +816,10 @@ pub const RoaringBitmap = struct {
             self.size = 0;
             return;
         }
+
+        // Scratch buffer for temporary array containers (avoids malloc/free churn for empty results)
+        var scratch_buf: [8448]u8 = undefined;
+        var scratch = std.heap.FixedBufferAllocator.init(&scratch_buf);
 
         var write_idx: usize = 0;
         var i: usize = 0;
@@ -814,16 +839,35 @@ pub const RoaringBitmap = struct {
                 // Key in both - intersect containers
                 const self_container = Container.fromTagged(self.containers[i]);
                 const other_container = Container.fromTagged(other.containers[j]);
-                const intersected = try ops.containerIntersection(self.allocator, self_container, other_container);
+
+                // Try scratch allocator first, fall back to real allocator
+                const scratch_alloc = scratch.allocator();
+                const intersected = ops.containerIntersection(scratch_alloc, self_container, other_container) catch
+                    try ops.containerIntersection(self.allocator, self_container, other_container);
+
+                const used_scratch = scratch.end_index > 0;
                 self_container.deinit(self.allocator);
 
                 if (intersected.getCardinality() > 0) {
-                    self.keys[write_idx] = key_a;
-                    self.containers[write_idx] = intersected.toTagged();
+                    if (used_scratch) {
+                        // Non-empty from scratch: clone into real allocator
+                        const permanent = try intersected.clone(self.allocator);
+                        self.keys[write_idx] = key_a;
+                        self.containers[write_idx] = permanent.toTagged();
+                    } else {
+                        // Already in real allocator
+                        self.keys[write_idx] = key_a;
+                        self.containers[write_idx] = intersected.toTagged();
+                    }
                     write_idx += 1;
-                } else {
+                } else if (!used_scratch) {
+                    // Empty but allocated from real allocator, free it
                     intersected.deinit(self.allocator);
                 }
+
+                // Reset scratch for next iteration
+                scratch.reset();
+
                 i += 1;
                 j += 1;
             }
