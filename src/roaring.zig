@@ -20,5 +20,6 @@ test {
     _ = @import("container_ops.zig");
     _ = @import("bitmap.zig");
     _ = @import("frozen.zig");
+    _ = @import("compare.zig");
     _ = @import("property_tests.zig");
 }
