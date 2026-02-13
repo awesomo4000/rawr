@@ -3290,3 +3290,41 @@ test "FrozenBitmap iterator" {
     }
     try std.testing.expectEqual(values.len, idx);
 }
+
+test "bitwiseOrInPlace no leak on allocation failure" {
+    // This test verifies that bitwiseOrInPlace properly cleans up
+    // newly allocated containers when an allocation fails mid-operation.
+    const base_allocator = std.testing.allocator;
+
+    // Create two bitmaps with disjoint keys to force cloning
+    var bm1 = try RoaringBitmap.init(base_allocator);
+    defer bm1.deinit();
+    var bm2 = try RoaringBitmap.init(base_allocator);
+    defer bm2.deinit();
+
+    // Add values to different chunks
+    _ = try bm1.add(0); // chunk 0
+    _ = try bm1.add(65536); // chunk 1
+    _ = try bm2.add(131072); // chunk 2
+    _ = try bm2.add(196608); // chunk 3
+
+    // Use failing allocator that fails after a few allocations
+    // This should trigger failure during cloneContainer calls
+    var failing = std.testing.FailingAllocator.init(base_allocator, .{ .fail_index = 3 });
+
+    // Create a copy with the failing allocator for the in-place op
+    var bm1_copy = try bm1.clone(base_allocator);
+
+    // Swap allocator to failing one for the operation
+    bm1_copy.allocator = failing.allocator();
+
+    // This should fail partway through and clean up properly
+    const result = bm1_copy.bitwiseOrInPlace(&bm2);
+    try std.testing.expectError(error.OutOfMemory, result);
+
+    // Restore normal allocator for cleanup
+    bm1_copy.allocator = base_allocator;
+    bm1_copy.deinit();
+
+    // If we get here without the testing allocator detecting leaks, the test passes
+}
