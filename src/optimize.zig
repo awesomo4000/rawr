@@ -110,6 +110,7 @@ fn arrayToRunContainer(allocator: std.mem.Allocator, ac: *ArrayContainer) !*RunC
     // Last run
     rc.runs[run_idx] = .{ .start = run_start, .length = run_len };
     rc.n_runs = @intCast(n_runs);
+    rc.cardinality = -1;
 
     return rc;
 }
@@ -157,6 +158,7 @@ fn bitsetToRunContainer(allocator: std.mem.Allocator, bc: *BitsetContainer) !*Ru
     }
 
     rc.n_runs = run_idx;
+    rc.cardinality = -1;
     return rc;
 }
 

@@ -213,6 +213,7 @@ pub const RoaringBitmap = struct {
         const rc = try RunContainer.init(self.allocator, 1);
         rc.runs[0] = .{ .start = start, .length = end - start };
         rc.n_runs = 1;
+        rc.cardinality = -1; // Invalidate after direct modification
         self.keys[insert_idx] = key;
         self.containers[insert_idx] = TaggedPtr.initRun(rc);
         self.size += 1;
@@ -258,6 +259,7 @@ pub const RoaringBitmap = struct {
                     }
                     rc.runs[run_idx] = .{ .start = run_start, .length = prev - run_start };
                     rc.n_runs = run_idx + 1;
+                    rc.cardinality = -1;
                 }
                 // Add range using efficient run merge
                 const added = try rc.addRange(self.allocator, start, end);
@@ -1146,6 +1148,7 @@ pub const RoaringBitmap = struct {
                 const new_rc = try RunContainer.init(allocator, rc.n_runs);
                 @memcpy(new_rc.runs[0..rc.n_runs], rc.runs[0..rc.n_runs]);
                 new_rc.n_runs = rc.n_runs;
+                new_rc.cardinality = rc.cardinality;
                 break :blk TaggedPtr.initRun(new_rc);
             },
             .reserved => unreachable,

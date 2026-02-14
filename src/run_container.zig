@@ -30,6 +30,9 @@ pub const RunContainer = struct {
     /// Allocated capacity.
     capacity: u16,
 
+    /// Cached cardinality. -1 = unknown (recompute on next query).
+    cardinality: i32 = -1,
+
     const Self = @This();
     const MIN_CAPACITY: u16 = 4;
 
@@ -44,6 +47,7 @@ pub const RunContainer = struct {
             .runs = runs,
             .n_runs = 0,
             .capacity = cap,
+            .cardinality = 0,
         };
         return self;
     }
@@ -65,6 +69,7 @@ pub const RunContainer = struct {
             .runs = runs,
             .n_runs = self.n_runs,
             .capacity = self.capacity,
+            .cardinality = self.cardinality,
         };
         return copy;
     }
@@ -115,6 +120,7 @@ pub const RunContainer = struct {
             try self.ensureCapacity(allocator, 1);
             self.runs[0] = .{ .start = value, .length = 0 };
             self.n_runs = 1;
+            self.cardinality = -1;
             return true;
         }
 
@@ -132,6 +138,7 @@ pub const RunContainer = struct {
             if (idx < self.n_runs and self.runs[idx - 1].end() + 1 == self.runs[idx].start) {
                 self.mergeRuns(idx - 1);
             }
+            self.cardinality = -1;
             return true;
         }
 
@@ -139,6 +146,7 @@ pub const RunContainer = struct {
         if (idx < self.n_runs and value + 1 == self.runs[idx].start) {
             self.runs[idx].start -= 1;
             self.runs[idx].length += 1;
+            self.cardinality = -1;
             return true;
         }
 
@@ -156,6 +164,7 @@ pub const RunContainer = struct {
 
         self.runs[idx] = .{ .start = value, .length = 0 };
         self.n_runs += 1;
+        self.cardinality = -1;
         return true;
     }
 
@@ -184,6 +193,7 @@ pub const RunContainer = struct {
             try self.ensureCapacity(allocator, 1);
             self.runs[0] = .{ .start = start, .length = end - start };
             self.n_runs = 1;
+            self.cardinality = -1;
             return @as(u64, end - start) + 1;
         }
 
@@ -258,6 +268,7 @@ pub const RunContainer = struct {
         }
 
         const after: u64 = @as(u64, new_run.length) + 1;
+        self.cardinality = -1;
         return after - before;
     }
 
@@ -310,15 +321,22 @@ pub const RunContainer = struct {
             };
             self.n_runs += 1;
         }
+        self.cardinality = -1;
         return true;
     }
 
     /// Get total cardinality (sum of all run sizes).
-    pub fn getCardinality(self: *const Self) u32 {
+    pub fn getCardinality(self: *Self) u32 {
+        if (self.cardinality >= 0) return @intCast(self.cardinality);
+        return self.computeCardinality();
+    }
+
+    fn computeCardinality(self: *Self) u32 {
         var card: u32 = 0;
         for (self.runs[0..self.n_runs]) |run| {
             card += run.size();
         }
+        self.cardinality = @intCast(card);
         return card;
     }
 

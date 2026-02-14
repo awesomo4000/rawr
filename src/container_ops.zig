@@ -288,6 +288,7 @@ fn runUnionRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer)
         }
     }
     result.n_runs = @intCast(k);
+    result.cardinality = -1;
     return .{ .run = result };
 }
 
@@ -452,6 +453,7 @@ fn runIntersectRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContai
         }
     }
     result.n_runs = @intCast(k);
+    result.cardinality = -1;
     return .{ .run = result };
 }
 

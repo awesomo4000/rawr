@@ -264,6 +264,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             const n = try reader.readAll(std.mem.sliceAsBytes(rc.runs[0..n_runs]));
             if (n != run_bytes) return error.InvalidFormat;
             rc.n_runs = n_runs;
+            rc.cardinality = -1;
             result.containers[i] = TaggedPtr.initRun(rc);
         } else if (card > ArrayContainer.MAX_CARDINALITY) {
             // Bitset container
