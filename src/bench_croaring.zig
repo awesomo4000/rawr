@@ -3,7 +3,7 @@ const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
 const c = @cImport(@cInclude("croaring_wrapper.h"));
 
-const allocator = std.heap.c_allocator;
+const allocator = std.heap.smp_allocator;
 
 const WARMUP_RUNS = 3;
 const BENCH_RUNS = 21;

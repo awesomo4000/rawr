@@ -1252,6 +1252,21 @@ pub const RoaringBitmap = struct {
         const result = try self.bitwiseDifference(arena.allocator(), other);
         return .{ .bitmap = result, .arena = arena };
     }
+
+    // =========================================================================
+    // Allocator guidance
+    // =========================================================================
+
+    /// ## Allocator guidance
+    ///
+    /// Avoid `std.heap.c_allocator` — it is 10-40x slower than alternatives
+    /// for rawr's allocation patterns (many small containers).
+    ///
+    /// Recommended:
+    /// - `OwnedBitmap` API: fastest (uses optimized allocation internally)
+    /// - `std.heap.smp_allocator`: fast general-purpose, supports mutation
+    /// - `std.heap.ArenaAllocator`: fast batch alloc, bulk free only
+    pub const allocator_guidance = void;
 };
 
 /// A RoaringBitmap that owns its memory via an arena allocator.
