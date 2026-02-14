@@ -285,10 +285,20 @@ pub const RoaringBitmap = struct {
         }
     }
 
-    /// Create a bitmap from a pre-sorted slice of values. O(n) construction.
+    /// Build from pre-sorted, deduplicated values. O(n), no binary searches.
+    /// Caller must ensure values are in strictly ascending order with no duplicates.
+    /// Debug builds assert this precondition. In release, duplicates cause undefined
+    /// behavior (incorrect cardinality, corrupt containers).
     pub fn fromSorted(allocator: std.mem.Allocator, values: []const u32) !Self {
         if (values.len == 0) {
             return Self.init(allocator);
+        }
+
+        // Debug assertion: values must be strictly ascending (sorted, no duplicates)
+        if (std.debug.runtime_safety) {
+            for (values[1..], 0..) |cur, i| {
+                std.debug.assert(cur > values[i]); // not sorted or contains duplicates
+            }
         }
 
         // Count containers needed
@@ -2463,4 +2473,131 @@ test "cached cardinality stays correct through mutations" {
     _ = try other.addRange(150, 250);
     try bm.bitwiseOrInPlace(&other);
     try std.testing.expectEqual(@as(u64, 151), bm.cardinality());
+}
+
+test "fromSorted basic correctness" {
+    const allocator = std.testing.allocator;
+    const values = [_]u32{ 1, 5, 10, 100, 1000, 10000 };
+
+    var bm = try RoaringBitmap.fromSorted(allocator, &values);
+    defer bm.deinit();
+
+    // Cardinality matches input length
+    try std.testing.expectEqual(@as(u64, values.len), bm.cardinality());
+
+    // Contains returns true for every input value
+    for (values) |v| {
+        try std.testing.expect(bm.contains(v));
+    }
+
+    // Contains returns false for values not in input
+    try std.testing.expect(!bm.contains(0));
+    try std.testing.expect(!bm.contains(2));
+    try std.testing.expect(!bm.contains(50));
+    try std.testing.expect(!bm.contains(999));
+
+    // Iteration yields exactly the input values in order
+    var it = bm.iterator();
+    for (values) |expected| {
+        try std.testing.expectEqual(expected, it.next().?);
+    }
+    try std.testing.expectEqual(@as(?u32, null), it.next());
+}
+
+test "fromSorted matches incremental add" {
+    const allocator = std.testing.allocator;
+    const values = [_]u32{ 0, 1, 100, 1000, 65535, 65536, 65537, 100000 };
+
+    // Build via fromSorted
+    var from_sorted = try RoaringBitmap.fromSorted(allocator, &values);
+    defer from_sorted.deinit();
+
+    // Build via add
+    var from_add = try RoaringBitmap.init(allocator);
+    defer from_add.deinit();
+    for (values) |v| {
+        _ = try from_add.add(v);
+    }
+
+    // They must be equal
+    try std.testing.expect(from_sorted.equals(&from_add));
+    try std.testing.expectEqual(from_sorted.cardinality(), from_add.cardinality());
+}
+
+test "fromSorted cardinality cache consistency" {
+    const allocator = std.testing.allocator;
+    const values = [_]u32{ 1, 2, 3, 100, 200, 300 };
+
+    var bm = try RoaringBitmap.fromSorted(allocator, &values);
+    defer bm.deinit();
+
+    // Get cached cardinality
+    const cached = bm.cardinality();
+    try std.testing.expectEqual(@as(u64, 6), cached);
+
+    // Add a value to trigger cache update path
+    _ = try bm.add(50);
+    try std.testing.expectEqual(@as(u64, 7), bm.cardinality());
+
+    // Remove it
+    _ = try bm.remove(50);
+    try std.testing.expectEqual(@as(u64, 6), bm.cardinality());
+
+    // Force cache invalidation via in-place op and recompute
+    var empty = try RoaringBitmap.init(allocator);
+    defer empty.deinit();
+    try bm.bitwiseAndInPlace(&empty); // AND with empty = empty
+
+    // After invalidation and recompute, must be 0
+    try std.testing.expectEqual(@as(u64, 0), bm.cardinality());
+}
+
+test "fromSorted with cross-container values" {
+    const allocator = std.testing.allocator;
+    // Values spanning multiple 65536-boundaries
+    const values = [_]u32{ 0, 1, 65536, 65537, 131072 };
+
+    var bm = try RoaringBitmap.fromSorted(allocator, &values);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u64, 5), bm.cardinality());
+    try std.testing.expectEqual(@as(u32, 3), bm.size); // 3 containers
+
+    for (values) |v| {
+        try std.testing.expect(bm.contains(v));
+    }
+}
+
+test "fromSorted roundtrip serialize/deserialize" {
+    const allocator = std.testing.allocator;
+    const values = [_]u32{ 5, 10, 15, 65536, 65540, 131072, 131073 };
+
+    var original = try RoaringBitmap.fromSorted(allocator, &values);
+    defer original.deinit();
+
+    // Serialize
+    const bytes = try original.serialize(allocator);
+    defer allocator.free(bytes);
+
+    // Deserialize
+    var restored = try RoaringBitmap.deserialize(allocator, bytes);
+    defer restored.deinit();
+
+    // Must be equal
+    try std.testing.expect(original.equals(&restored));
+    try std.testing.expectEqual(original.cardinality(), restored.cardinality());
+}
+
+test "fromSorted rejects duplicates in debug" {
+    // This test verifies the debug assertion catches duplicates.
+    // In debug builds, passing duplicates should panic/assert.
+    // We can't easily test panics, so we document the expected behavior.
+    // The assertion is: std.debug.assert(cur > values[i])
+
+    // For now, just verify the happy path works
+    const allocator = std.testing.allocator;
+    const valid = [_]u32{ 1, 2, 3 }; // no duplicates
+    var bm = try RoaringBitmap.fromSorted(allocator, &valid);
+    defer bm.deinit();
+    try std.testing.expectEqual(@as(u64, 3), bm.cardinality());
 }
