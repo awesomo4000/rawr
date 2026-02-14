@@ -109,15 +109,13 @@ pub fn build(b: *std.Build) void {
     bench_alloc_mod.addImport("rawr", bench_lib_mod);
 
     const bench_alloc_exe = b.addExecutable(.{
-        .name = "bench-alloc",
+        .name = "bench_alloc",
         .root_module = bench_alloc_mod,
     });
     b.installArtifact(bench_alloc_exe);
 
-    const bench_alloc_run = b.addRunArtifact(bench_alloc_exe);
-    if (b.args) |args| bench_alloc_run.addArgs(args);
-    const bench_alloc_step = b.step("bench-alloc", "Allocator matrix benchmark");
-    bench_alloc_step.dependOn(&bench_alloc_run.step);
+    const bench_alloc_step = b.step("bench-alloc", "Build allocator matrix benchmark");
+    bench_alloc_step.dependOn(&b.addInstallArtifact(bench_alloc_exe, .{}).step);
 
     // Tarball
     const tarball_step = b.step("tarball", "Create source tarball from git HEAD");
