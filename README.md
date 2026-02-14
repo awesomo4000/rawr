@@ -3,27 +3,13 @@
 Roaring bitmap library in pure Zig. Wire-compatible with CRoaring (serialized
 bitmaps interoperate across implementations). No C dependencies.
 
-## Performance
+## Interop
 
-Extensively optimized and validated against CRoaring (the reference C
-implementation). Core operations are at parity or better, depending on workload.
-
-Key optimizations:
-
-- **Arena-friendly allocation** — allocation-heavy operations (deserialize, set
-  operations) benefit from Zig's allocator model. Callers can pass arena or pool
-  allocators to eliminate per-container malloc overhead.
-- **SIMD bitset operations** — `@Vector(8, u64)` for OR/AND/XOR/ANDNOT, lowers
-  to AVX-512/AVX2/NEON depending on target.
-- **Bulk I/O serialization** — headers and container data written in single
-  operations, no per-element loops.
-- **Run-aware addRange** — creates run containers directly in O(1) instead of
-  element-by-element insertion.
-- **Branchless merge walks** — array container intersection/union with reduced
-  branch mispredictions on x86_64.
-
-Run benchmarks with `./scripts/run-bench.sh` or compare against CRoaring with
-`./scripts/run-compare-bench.sh`.
+Implements the [RoaringFormatSpec](https://github.com/RoaringBitmap/RoaringFormatSpec)
+portable serialization format. Bitmaps serialized by rawr can be read by CRoaring,
+Java RoaringBitmap, Go roaring, and any other compliant implementation — and vice
+versa. Validated by `zig build validate` which round-trips through both rawr and
+CRoaring.
 
 ## Usage
 
@@ -149,14 +135,6 @@ Run benchmarks (results saved to `misc/`):
 ./scripts/run-compare-bench.sh   # rawr vs CRoaring comparison
 ./scripts/run-bench-alloc.sh     # allocator matrix experiment
 ```
-
-## Wire format
-
-Implements the [RoaringFormatSpec](https://github.com/RoaringBitmap/RoaringFormatSpec)
-portable serialization format. Bitmaps serialized by rawr can be deserialized
-by CRoaring, Java RoaringBitmap, Go roaring, and any other compliant
-implementation, and vice versa. Validated by `zig build validate` which
-round-trips through both rawr and CRoaring and checks byte-identity.
 
 ## Internals
 
