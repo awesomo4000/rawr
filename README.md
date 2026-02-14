@@ -11,6 +11,8 @@ Java RoaringBitmap, Go roaring, and any other compliant implementation — and v
 versa. Validated by `zig build validate` which round-trips through both rawr and
 CRoaring.
 
+See [API.md](API.md) for the full API reference.
+
 ## Usage
 
 ```zig
