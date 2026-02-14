@@ -232,25 +232,38 @@ pub const RoaringBitmap = struct {
                 return @as(u64, @intCast(bc.cardinality)) - before;
             },
             .array => |ac| {
-                // Check if adding range would overflow
-                const range_size: u32 = @as(u32, end) - start + 1;
-                if (ac.cardinality + range_size > ArrayContainer.MAX_CARDINALITY) {
-                    // Convert to bitset first
-                    const bc = try self.arrayToBitset(ac);
-                    const before: u64 = @intCast(bc.cardinality);
-                    bc.setRange(start, end);
-                    _ = bc.computeCardinality();
-                    self.containers[idx] = TaggedPtr.initBitset(bc);
-                    return @as(u64, @intCast(bc.cardinality)) - before;
-                }
-                // Add values one by one (could optimize with sorted merge)
-                var added: u64 = 0;
-                var v: u32 = start;
-                while (v <= end) : (v += 1) {
-                    if (try ac.add(self.allocator, @intCast(v))) {
-                        added += 1;
+                // Convert array to run container, then use efficient range merge
+                // Building runs from a sorted array is O(cardinality)
+                var n_runs: u16 = 0;
+                if (ac.cardinality > 0) {
+                    n_runs = 1;
+                    var i: usize = 1;
+                    while (i < ac.cardinality) : (i += 1) {
+                        if (ac.values[i] != ac.values[i - 1] + 1) n_runs += 1;
                     }
                 }
+                const rc = try RunContainer.init(self.allocator, n_runs);
+                errdefer rc.deinit(self.allocator);
+                if (ac.cardinality > 0) {
+                    var run_idx: u16 = 0;
+                    var run_start = ac.values[0];
+                    var prev = ac.values[0];
+                    for (ac.values[1..ac.cardinality]) |val| {
+                        if (val != prev + 1) {
+                            rc.runs[run_idx] = .{ .start = run_start, .length = prev - run_start };
+                            run_idx += 1;
+                            run_start = val;
+                        }
+                        prev = val;
+                    }
+                    rc.runs[run_idx] = .{ .start = run_start, .length = prev - run_start };
+                    rc.n_runs = run_idx + 1;
+                }
+                // Add range using efficient run merge
+                const added = try rc.addRange(self.allocator, start, end);
+                // Replace array with run container
+                ac.deinit(self.allocator);
+                self.containers[idx] = TaggedPtr.initRun(rc);
                 return added;
             },
             .run => |rc| {
