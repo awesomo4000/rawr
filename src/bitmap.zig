@@ -27,6 +27,9 @@ pub const RoaringBitmap = struct {
     /// Allocator for all internal memory.
     allocator: std.mem.Allocator,
 
+    /// Cached total cardinality. -1 = unknown (recompute on next query).
+    cached_cardinality: i64 = -1,
+
     const Self = @This();
     const INITIAL_CAPACITY: u32 = 4;
 
@@ -42,6 +45,7 @@ pub const RoaringBitmap = struct {
             .size = 0,
             .capacity = INITIAL_CAPACITY,
             .allocator = allocator,
+            .cached_cardinality = 0,
         };
     }
 
@@ -67,6 +71,7 @@ pub const RoaringBitmap = struct {
             result.keys[i] = key;
         }
         result.size = self.size;
+        result.cached_cardinality = self.cached_cardinality;
 
         return result;
     }
@@ -155,12 +160,15 @@ pub const RoaringBitmap = struct {
 
         if (self.findKey(key)) |idx| {
             // Container exists, add to it
-            return self.addToContainer(idx, low);
+            const added = try self.addToContainer(idx, low);
+            if (added and self.cached_cardinality >= 0) self.cached_cardinality += 1;
+            return added;
         }
 
         // Need to create new container
         const idx = self.lowerBound(key);
         try self.insertContainerAt(idx, key, low);
+        if (self.cached_cardinality >= 0) self.cached_cardinality += 1;
         return true;
     }
 
@@ -188,6 +196,7 @@ pub const RoaringBitmap = struct {
             current = combine(key + 1, 0);
         }
 
+        if (self.cached_cardinality >= 0) self.cached_cardinality += @intCast(added);
         return added;
     }
 
@@ -341,6 +350,7 @@ pub const RoaringBitmap = struct {
             chunk_start = chunk_end;
         }
 
+        result.cached_cardinality = @intCast(values.len);
         return result;
     }
 
@@ -408,7 +418,9 @@ pub const RoaringBitmap = struct {
         const low = lowBits(value);
 
         const idx = self.findKey(key) orelse return false;
-        return self.removeFromContainer(idx, low);
+        const removed = try self.removeFromContainer(idx, low);
+        if (removed and self.cached_cardinality >= 0) self.cached_cardinality -= 1;
+        return removed;
     }
 
     /// Remove value from container at index.
@@ -447,11 +459,13 @@ pub const RoaringBitmap = struct {
     }
 
     /// Get the total cardinality (number of values).
-    pub fn cardinality(self: *const Self) u64 {
+    pub fn cardinality(self: *Self) u64 {
+        if (self.cached_cardinality >= 0) return @intCast(self.cached_cardinality);
         var total: u64 = 0;
         for (self.containers[0..self.size]) |tp| {
             total += Container.fromTagged(tp).getCardinality();
         }
+        self.cached_cardinality = @intCast(total);
         return total;
     }
 
@@ -553,6 +567,7 @@ pub const RoaringBitmap = struct {
             try result.appendContainer(other.keys[j], try cloneContainer(allocator, other.containers[j]));
         }
 
+        result.cached_cardinality = -1;
         return result;
     }
 
@@ -616,6 +631,7 @@ pub const RoaringBitmap = struct {
             }
         }
 
+        result.cached_cardinality = -1;
         return result;
     }
 
@@ -699,6 +715,7 @@ pub const RoaringBitmap = struct {
             i += 1;
         }
 
+        result.cached_cardinality = -1;
         return result;
     }
 
@@ -743,6 +760,7 @@ pub const RoaringBitmap = struct {
             try result.appendContainer(other.keys[j], try cloneContainer(allocator, other.containers[j]));
         }
 
+        result.cached_cardinality = -1;
         return result;
     }
 
@@ -754,6 +772,7 @@ pub const RoaringBitmap = struct {
     /// Uses O(n) merge algorithm instead of O(n²) incremental insertion.
     pub fn bitwiseOrInPlace(self: *Self, other: *const Self) !void {
         if (other.size == 0) return;
+        self.cached_cardinality = -1;
 
         // Pre-merge into new arrays to avoid O(n²) shifting
         const max_size = self.size + other.size;
@@ -859,6 +878,7 @@ pub const RoaringBitmap = struct {
 
     /// In-place intersection: self &= other. Modifies self to contain only values in both.
     pub fn bitwiseAndInPlace(self: *Self, other: *const Self) !void {
+        self.cached_cardinality = -1;
         if (other.size == 0) {
             // Clear self
             for (self.containers[0..self.size]) |tp| {
@@ -935,6 +955,7 @@ pub const RoaringBitmap = struct {
     /// In-place difference: self -= other. Modifies self to remove values in other.
     pub fn bitwiseDifferenceInPlace(self: *Self, other: *const Self) !void {
         if (other.size == 0) return;
+        self.cached_cardinality = -1;
 
         var write_idx: usize = 0;
         var i: usize = 0;
@@ -976,6 +997,8 @@ pub const RoaringBitmap = struct {
     /// In-place XOR: self ^= other. Modifies self to contain symmetric difference.
     pub fn bitwiseXorInPlace(self: *Self, other: *const Self) !void {
         if (other.size == 0) return;
+
+        self.cached_cardinality = -1;
 
         // Pre-merge into new arrays (XOR can add new keys from other)
         const max_size = self.size + other.size;
@@ -1083,6 +1106,8 @@ pub const RoaringBitmap = struct {
     /// Convert containers to run encoding where it saves space.
     /// Returns the number of containers that were converted.
     pub fn runOptimize(self: *Self) !u32 {
+        // Invalidate cache for safety (though cardinality doesn't actually change)
+        self.cached_cardinality = -1;
         return opt.runOptimize(self);
     }
 
@@ -1440,7 +1465,7 @@ pub const OwnedBitmap = struct {
     }
 
     /// Return the number of values in the bitmap.
-    pub fn cardinality(self: *const OwnedBitmap) u64 {
+    pub fn cardinality(self: *OwnedBitmap) u64 {
         return self.bitmap.cardinality();
     }
 
@@ -2410,4 +2435,32 @@ test "bitwiseXorInPlace removes empty containers" {
 
     try a.bitwiseXorInPlace(&b);
     try std.testing.expectEqual(@as(u64, 0), a.cardinality());
+}
+
+test "cached cardinality stays correct through mutations" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u64, 0), bm.cardinality());
+
+    _ = try bm.add(1);
+    try std.testing.expectEqual(@as(u64, 1), bm.cardinality());
+
+    _ = try bm.add(1); // duplicate
+    try std.testing.expectEqual(@as(u64, 1), bm.cardinality());
+
+    _ = try bm.addRange(100, 199);
+    try std.testing.expectEqual(@as(u64, 101), bm.cardinality());
+
+    _ = try bm.remove(1);
+    try std.testing.expectEqual(@as(u64, 100), bm.cardinality());
+
+    // In-place op invalidates, next call recomputes
+    var other = try RoaringBitmap.init(allocator);
+    defer other.deinit();
+    _ = try other.addRange(150, 250);
+    try bm.bitwiseOrInPlace(&other);
+    try std.testing.expectEqual(@as(u64, 151), bm.cardinality());
 }

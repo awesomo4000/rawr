@@ -288,6 +288,11 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
         }
     }
 
+    // Compute total cardinality from header data (free - already parsed)
+    var total_cardinality: u64 = 0;
+    for (cardinalities[0..size]) |c| total_cardinality += c;
+    result.cached_cardinality = @intCast(total_cardinality);
+
     result.size = size;
     return result;
 }
