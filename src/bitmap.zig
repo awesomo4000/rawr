@@ -6,6 +6,10 @@ const container_mod = @import("container.zig");
 const Container = container_mod.Container;
 const TaggedPtr = container_mod.TaggedPtr;
 const ops = @import("container_ops.zig");
+const compare = @import("compare.zig");
+const opt = @import("optimize.zig");
+const ser = @import("serialize.zig");
+const fmt = @import("format.zig");
 
 /// A Roaring Bitmap: an efficient compressed bitmap for 32-bit integers.
 ///
@@ -1133,8 +1137,6 @@ pub const RoaringBitmap = struct {
     // Optimization (delegated to optimize.zig)
     // ========================================================================
 
-    const opt = @import("optimize.zig");
-
     /// Convert containers to run encoding where it saves space.
     /// Returns the number of containers that were converted.
     pub fn runOptimize(self: *Self) !u32 {
@@ -1160,8 +1162,6 @@ pub const RoaringBitmap = struct {
     // ========================================================================
     // Comparison (delegated to compare.zig)
     // ========================================================================
-
-    const compare = @import("compare.zig");
 
     /// Check if self is a subset of other. O(n) where n is total container size.
     pub fn isSubsetOf(self: *const Self, other: *const Self) bool {
@@ -1371,12 +1371,9 @@ pub const RoaringBitmap = struct {
     // ========================================================================
 
     /// Cookie values for RoaringFormatSpec (re-exported for FrozenBitmap compatibility)
-    const fmt = @import("format.zig");
     pub const SERIAL_COOKIE_NO_RUNCONTAINER = fmt.SERIAL_COOKIE_NO_RUNCONTAINER;
     pub const SERIAL_COOKIE = fmt.SERIAL_COOKIE;
     pub const NO_OFFSET_THRESHOLD = fmt.NO_OFFSET_THRESHOLD;
-
-    const ser = @import("serialize.zig");
 
     /// Compute serialized size in bytes.
     pub fn serializedSizeInBytes(self: *const Self) usize {
