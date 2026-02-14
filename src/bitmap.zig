@@ -289,6 +289,7 @@ pub const RoaringBitmap = struct {
     /// Caller must ensure values are in strictly ascending order with no duplicates.
     /// Debug builds assert this precondition. In release, duplicates cause undefined
     /// behavior (incorrect cardinality, corrupt containers).
+    /// If input may be unsorted or contain duplicates, use `fromSlice` instead.
     pub fn fromSorted(allocator: std.mem.Allocator, values: []const u32) !Self {
         if (values.len == 0) {
             return Self.init(allocator);
@@ -362,6 +363,27 @@ pub const RoaringBitmap = struct {
 
         result.cached_cardinality = @intCast(values.len);
         return result;
+    }
+
+    /// Build from an arbitrary slice of values. O(n log n).
+    /// Sorts in-place and deduplicates. Mutates the input slice.
+    /// If input is already sorted and unique, prefer `fromSorted` (O(n)).
+    pub fn fromSlice(allocator: std.mem.Allocator, values: []u32) !Self {
+        if (values.len == 0) return Self.init(allocator);
+
+        // Sort in-place
+        std.mem.sortUnstable(u32, values, {}, std.sort.asc(u32));
+
+        // Deduplicate in-place
+        var write: usize = 1;
+        for (values[1..]) |v| {
+            if (v != values[write - 1]) {
+                values[write] = v;
+                write += 1;
+            }
+        }
+
+        return fromSorted(allocator, values[0..write]);
     }
 
     /// Add value to existing container at index, handling type conversion.
@@ -1435,6 +1457,14 @@ pub const RoaringBitmap = struct {
         var arena = std.heap.ArenaAllocator.init(backing);
         errdefer arena.deinit();
         const result = try self.bitwiseDifference(arena.allocator(), other);
+        return .{ .bitmap = result, .arena = arena };
+    }
+
+    /// Build from arbitrary slice using arena allocation. Sorts and deduplicates in-place.
+    pub fn fromSliceOwned(backing: std.mem.Allocator, values: []u32) !OwnedBitmap {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        errdefer arena.deinit();
+        const result = try fromSlice(arena.allocator(), values);
         return .{ .bitmap = result, .arena = arena };
     }
 
@@ -2600,4 +2630,68 @@ test "fromSorted rejects duplicates in debug" {
     var bm = try RoaringBitmap.fromSorted(allocator, &valid);
     defer bm.deinit();
     try std.testing.expectEqual(@as(u64, 3), bm.cardinality());
+}
+
+test "fromSlice sorts and deduplicates" {
+    const allocator = std.testing.allocator;
+    var values = [_]u32{ 10, 3, 3, 7, 1, 10, 7, 1 };
+
+    var bm = try RoaringBitmap.fromSlice(allocator, &values);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u64, 4), bm.cardinality());
+    try std.testing.expect(bm.contains(1));
+    try std.testing.expect(bm.contains(3));
+    try std.testing.expect(bm.contains(7));
+    try std.testing.expect(bm.contains(10));
+    try std.testing.expect(!bm.contains(2));
+}
+
+test "fromSlice matches incremental add" {
+    const allocator = std.testing.allocator;
+    var values = [_]u32{ 100, 1, 65536, 1, 200, 65536, 50 };
+
+    var from_slice = try RoaringBitmap.fromSlice(allocator, &values);
+    defer from_slice.deinit();
+
+    var from_add = try RoaringBitmap.init(allocator);
+    defer from_add.deinit();
+    for ([_]u32{ 100, 1, 65536, 200, 50 }) |v| {
+        _ = try from_add.add(v);
+    }
+
+    try std.testing.expect(from_slice.equals(&from_add));
+}
+
+test "fromSlice empty" {
+    const allocator = std.testing.allocator;
+    var values = [_]u32{};
+
+    var bm = try RoaringBitmap.fromSlice(allocator, &values);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u64, 0), bm.cardinality());
+    try std.testing.expect(bm.isEmpty());
+}
+
+test "fromSlice all duplicates" {
+    const allocator = std.testing.allocator;
+    var values = [_]u32{ 42, 42, 42, 42 };
+
+    var bm = try RoaringBitmap.fromSlice(allocator, &values);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u64, 1), bm.cardinality());
+    try std.testing.expect(bm.contains(42));
+}
+
+test "fromSlice cross-container with duplicates" {
+    const allocator = std.testing.allocator;
+    var values = [_]u32{ 131072, 0, 65536, 0, 131072, 1, 65537 };
+
+    var bm = try RoaringBitmap.fromSlice(allocator, &values);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u64, 5), bm.cardinality());
+    try std.testing.expectEqual(@as(u32, 3), bm.size); // 3 containers
 }
