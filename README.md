@@ -22,7 +22,8 @@ Key optimizations:
 - **Branchless merge walks** — array container intersection/union with reduced
   branch mispredictions on x86_64.
 
-Use `zig build bench-compare` to run your own benchmarks against CRoaring.
+Run benchmarks with `./scripts/run-bench.sh` or compare against CRoaring with
+`./scripts/run-compare-bench.sh`.
 
 ## Usage
 
@@ -81,7 +82,7 @@ in one operation. Faster for deserialize and set operations, but no individual
 ```zig
 const OwnedBitmap = rawr.OwnedBitmap;
 
-// Deserialize (2x faster than CRoaring)
+// Deserialize with arena allocation
 var owned = try RoaringBitmap.deserializeOwned(std.heap.smp_allocator, bytes);
 defer owned.deinit(); // frees everything at once
 
@@ -126,8 +127,7 @@ Recommended allocators, fastest to most flexible:
 | `c_allocator` | Avoid | Don't use with rawr |
 
 For hot loops with bounded lifetime (evaluation rounds, request handling),
-pre-allocate a `FixedBufferAllocator` and reuse it across iterations —
-this is the theoretical floor (30% faster than arena, 3x faster than smp).
+pre-allocate a `FixedBufferAllocator` and reuse it across iterations.
 
 ## Building
 
@@ -142,14 +142,12 @@ zig build bench-compare # rawr vs CRoaring comparison
 zig build bench-alloc  # allocator matrix experiment
 ```
 
-Run benchmarks:
+Run benchmarks (results saved to `misc/`):
 
 ```bash
-# CRoaring comparison (needs the vendor/ amalgamation)
-zig build bench-compare && ./zig-out/bin/bench_croaring
-
-# Allocator matrix (all 16 input×output combinations)
-zig build bench-alloc && ./zig-out/bin/bench_alloc --matrix
+./scripts/run-bench.sh           # rawr benchmarks
+./scripts/run-compare-bench.sh   # rawr vs CRoaring comparison
+./scripts/run-bench-alloc.sh     # allocator matrix experiment
 ```
 
 ## Wire format
@@ -162,7 +160,7 @@ round-trips through both rawr and CRoaring and checks byte-identity.
 
 ## Internals
 
-~8500 lines of Zig across 15 source files. Three container types per the
+~9400 lines of Zig across 18 source files. Three container types per the
 Roaring spec:
 
 - **Array containers** — sorted u16 arrays for sparse chunks (<4096 values)
@@ -186,6 +184,7 @@ Key implementation details:
 ```
 src/
   bitmap.zig          # RoaringBitmap, OwnedBitmap (public API)
+  bitmap_tests.zig    # unit tests for bitmap.zig
   array_container.zig # sorted u16 array container
   bitset_container.zig# 8KB bitset container (SIMD)
   run_container.zig   # run-length encoded container
