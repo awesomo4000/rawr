@@ -9,6 +9,41 @@ const Container = container_mod.Container;
 /// Returns newly allocated containers.
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/// Exponential search for `target` in sorted `arr[start..]`.
+/// Returns the index of the first element >= target.
+/// O(log(distance_to_target)) — fast when target is nearby, degrades
+/// gracefully to O(log n) when target is far.
+fn gallopSearch(arr: []const u16, target: u16, start: usize) usize {
+    if (start >= arr.len) return arr.len;
+
+    // Phase 1: exponential gallop to find bracket
+    var step: usize = 1;
+    var hi = start;
+    while (hi < arr.len and arr[hi] < target) {
+        hi += step;
+        step *= 2;
+    }
+    // Clamp hi
+    if (hi > arr.len) hi = arr.len;
+
+    // Phase 2: binary search within [lo, hi)
+    var lo = if (step > 2) hi -| (step / 2) else start;
+
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (arr[mid] < target) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+// ============================================================================
 // Union (OR)
 // ============================================================================
 
@@ -288,27 +323,29 @@ fn arrayIntersectArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *Arr
     const result = try ArrayContainer.init(allocator, @min(a.cardinality, b.cardinality));
     errdefer result.deinit(allocator);
 
-    var i: usize = 0;
-    var j: usize = 0;
+    // Walk the smaller array, gallop into the larger.
+    // O(small × log big) — much faster than O(n+m) when sizes differ significantly.
+    const small = if (a.cardinality <= b.cardinality)
+        a.values[0..a.cardinality]
+    else
+        b.values[0..b.cardinality];
+    const big = if (a.cardinality <= b.cardinality)
+        b.values[0..b.cardinality]
+    else
+        a.values[0..a.cardinality];
+
     var k: usize = 0;
-    const sa = a.values[0..a.cardinality];
-    const sb = b.values[0..b.cardinality];
+    var lo: usize = 0; // search start in big, advances monotonically
 
-    // Branchless merge: always advance whichever pointer is behind (or both if equal).
-    // On aarch64, LLVM emits csel/cset for these — no branch, no mispredict.
-    while (i < sa.len and j < sb.len) {
-        const a_val = sa[i];
-        const b_val = sb[j];
-
-        i += @intFromBool(a_val <= b_val);
-        j += @intFromBool(b_val <= a_val);
-
-        // Only write on match. This branch is well-predicted (matches are sparse).
-        if (a_val == b_val) {
-            result.values[k] = a_val;
+    for (small) |val| {
+        lo = gallopSearch(big, val, lo);
+        if (lo < big.len and big[lo] == val) {
+            result.values[k] = val;
             k += 1;
+            lo += 1; // past this match for next search
         }
     }
+
     result.cardinality = @intCast(k);
     return .{ .array = result };
 }
@@ -416,6 +453,218 @@ fn runIntersectRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContai
     }
     result.n_runs = @intCast(k);
     return .{ .run = result };
+}
+
+// ============================================================================
+// Intersection Cardinality (no allocation)
+// ============================================================================
+
+/// Compute |a ∩ b| without allocating a result container.
+pub fn containerIntersectionCardinality(a: Container, b: Container) u64 {
+    return switch (a) {
+        .array => |ac| switch (b) {
+            .array => |bc| arrayIntersectArrayCard(ac, bc),
+            .bitset => |bc| arrayIntersectBitsetCard(ac, bc),
+            .run => |rc| arrayIntersectRunCard(ac, rc),
+            .reserved => unreachable,
+        },
+        .bitset => |ac| switch (b) {
+            .array => |bc| arrayIntersectBitsetCard(bc, ac),
+            .bitset => |bc| bitsetIntersectBitsetCard(ac, bc),
+            .run => |rc| bitsetIntersectRunCard(ac, rc),
+            .reserved => unreachable,
+        },
+        .run => |ac| switch (b) {
+            .array => |bc| arrayIntersectRunCard(bc, ac),
+            .bitset => |bc| bitsetIntersectRunCard(bc, ac),
+            .run => |rc| runIntersectRunCard(ac, rc),
+            .reserved => unreachable,
+        },
+        .reserved => unreachable,
+    };
+}
+
+/// Return true if a ∩ b is non-empty. Early exit on first match.
+pub fn containerIntersects(a: Container, b: Container) bool {
+    return switch (a) {
+        .array => |ac| switch (b) {
+            .array => |bc| arrayIntersectsArray(ac, bc),
+            .bitset => |bc| arrayIntersectsBitset(ac, bc),
+            .run => |rc| arrayIntersectsRun(ac, rc),
+            .reserved => unreachable,
+        },
+        .bitset => |ac| switch (b) {
+            .array => |bc| arrayIntersectsBitset(bc, ac),
+            .bitset => |bc| bitsetIntersectsBitset(ac, bc),
+            .run => |rc| bitsetIntersectsRun(ac, rc),
+            .reserved => unreachable,
+        },
+        .run => |ac| switch (b) {
+            .array => |bc| arrayIntersectsRun(bc, ac),
+            .bitset => |bc| bitsetIntersectsRun(bc, ac),
+            .run => |rc| runIntersectsRun(ac, rc),
+            .reserved => unreachable,
+        },
+        .reserved => unreachable,
+    };
+}
+
+fn arrayIntersectArrayCard(a: *ArrayContainer, b: *ArrayContainer) u64 {
+    const small = if (a.cardinality <= b.cardinality)
+        a.values[0..a.cardinality]
+    else
+        b.values[0..b.cardinality];
+    const big = if (a.cardinality <= b.cardinality)
+        b.values[0..b.cardinality]
+    else
+        a.values[0..a.cardinality];
+
+    var count: u64 = 0;
+    var lo: usize = 0;
+    for (small) |val| {
+        lo = gallopSearch(big, val, lo);
+        if (lo < big.len and big[lo] == val) {
+            count += 1;
+            lo += 1;
+        }
+    }
+    return count;
+}
+
+fn arrayIntersectBitsetCard(ac: *ArrayContainer, bc: *BitsetContainer) u64 {
+    var count: u64 = 0;
+    for (ac.values[0..ac.cardinality]) |v| {
+        if (bc.contains(v)) count += 1;
+    }
+    return count;
+}
+
+fn arrayIntersectRunCard(ac: *ArrayContainer, rc: *RunContainer) u64 {
+    var count: u64 = 0;
+    for (ac.values[0..ac.cardinality]) |v| {
+        if (rc.contains(v)) count += 1;
+    }
+    return count;
+}
+
+fn bitsetIntersectBitsetCard(a: *BitsetContainer, b: *BitsetContainer) u64 {
+    const VEC_SIZE = 8;
+    const vec_count = 1024 / VEC_SIZE;
+    var card: u64 = 0;
+    for (0..vec_count) |i| {
+        const base = i * VEC_SIZE;
+        const va: @Vector(VEC_SIZE, u64) = a.words[base..][0..VEC_SIZE].*;
+        const vb: @Vector(VEC_SIZE, u64) = b.words[base..][0..VEC_SIZE].*;
+        const result = va & vb;
+        inline for (0..VEC_SIZE) |j| {
+            card += @popCount(result[j]);
+        }
+    }
+    return card;
+}
+
+fn bitsetIntersectRunCard(bc: *BitsetContainer, rc: *RunContainer) u64 {
+    var count: u64 = 0;
+    for (rc.runs[0..rc.n_runs]) |run| {
+        var v: u32 = run.start;
+        while (v <= run.end()) : (v += 1) {
+            if (bc.contains(@intCast(v))) count += 1;
+        }
+    }
+    return count;
+}
+
+fn runIntersectRunCard(a: *RunContainer, b: *RunContainer) u64 {
+    var i: usize = 0;
+    var j: usize = 0;
+    var count: u64 = 0;
+    while (i < a.n_runs and j < b.n_runs) {
+        const a_start = a.runs[i].start;
+        const a_end = a.runs[i].end();
+        const b_start = b.runs[j].start;
+        const b_end = b.runs[j].end();
+
+        if (a_start <= b_end and b_start <= a_end) {
+            // Overlap
+            const lo = @max(a_start, b_start);
+            const hi = @min(a_end, b_end);
+            count += @as(u64, hi - lo) + 1;
+        }
+
+        if (a_end <= b_end) i += 1 else j += 1;
+    }
+    return count;
+}
+
+// Intersects (early-exit) implementations
+
+fn arrayIntersectsArray(a: *ArrayContainer, b: *ArrayContainer) bool {
+    const small = if (a.cardinality <= b.cardinality)
+        a.values[0..a.cardinality]
+    else
+        b.values[0..b.cardinality];
+    const big = if (a.cardinality <= b.cardinality)
+        b.values[0..b.cardinality]
+    else
+        a.values[0..a.cardinality];
+
+    var lo: usize = 0;
+    for (small) |val| {
+        lo = gallopSearch(big, val, lo);
+        if (lo < big.len and big[lo] == val) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn arrayIntersectsBitset(ac: *ArrayContainer, bc: *BitsetContainer) bool {
+    for (ac.values[0..ac.cardinality]) |v| {
+        if (bc.contains(v)) return true;
+    }
+    return false;
+}
+
+fn arrayIntersectsRun(ac: *ArrayContainer, rc: *RunContainer) bool {
+    for (ac.values[0..ac.cardinality]) |v| {
+        if (rc.contains(v)) return true;
+    }
+    return false;
+}
+
+fn bitsetIntersectsBitset(a: *BitsetContainer, b: *BitsetContainer) bool {
+    for (a.words[0..1024], b.words[0..1024]) |wa, wb| {
+        if (wa & wb != 0) return true;
+    }
+    return false;
+}
+
+fn bitsetIntersectsRun(bc: *BitsetContainer, rc: *RunContainer) bool {
+    for (rc.runs[0..rc.n_runs]) |run| {
+        var v: u32 = run.start;
+        while (v <= run.end()) : (v += 1) {
+            if (bc.contains(@intCast(v))) return true;
+        }
+    }
+    return false;
+}
+
+fn runIntersectsRun(a: *RunContainer, b: *RunContainer) bool {
+    var i: usize = 0;
+    var j: usize = 0;
+    while (i < a.n_runs and j < b.n_runs) {
+        const a_start = a.runs[i].start;
+        const a_end = a.runs[i].end();
+        const b_start = b.runs[j].start;
+        const b_end = b.runs[j].end();
+
+        if (a_start <= b_end and b_start <= a_end) {
+            return true; // Overlap found
+        }
+
+        if (a_end <= b_end) i += 1 else j += 1;
+    }
+    return false;
 }
 
 // ============================================================================
@@ -1075,4 +1324,36 @@ test "bitsetToArray with full word (regression: u6 overflow)" {
     for (0..64) |i| {
         try std.testing.expectEqual(@as(u16, @intCast(i)), ac.values[i]);
     }
+}
+
+test "galloping: skewed array intersection" {
+    const allocator = std.testing.allocator;
+
+    // Big array: 0, 1, 2, ..., 3999 (4000 elements)
+    const big = try ArrayContainer.init(allocator, 4000);
+    defer big.deinit(allocator);
+    for (0..4000) |i| {
+        big.values[i] = @intCast(i);
+    }
+    big.cardinality = 4000;
+
+    // Small array: 100, 500, 999, 2000, 5000 (5 elements, one outside big's range)
+    const small = try ArrayContainer.init(allocator, 5);
+    defer small.deinit(allocator);
+    small.values[0] = 100;
+    small.values[1] = 500;
+    small.values[2] = 999;
+    small.values[3] = 2000;
+    small.values[4] = 5000; // not in big
+    small.cardinality = 5;
+
+    const result = try arrayIntersectArray(allocator, small, big);
+    defer result.array.deinit(allocator);
+
+    // Should find 4 matches (100, 500, 999, 2000), not 5000
+    try std.testing.expectEqual(@as(u16, 4), result.array.cardinality);
+    try std.testing.expectEqual(@as(u16, 100), result.array.values[0]);
+    try std.testing.expectEqual(@as(u16, 500), result.array.values[1]);
+    try std.testing.expectEqual(@as(u16, 999), result.array.values[2]);
+    try std.testing.expectEqual(@as(u16, 2000), result.array.values[3]);
 }

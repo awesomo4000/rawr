@@ -617,6 +617,52 @@ pub const RoaringBitmap = struct {
         return result;
     }
 
+    /// Compute |self ∩ other| without allocating a result bitmap.
+    /// Useful for join selectivity estimation in query planning.
+    pub fn andCardinality(self: *const Self, other: *const Self) u64 {
+        var total: u64 = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < self.size and j < other.size) {
+            if (self.keys[i] < other.keys[j]) {
+                i += 1;
+            } else if (self.keys[i] > other.keys[j]) {
+                j += 1;
+            } else {
+                total += ops.containerIntersectionCardinality(
+                    Container.fromTagged(self.containers[i]),
+                    Container.fromTagged(other.containers[j]),
+                );
+                i += 1;
+                j += 1;
+            }
+        }
+        return total;
+    }
+
+    /// Return true if self and other have any values in common.
+    /// Early-exit: stops at the first match. Much cheaper than andCardinality() > 0
+    /// for sparse intersections.
+    pub fn intersects(self: *const Self, other: *const Self) bool {
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < self.size and j < other.size) {
+            if (self.keys[i] < other.keys[j]) {
+                i += 1;
+            } else if (self.keys[i] > other.keys[j]) {
+                j += 1;
+            } else {
+                if (ops.containerIntersects(
+                    Container.fromTagged(self.containers[i]),
+                    Container.fromTagged(other.containers[j]),
+                )) return true;
+                i += 1;
+                j += 1;
+            }
+        }
+        return false;
+    }
+
     /// Return a new bitmap that is the difference (AND NOT) of self and other.
     pub fn bitwiseDifference(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
         var result = try Self.init(allocator);
@@ -712,6 +758,7 @@ pub const RoaringBitmap = struct {
         const new_keys = try self.allocator.alloc(u16, max_size);
         errdefer self.allocator.free(new_keys);
         const new_containers = try self.allocator.alloc(TaggedPtr, max_size);
+        errdefer self.allocator.free(new_containers);
 
         // Track which containers are newly allocated (not moved from self)
         // On error, we must free these to avoid leaks
@@ -729,7 +776,6 @@ pub const RoaringBitmap = struct {
                     Container.fromTagged(tp).deinit(self.allocator);
                 }
             }
-            self.allocator.free(new_containers);
         }
 
         while (i < self.size and j < other.size) {
@@ -923,6 +969,107 @@ pub const RoaringBitmap = struct {
         }
 
         self.size = @intCast(write_idx);
+    }
+
+    /// In-place XOR: self ^= other. Modifies self to contain symmetric difference.
+    pub fn bitwiseXorInPlace(self: *Self, other: *const Self) !void {
+        if (other.size == 0) return;
+
+        // Pre-merge into new arrays (XOR can add new keys from other)
+        const max_size = self.size + other.size;
+        const new_keys = try self.allocator.alloc(u16, max_size);
+        errdefer self.allocator.free(new_keys);
+        const new_containers = try self.allocator.alloc(TaggedPtr, max_size);
+        errdefer self.allocator.free(new_containers);
+
+        // Track which containers are newly allocated
+        const owned = try self.allocator.alloc(bool, max_size);
+        defer self.allocator.free(owned);
+
+        var i: usize = 0; // index into self
+        var j: usize = 0; // index into other
+        var k: usize = 0; // index into new arrays
+
+        errdefer {
+            for (new_containers[0..k], owned[0..k]) |tp, is_owned| {
+                if (is_owned) {
+                    Container.fromTagged(tp).deinit(self.allocator);
+                }
+            }
+        }
+
+        while (i < self.size and j < other.size) {
+            const key_a = self.keys[i];
+            const key_b = other.keys[j];
+
+            if (key_a < key_b) {
+                // Key only in self - keep it
+                new_keys[k] = key_a;
+                new_containers[k] = self.containers[i];
+                owned[k] = false;
+                k += 1;
+                i += 1;
+            } else if (key_a > key_b) {
+                // Key only in other - clone it
+                new_keys[k] = key_b;
+                new_containers[k] = try cloneContainer(self.allocator, other.containers[j]);
+                owned[k] = true;
+                k += 1;
+                j += 1;
+            } else {
+                // Key in both - XOR containers
+                const old_container = Container.fromTagged(self.containers[i]);
+                const other_container = Container.fromTagged(other.containers[j]);
+                const result = try ops.containerXor(self.allocator, old_container, other_container);
+
+                // Free old container
+                old_container.deinit(self.allocator);
+
+                // Only keep non-empty results
+                if (result.getCardinality() > 0) {
+                    new_keys[k] = key_a;
+                    new_containers[k] = result.toTagged();
+                    owned[k] = true;
+                    k += 1;
+                } else {
+                    result.deinit(self.allocator);
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+
+        // Copy remaining from self (not owned)
+        while (i < self.size) : (i += 1) {
+            new_keys[k] = self.keys[i];
+            new_containers[k] = self.containers[i];
+            owned[k] = false;
+            k += 1;
+        }
+
+        // Clone remaining from other (owned)
+        while (j < other.size) : (j += 1) {
+            new_keys[k] = other.keys[j];
+            new_containers[k] = try cloneContainer(self.allocator, other.containers[j]);
+            owned[k] = true;
+            k += 1;
+        }
+
+        // Success - free old arrays
+        self.allocator.free(self.keys[0..self.capacity]);
+        self.allocator.free(self.containers[0..self.capacity]);
+
+        // Right-size the arrays if there's significant slack
+        if (k < max_size) {
+            self.keys = self.allocator.realloc(new_keys, k) catch new_keys;
+            self.containers = self.allocator.realloc(new_containers, k) catch new_containers;
+            self.capacity = @intCast(k);
+        } else {
+            self.keys = new_keys;
+            self.containers = new_containers;
+            self.capacity = @intCast(max_size);
+        }
+        self.size = @intCast(k);
     }
 
     // ========================================================================
@@ -2175,4 +2322,89 @@ test "OwnedBitmap iterator" {
     try std.testing.expectEqual(@as(?u32, 20), iter.next());
     try std.testing.expectEqual(@as(?u32, 30), iter.next());
     try std.testing.expectEqual(@as(?u32, null), iter.next());
+}
+
+test "andCardinality matches bitwiseAnd().cardinality()" {
+    const allocator = std.testing.allocator;
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    // Build overlapping bitmaps across multiple containers
+    _ = try a.addRange(0, 1000);
+    _ = try a.addRange(100_000, 101_000);
+    _ = try b.addRange(500, 1500);
+    _ = try b.addRange(100_500, 101_500);
+
+    const card_fast = a.andCardinality(&b);
+    var intersection = try a.bitwiseAnd(allocator, &b);
+    defer intersection.deinit();
+    try std.testing.expectEqual(card_fast, intersection.cardinality());
+}
+
+test "intersects" {
+    const allocator = std.testing.allocator;
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    // Non-overlapping (different chunks)
+    _ = try a.add(100);
+    _ = try b.add(100_000);
+    try std.testing.expect(!a.intersects(&b));
+
+    // Add overlap
+    _ = try b.add(100);
+    try std.testing.expect(a.intersects(&b));
+}
+
+test "intersects with empty" {
+    const allocator = std.testing.allocator;
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var empty = try RoaringBitmap.init(allocator);
+    defer empty.deinit();
+
+    _ = try a.add(42);
+    try std.testing.expect(!a.intersects(&empty));
+    try std.testing.expect(!empty.intersects(&a));
+}
+
+test "bitwiseXorInPlace matches bitwiseXor" {
+    const allocator = std.testing.allocator;
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    _ = try a.addRange(0, 100);
+    _ = try a.add(200);
+    _ = try b.addRange(50, 150);
+    _ = try b.add(300);
+
+    var a_copy = try a.clone(allocator);
+    defer a_copy.deinit();
+    try a_copy.bitwiseXorInPlace(&b);
+
+    var expected = try a.bitwiseXor(allocator, &b);
+    defer expected.deinit();
+
+    try std.testing.expect(a_copy.equals(&expected));
+}
+
+test "bitwiseXorInPlace removes empty containers" {
+    const allocator = std.testing.allocator;
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    // Same values in both - XOR should produce empty
+    _ = try a.add(42);
+    _ = try b.add(42);
+
+    try a.bitwiseXorInPlace(&b);
+    try std.testing.expectEqual(@as(u64, 0), a.cardinality());
 }
