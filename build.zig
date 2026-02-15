@@ -4,8 +4,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Library module
-    const lib_mod = b.createModule(.{
+    // Library module (exposed for package consumers)
+    const lib_mod = b.addModule("rawr", .{
         .root_source_file = b.path("src/roaring.zig"),
         .target = target,
         .optimize = optimize,

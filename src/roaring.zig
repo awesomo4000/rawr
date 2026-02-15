@@ -4,6 +4,7 @@
 //! Each chunk uses the optimal container type based on cardinality.
 
 pub const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
+pub const OwnedBitmap = @import("bitmap.zig").OwnedBitmap;
 pub const FrozenBitmap = @import("frozen.zig").FrozenBitmap;
 pub const ArrayContainer = @import("array_container.zig").ArrayContainer;
 pub const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
