@@ -16,6 +16,21 @@ Primary files:
 
 ## Current State
 
+Baseline full-repo grep:
+
+```bash
+rg -n "@cImport" .
+```
+
+Current matches:
+
+- `src/validate_croaring.zig`
+- `src/bench_croaring.zig`
+- `vendor/croaring_wrapper.h` comment text only
+- `docs/roaring-zig-architecture.md` stale documentation example
+- `specs/00-upgrade-to-zig-0.16.md` and this spec
+- older specs under `specs/todo/` and `specs/done/`
+
 `src/validate_croaring.zig` and `src/bench_croaring.zig` both do:
 
 ```zig
@@ -53,13 +68,21 @@ validation/benchmark targets and should not block the pure Zig library upgrade.
 ```bash
 zig build validate
 zig build bench-compare
+rg -n "@cImport" .
 ```
+
+The final full-repo grep must show no remaining source call sites. Any remaining
+matches must be intentional migration/spec history or documentation references,
+not active Zig code. Prefer updating stale docs/comments so the only matches are
+in specs that explicitly discuss the migration.
 
 ## Checklist
 
 - [ ] Add translate-c module import for CRoaring validation
 - [ ] Add translate-c module import for CRoaring benchmark comparison
 - [ ] Replace `@cImport` in Zig source
+- [ ] `rg -n "@cImport" .` has been reviewed across the whole repo
+- [ ] Full-repo grep confirms zero remaining active Zig `@cImport` call sites
 - [ ] Keep C source compile flags and libc linkage intact
 - [ ] `zig build validate` passes
 - [ ] `zig build bench-compare` builds
