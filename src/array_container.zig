@@ -131,8 +131,7 @@ pub const ArrayContainer = struct {
 
         // Shift right to make room
         if (pos < self.cardinality) {
-            std.mem.copyBackwards(
-                u16,
+            @memmove(
                 self.values[pos + 1 .. self.cardinality + 1],
                 self.values[pos..self.cardinality],
             );
@@ -149,8 +148,7 @@ pub const ArrayContainer = struct {
 
         // Shift left to fill gap
         if (pos + 1 < self.cardinality) {
-            std.mem.copyForwards(
-                u16,
+            @memmove(
                 self.values[pos .. self.cardinality - 1],
                 self.values[pos + 1 .. self.cardinality],
             );
@@ -208,15 +206,11 @@ pub const ArrayContainer = struct {
         // Ensure buffer has room for max_card elements (one possible realloc)
         try self.ensureCapacity(allocator, @intCast(max_card));
 
-        // Move self's values to the END of the buffer using copyBackwards
+        // Move self's values to the END of the buffer.
         // Before: [A B C D . . . .]  (self has 4 values, capacity for 8)
         // After:  [. . . . A B C D]
         const self_start: usize = max_card - self.cardinality;
-        std.mem.copyBackwards(
-            u16,
-            self.values[self_start..max_card],
-            self.values[0..self.cardinality],
-        );
+        @memmove(self.values[self_start..max_card], self.values[0..self.cardinality]);
 
         // Forward merge from self (now at end) and other (separate buffer)
         // Write cursor k is always <= read cursor si, so no overwrite hazard

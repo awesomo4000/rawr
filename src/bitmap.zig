@@ -218,8 +218,8 @@ pub const RoaringBitmap = struct {
 
         // Shift right to make room
         if (insert_idx < self.size) {
-            std.mem.copyBackwards(u16, self.keys[insert_idx + 1 .. self.size + 1], self.keys[insert_idx..self.size]);
-            std.mem.copyBackwards(TaggedPtr, self.containers[insert_idx + 1 .. self.size + 1], self.containers[insert_idx..self.size]);
+            @memmove(self.keys[insert_idx + 1 .. self.size + 1], self.keys[insert_idx..self.size]);
+            @memmove(self.containers[insert_idx + 1 .. self.size + 1], self.containers[insert_idx..self.size]);
         }
 
         // A contiguous range is always best as a run container (4 bytes per run)
@@ -435,8 +435,8 @@ pub const RoaringBitmap = struct {
 
         // Shift right to make room
         if (idx < self.size) {
-            std.mem.copyBackwards(u16, self.keys[idx + 1 .. self.size + 1], self.keys[idx..self.size]);
-            std.mem.copyBackwards(TaggedPtr, self.containers[idx + 1 .. self.size + 1], self.containers[idx..self.size]);
+            @memmove(self.keys[idx + 1 .. self.size + 1], self.keys[idx..self.size]);
+            @memmove(self.containers[idx + 1 .. self.size + 1], self.containers[idx..self.size]);
         }
 
         // Create new array container with initial value
@@ -488,8 +488,8 @@ pub const RoaringBitmap = struct {
 
         // Shift left
         if (idx + 1 < self.size) {
-            std.mem.copyForwards(u16, self.keys[idx .. self.size - 1], self.keys[idx + 1 .. self.size]);
-            std.mem.copyForwards(TaggedPtr, self.containers[idx .. self.size - 1], self.containers[idx + 1 .. self.size]);
+            @memmove(self.keys[idx .. self.size - 1], self.keys[idx + 1 .. self.size]);
+            @memmove(self.containers[idx .. self.size - 1], self.containers[idx + 1 .. self.size]);
         }
         self.size -= 1;
     }

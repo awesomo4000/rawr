@@ -155,8 +155,7 @@ pub const RunContainer = struct {
 
         // Shift runs to make room
         if (idx < self.n_runs) {
-            std.mem.copyBackwards(
-                RunPair,
+            @memmove(
                 self.runs[idx + 1 .. self.n_runs + 1],
                 self.runs[idx..self.n_runs],
             );
@@ -175,8 +174,7 @@ pub const RunContainer = struct {
 
         // Shift remaining runs left
         if (idx + 2 < self.n_runs) {
-            std.mem.copyForwards(
-                RunPair,
+            @memmove(
                 self.runs[idx + 1 .. self.n_runs - 1],
                 self.runs[idx + 2 .. self.n_runs],
             );
@@ -244,8 +242,7 @@ pub const RunContainer = struct {
             try self.ensureCapacity(allocator, self.n_runs + 1);
             // Shift runs right
             if (merge_start < self.n_runs) {
-                std.mem.copyBackwards(
-                    RunPair,
+                @memmove(
                     self.runs[merge_start + 1 .. self.n_runs + 1],
                     self.runs[merge_start..self.n_runs],
                 );
@@ -258,8 +255,7 @@ pub const RunContainer = struct {
             // Shift remaining runs left to fill gap
             if (runs_removed > 1) {
                 const remaining = self.n_runs - merge_end;
-                std.mem.copyForwards(
-                    RunPair,
+                @memmove(
                     self.runs[merge_start + 1 ..][0..remaining],
                     self.runs[merge_end..self.n_runs],
                 );
@@ -285,8 +281,7 @@ pub const RunContainer = struct {
         if (run.length == 0) {
             // Single element run, remove it entirely
             if (idx + 1 < self.n_runs) {
-                std.mem.copyForwards(
-                    RunPair,
+                @memmove(
                     self.runs[idx .. self.n_runs - 1],
                     self.runs[idx + 1 .. self.n_runs],
                 );
@@ -309,8 +304,7 @@ pub const RunContainer = struct {
 
             // Insert new run after
             if (idx + 1 < self.n_runs) {
-                std.mem.copyBackwards(
-                    RunPair,
+                @memmove(
                     self.runs[idx + 2 .. self.n_runs + 1],
                     self.runs[idx + 1 .. self.n_runs],
                 );
