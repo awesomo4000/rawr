@@ -2,7 +2,7 @@ const std = @import("std");
 const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
 const FrozenBitmap = rawr.FrozenBitmap;
-const c = @cImport(@cInclude("croaring_wrapper.h"));
+const c = @import("c");
 
 const allocator = std.heap.c_allocator;
 

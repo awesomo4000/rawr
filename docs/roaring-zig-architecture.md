@@ -696,7 +696,7 @@ pub fn main() !void {
     try bm.shrinkToFit();     // release excess capacity
 
     // ── Debug ──
-    bm.debugPrint(std.io.getStdErr().writer());
+    // Debug output can be written through a std.Io.Writer.
 
     _ = present;
     _ = empty;
@@ -826,7 +826,7 @@ pub fn serialize(self: *const RoaringBitmap, allocator: std.mem.Allocator) ![]u8
     const size_bytes = self.portableSizeInBytes();
     var buf = try allocator.alloc(u8, size_bytes);
 
-    var writer = std.io.fixedBufferStream(buf).writer();
+    var writer = std.Io.Writer.fixed(buf);
 
     const has_runs = self.hasRunContainers();
     if (has_runs) {
@@ -854,7 +854,7 @@ pub fn serialize(self: *const RoaringBitmap, allocator: std.mem.Allocator) ![]u8
 }
 
 pub fn deserialize(allocator: std.mem.Allocator, data: []const u8) !RoaringBitmap {
-    var reader = std.io.fixedBufferStream(data).reader();
+    var reader = std.Io.Reader.fixed(data);
     // Read cookie, determine format, parse headers, load containers...
     // Validate structural invariants before returning.
     _ = reader;
@@ -1029,13 +1029,11 @@ For each dataset, measure:
 
 ### 8.4 Head-to-Head vs CRoaring
 
-The `tools/compare_croaring.zig` tool links against CRoaring via `@cImport` and runs identical operations on identical data:
+The `tools/compare_croaring.zig` tool links against CRoaring via a build-system translated C module and runs identical operations on identical data:
 
 ```zig
 // compare_croaring.zig
-const c = @cImport({
-    @cInclude("roaring/roaring.h");
-});
+const c = @import("c");
 
 fn benchmarkBoth(dataset: []const []const u32) void {
     // ZigRoar

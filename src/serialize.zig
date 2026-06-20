@@ -68,10 +68,9 @@ pub fn serialize(bm: *const RoaringBitmap, allocator: std.mem.Allocator) ![]u8 {
     const buf = try allocator.alloc(u8, size_bytes);
     errdefer allocator.free(buf);
 
-    var stream = std.io.fixedBufferStream(buf);
-    const writer = stream.writer();
+    var writer = std.Io.Writer.fixed(buf);
 
-    try serializeToWriter(bm, writer);
+    try serializeToWriter(bm, &writer);
 
     return buf;
 }
@@ -178,10 +177,9 @@ pub fn serializeToWriter(bm: *const RoaringBitmap, writer: anytype) !void {
 pub fn deserialize(allocator: std.mem.Allocator, data: []const u8) !RoaringBitmap {
     if (data.len < 4) return error.InvalidFormat;
 
-    var stream = std.io.fixedBufferStream(data);
-    const reader = stream.reader();
+    var reader = std.Io.Reader.fixed(data);
 
-    return deserializeFromReader(allocator, reader, data.len);
+    return deserializeFromReader(allocator, &reader, data.len);
 }
 
 /// Deserialize from any reader.
@@ -190,7 +188,7 @@ pub fn deserialize(allocator: std.mem.Allocator, data: []const u8) !RoaringBitma
 pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data_len: usize) !RoaringBitmap {
     _ = data_len;
 
-    const cookie = try reader.readInt(u32, .little);
+    const cookie = try reader.takeInt(u32, .little);
 
     var size: u32 = undefined;
     var has_runs = false;
@@ -205,11 +203,10 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
         // Read run container bitset
         const bitset_bytes = (size + 7) / 8;
         run_bitset = try allocator.alloc(u8, bitset_bytes);
-        const bytes_read = try reader.readAll(run_bitset.?);
-        if (bytes_read != bitset_bytes) return error.InvalidFormat;
+        reader.readSliceAll(run_bitset.?) catch return error.InvalidFormat;
     } else if (cookie == fmt.SERIAL_COOKIE_NO_RUNCONTAINER) {
         // Format without run containers
-        size = try reader.readInt(u32, .little);
+        size = try reader.takeInt(u32, .little);
     } else {
         return error.InvalidFormat;
     }
@@ -229,8 +226,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
 
     const desc_buf = try allocator.alloc(u16, size * 2);
     defer allocator.free(desc_buf);
-    const bytes_read = try reader.readAll(std.mem.sliceAsBytes(desc_buf));
-    if (bytes_read != size * 4) return error.InvalidFormat;
+    reader.readSliceAll(std.mem.sliceAsBytes(desc_buf)) catch return error.InvalidFormat;
 
     for (0..size) |i| {
         result.keys[i] = desc_buf[i * 2];
@@ -241,7 +237,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
     // - Always for no-run format (RoaringFormatSpec requirement)
     // - For run format only when size >= NO_OFFSET_THRESHOLD
     if (!has_runs or size >= fmt.NO_OFFSET_THRESHOLD) {
-        try reader.skipBytes(size * 4, .{});
+        reader.discardAll(size * 4) catch return error.InvalidFormat;
     }
 
     // Read container data (bulk read - assumes little-endian, checked at comptime)
@@ -256,13 +252,11 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
         if (is_run) {
             // Run container: n_runs is in the data section prefix, not the header
             // (header stores cardinality-1 which is sum of run lengths, not n_runs)
-            const n_runs = try reader.readInt(u16, .little);
+            const n_runs = try reader.takeInt(u16, .little);
             const rc = try RunContainer.init(allocator, n_runs);
             errdefer rc.deinit(allocator);
 
-            const run_bytes = @as(usize, n_runs) * 4;
-            const n = try reader.readAll(std.mem.sliceAsBytes(rc.runs[0..n_runs]));
-            if (n != run_bytes) return error.InvalidFormat;
+            reader.readSliceAll(std.mem.sliceAsBytes(rc.runs[0..n_runs])) catch return error.InvalidFormat;
             rc.n_runs = n_runs;
             rc.cardinality = -1;
             result.containers[i] = TaggedPtr.initRun(rc);
@@ -271,8 +265,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             const bc = try BitsetContainer.init(allocator);
             errdefer bc.deinit(allocator);
 
-            const n = try reader.readAll(std.mem.sliceAsBytes(bc.words));
-            if (n != BitsetContainer.SIZE_BYTES) return error.InvalidFormat;
+            reader.readSliceAll(std.mem.sliceAsBytes(bc.words)) catch return error.InvalidFormat;
             bc.cardinality = @intCast(card);
             result.containers[i] = TaggedPtr.initBitset(bc);
         } else {
@@ -280,9 +273,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             const ac = try ArrayContainer.init(allocator, @intCast(card));
             errdefer ac.deinit(allocator);
 
-            const arr_bytes = card * 2;
-            const n = try reader.readAll(std.mem.sliceAsBytes(ac.values[0..card]));
-            if (n != arr_bytes) return error.InvalidFormat;
+            reader.readSliceAll(std.mem.sliceAsBytes(ac.values[0..card])) catch return error.InvalidFormat;
             ac.cardinality = @intCast(card);
             result.containers[i] = TaggedPtr.initArray(ac);
         }

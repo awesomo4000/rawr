@@ -51,7 +51,7 @@ zig build test
 
 ## Checklist
 
-- [ ] Run `zig build test` after `00-01`
-- [ ] Fix remaining pure library/test Zig 0.16.0 compile failures
-- [ ] Preserve public API behavior
-- [ ] `zig build test` passes
+- [x] Run `zig build test` after `00-01`
+- [x] Fix remaining pure library/test Zig 0.16.0 compile failures
+- [x] Preserve public API behavior
+- [x] `zig build test` passes

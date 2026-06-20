@@ -14,7 +14,7 @@ Out of scope for now: AFL/libFuzzer continuous fuzzing, untrusted/malformed inpu
 
 ## Definitions
 
-- **Oracle**: CRoaring, via the existing `vendor/croaring_wrapper.h` `@cImport`. Extend the wrapper header as needed (see Task 0).
+- **Oracle**: CRoaring, via the translated `vendor/croaring_wrapper.h` binding. Extend the wrapper header as needed (see Task 0).
 - **Differential check**: perform the same operation in `rawr` and CRoaring on equal inputs, then assert the results agree on **all** of:
   1. byte-identical portable serialization (`serialize` vs `roaring_bitmap_portable_serialize`),
   2. equal cardinality,
@@ -239,7 +239,7 @@ const difftest_step = b.step("difftest", "Differential tests vs CRoaring");
 difftest_step.dependOn(&run_difftest.step);
 ```
 
-`src/test_gen.zig` is imported by both the `difftest` exe and (via the test build) `property_tests.zig`. Make sure it compiles in both the test and the CRoaring-linked executable contexts — keep the CRoaring `@cImport` out of `test_gen.zig` itself (generator stays pure rawr; only `diff_test.zig` and
+`src/test_gen.zig` is imported by both the `difftest` exe and (via the test build) `property_tests.zig`. Make sure it compiles in both the test and the CRoaring-linked executable contexts — keep CRoaring bindings out of `test_gen.zig` itself (generator stays pure rawr; only `diff_test.zig` and
 `validate_croaring.zig` import CRoaring). `buildOracle` therefore lives in `diff_test.zig`, not `test_gen.zig`.
 
 ---

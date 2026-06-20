@@ -75,14 +75,14 @@ const bench_cr_step = b.step("bench-compare", "Build CRoaring comparison benchma
 bench_cr_step.dependOn(&b.addInstallArtifact(bench_cr_exe, .{}).step);
 ```
 
-**Note on `@cImport`:** CRoaring's header has heavy preprocessor usage. If
-`@cImport(@cInclude("roaring.h"))` fails, write a thin `vendor/croaring_wrapper.h`
+**Note on C bindings:** CRoaring's header has heavy preprocessor usage. If
+direct translation of `roaring.h` fails, write a thin `vendor/croaring_wrapper.h`
 that includes only the functions you need:
 
 ```c
 // croaring_wrapper.h
 #include "roaring.h"
-// If @cImport chokes, trim this to just the function declarations you use.
+// If direct translation chokes, trim this to just the function declarations you use.
 ```
 
 ### File structure
@@ -144,7 +144,7 @@ and verifies:
 const std = @import("std");
 const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
-const c = @cImport(@cInclude("roaring.h"));
+const c = @import("c");
 
 const allocator = std.heap.c_allocator;
 

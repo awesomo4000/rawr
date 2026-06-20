@@ -119,7 +119,7 @@ pre-allocate a `FixedBufferAllocator` and reuse it across iterations.
 
 ## Building
 
-Requires Zig 0.15.2+.
+Requires Zig 0.16.0+.
 
 ```bash
 zig build              # build library

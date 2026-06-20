@@ -205,7 +205,7 @@ Wire-format compatible with CRoaring (RoaringFormatSpec). Bitmaps serialized by 
 const bytes = try bm.serialize(allocator);
 defer allocator.free(bytes);
 
-// Serialize to any std.io writer
+// Serialize to any std.Io.Writer-compatible writer
 try bm.serializeToWriter(writer);
 
 // Check size before allocating

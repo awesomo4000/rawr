@@ -65,8 +65,8 @@ executables is enough unless compile errors only appear at runtime.
 
 ## Checklist
 
-- [ ] Update executable `main` signatures where runtime APIs are needed
-- [ ] Replace `std.process.args()` usage
-- [ ] Replace removed `std.time` timer/timestamp usage
-- [ ] Preserve benchmark output semantics
-- [ ] Benchmark and validation executables build
+- [x] Update executable `main` signatures where runtime APIs are needed
+- [x] Replace `std.process.args()` usage
+- [x] Replace removed `std.time` timer/timestamp usage
+- [x] Preserve benchmark output semantics
+- [x] Benchmark and validation executables build

@@ -66,6 +66,13 @@ pub fn build(b: *std.Build) void {
         .flags = &.{ "-std=c11", "-O3", "-DNDEBUG" },
     });
     validate_mod.link_libc = true;
+    const validate_c = b.addTranslateC(.{
+        .root_source_file = b.path("vendor/croaring_wrapper.h"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    validate_c.addIncludePath(b.path("vendor/"));
+    validate_mod.addImport("c", validate_c.createModule());
 
     const validate_exe = b.addExecutable(.{
         .name = "validate_croaring",
@@ -90,6 +97,13 @@ pub fn build(b: *std.Build) void {
         .flags = &.{ "-std=c11", "-O3", "-DNDEBUG" },
     });
     bench_cr_mod.link_libc = true;
+    const bench_cr_c = b.addTranslateC(.{
+        .root_source_file = b.path("vendor/croaring_wrapper.h"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_cr_c.addIncludePath(b.path("vendor/"));
+    bench_cr_mod.addImport("c", bench_cr_c.createModule());
 
     const bench_cr_exe = b.addExecutable(.{
         .name = "bench_croaring",

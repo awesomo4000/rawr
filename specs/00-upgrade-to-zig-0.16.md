@@ -17,11 +17,11 @@ This comes from removed `std.io.fixedBufferStream`.
 ## Current Findings
 
 - `build.zig` already uses modern `root_module` / `b.createModule` patterns.
-- `build.zig.zon` still declares `minimum_zig_version = "0.15.2"`.
+- `build.zig.zon` declared `minimum_zig_version = "0.15.2"` before this migration.
 - Core data structures are mostly allocator-only and should not need broad API redesign.
 - Serialization is the first blocker for `zig build test`.
 - Benchmark/validation executables still use older process/time/C-import patterns.
-- `@cImport` still works for now but is deprecated in Zig 0.16.0; migrate it as part of this upgrade rather than leaving a known warning path.
+- Zig's legacy C import builtin still works for now but is deprecated in Zig 0.16.0; migrate it as part of this upgrade rather than leaving a known warning path.
 
 ## Chunk Specs
 
@@ -50,8 +50,8 @@ Work through these in order:
 
 ## Checklist
 
-- [ ] Complete `00-01` serialization I/O API migration
-- [ ] Complete `00-02` remaining library/test compatibility
-- [ ] Complete `00-03` executable entrypoint/time/args migration
-- [ ] Complete `00-04` CRoaring interop migration
-- [ ] Complete `00-05` metadata/docs/final validation pass
+- [x] Complete `00-01` serialization I/O API migration
+- [x] Complete `00-02` remaining library/test compatibility
+- [x] Complete `00-03` executable entrypoint/time/args migration
+- [x] Complete `00-04` CRoaring interop migration
+- [x] Complete `00-05` metadata/docs/final validation pass

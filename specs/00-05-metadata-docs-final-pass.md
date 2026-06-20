@@ -68,15 +68,15 @@ zig build test -Doptimize=ReleaseSafe
 
 ## Checklist
 
-- [ ] Update `minimum_zig_version`
-- [ ] Update README version requirement
-- [ ] Remove stale `std.io` documentation references
-- [ ] Keep API examples aligned with Zig 0.16.0
-- [ ] `zig build` passes
-- [ ] `zig build test` passes
-- [ ] `zig build validate` passes
-- [ ] `zig build bench` builds
-- [ ] `zig build bench-compare` builds
-- [ ] `zig build bench-alloc` builds
-- [ ] Optimized test builds run or skipped with a documented reason
-- [ ] Main spec checklist updated
+- [x] Update `minimum_zig_version`
+- [x] Update README version requirement
+- [x] Remove stale `std.io` documentation references
+- [x] Keep API examples aligned with Zig 0.16.0
+- [x] `zig build` passes
+- [x] `zig build test` passes
+- [x] `zig build validate` passes
+- [x] `zig build bench` builds
+- [x] `zig build bench-compare` builds
+- [x] `zig build bench-alloc` builds
+- [x] Optimized test builds run or skipped with a documented reason
+- [x] Main spec checklist updated

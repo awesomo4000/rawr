@@ -51,8 +51,8 @@ The chunk is complete when the serialization fixed-buffer API failure is gone.
 
 ## Checklist
 
-- [ ] Replace `std.io.fixedBufferStream` in serialization
-- [ ] Update reader method names for Zig 0.16.0
-- [ ] Keep `serializeToWriter` and `deserializeFromReader` usable by wrappers
-- [ ] `zig build test` progresses past serialization I/O failures
-- [ ] Serialization round-trip tests still pass once the library compiles
+- [x] Replace `std.io.fixedBufferStream` in serialization
+- [x] Update reader method names for Zig 0.16.0
+- [x] Keep `serializeToWriter` and `deserializeFromReader` usable by wrappers
+- [x] `zig build test` progresses past serialization I/O failures
+- [x] Serialization round-trip tests still pass once the library compiles

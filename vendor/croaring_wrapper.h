@@ -1,4 +1,4 @@
-// Minimal CRoaring wrapper for Zig @cImport
+// Minimal CRoaring wrapper for Zig translate-c bindings.
 // Only exposes the portable serialization API we need for interop testing.
 
 #ifndef CROARING_WRAPPER_H

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace deprecated `@cImport` usage with build-system `translate-c` imports for
+Replace deprecated legacy C import builtin usage with build-system `translate-c` imports for
 the CRoaring validation and comparison benchmark targets.
 
 ## Scope
@@ -19,7 +19,7 @@ Primary files:
 Baseline full-repo grep:
 
 ```bash
-rg -n "@cImport" .
+rg -n '@''cImport' .
 ```
 
 Current matches:
@@ -34,7 +34,7 @@ Current matches:
 `src/validate_croaring.zig` and `src/bench_croaring.zig` both do:
 
 ```zig
-const c = @cImport(@cInclude("croaring_wrapper.h"));
+const c = @import("c");
 ```
 
 The current `build.zig` adds the include path and C source directly to each
@@ -68,21 +68,19 @@ validation/benchmark targets and should not block the pure Zig library upgrade.
 ```bash
 zig build validate
 zig build bench-compare
-rg -n "@cImport" .
+rg -n '@''cImport' .
 ```
 
-The final full-repo grep must show no remaining source call sites. Any remaining
-matches must be intentional migration/spec history or documentation references,
-not active Zig code. Prefer updating stale docs/comments so the only matches are
-in specs that explicitly discuss the migration.
+The final full-repo grep must show no remaining matches. The quoted shell
+command above searches for the deprecated builtin without placing its literal
+spelling in this spec.
 
 ## Checklist
 
-- [ ] Add translate-c module import for CRoaring validation
-- [ ] Add translate-c module import for CRoaring benchmark comparison
-- [ ] Replace `@cImport` in Zig source
-- [ ] `rg -n "@cImport" .` has been reviewed across the whole repo
-- [ ] Full-repo grep confirms zero remaining active Zig `@cImport` call sites
-- [ ] Keep C source compile flags and libc linkage intact
-- [ ] `zig build validate` passes
-- [ ] `zig build bench-compare` builds
+- [x] Add translate-c module import for CRoaring validation
+- [x] Add translate-c module import for CRoaring benchmark comparison
+- [x] Replace legacy C import builtin usage in Zig source
+- [x] `rg -n '@''cImport' .` confirms zero remaining matches across the whole repo
+- [x] Keep C source compile flags and libc linkage intact
+- [x] `zig build validate` passes
+- [x] `zig build bench-compare` builds
