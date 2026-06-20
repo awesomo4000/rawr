@@ -1,0 +1,268 @@
+# Spec: Differential Test Suite for `rawr` (CRoaring Parity)
+
+## Goal
+
+Bring `rawr`'s correctness testing to parity with CRoaring's test suite by
+**differentially testing every operation against CRoaring as an oracle**, over
+inputs that **deliberately exercise all three container types and all
+cross-container type pairs**.
+
+The current suite proves the array-container path and the wire format are
+correct. It does **not** exercise bitset/run operands of set operations, container type transitions under operations, the mixed empty/survive container case, or in-place/allocating equivalence for AND/XOR/ANDNOT. This spec closes those gaps.
+
+Out of scope for now: AFL/libFuzzer continuous fuzzing, untrusted/malformed input hardening (`deserialize_safe`). A single optional task at the end seeds malformed-input testing cheaply, but it is not required for parity.
+
+## Definitions
+
+- **Oracle**: CRoaring, via the existing `vendor/croaring_wrapper.h` `@cImport`. Extend the wrapper header as needed (see Task 0).
+- **Differential check**: perform the same operation in `rawr` and CRoaring on equal inputs, then assert the results agree on **all** of:
+  1. byte-identical portable serialization (`serialize` vs `roaring_bitmap_portable_serialize`),
+  2. equal cardinality,
+  3. equal membership for a sampled set of probe values,
+  4. CRoaring can deserialize rawr's bytes and vice versa (round-trip). Byte-identity is the strongest signal and subsumes most of the rest, but keep the cardinality/membership asserts because they localize failures faster than a byte diff.
+
+## Existing surface (do not re-derive — use these exact names)
+
+rawr public API:
+`init, deinit, clone, add, addRange, remove, contains, cardinality, isEmpty,
+minimum, maximum, bitwiseOr, bitwiseAnd, bitwiseXor, bitwiseDifference,
+bitwiseOrInPlace, bitwiseAndInPlace, bitwiseXorInPlace,
+bitwiseDifferenceInPlace, andCardinality, intersects, runOptimize, isSubsetOf,
+equals, iterator, serialize, deserialize, serializedSizeInBytes, fromSorted,
+fromSlice`.
+
+CRoaring oracle (in wrapper, extend if missing):
+`roaring_bitmap_{create,free,copy,add,add_range,contains,get_cardinality,
+is_empty,and,or,xor,andnot,and_inplace,or_inplace,xor_inplace,andnot_inplace,
+run_optimize,portable_serialize,portable_size_in_bytes,
+portable_deserialize_safe,equals,is_subset,minimum,maximum}`.
+
+Mapping note: rawr `bitwiseDifference` ⇄ CRoaring `andnot`.
+rawr `addRange(start, end)` is **inclusive** on both ends; CRoaring
+`roaring_bitmap_add_range(min, max)` is **exclusive** on `max`. Always pass `@as(u64, end) + 1` to CRoaring. (This convention is already handled correctly in `validate_croaring.zig`; preserve it.)
+
+---
+
+## Task 0 — Extend the CRoaring wrapper
+
+`vendor/croaring_wrapper.h` currently exposes serialization + basic ops. Add any of the following that are missing, so the oracle can do every op the harness needs:
+
+```c
+roaring_bitmap_t *roaring_bitmap_andnot(const roaring_bitmap_t*, const roaring_bitmap_t*);
+void roaring_bitmap_andnot_inplace(roaring_bitmap_t*, const roaring_bitmap_t*);
+bool roaring_bitmap_equals(const roaring_bitmap_t*, const roaring_bitmap_t*);
+bool roaring_bitmap_is_subset(const roaring_bitmap_t*, const roaring_bitmap_t*);
+uint64_t roaring_bitmap_and_cardinality(const roaring_bitmap_t*, const roaring_bitmap_t*);
+bool roaring_bitmap_intersect(const roaring_bitmap_t*, const roaring_bitmap_t*);
+uint32_t roaring_bitmap_minimum(const roaring_bitmap_t*);
+uint32_t roaring_bitmap_maximum(const roaring_bitmap_t*);
+```
+
+Do **not** vendor the whole CRoaring header; keep the wrapper minimal as it is now.
+
+---
+
+## Task 1 — The container-type-aware generator (the core of this spec)
+
+Create `src/test_gen.zig`. This is the single most important piece. The current generator (`property_tests.zig: randomBitmap`) draws ~100 uniform-random `u32`s, which almost always yields only **array** containers. The new generator must be able to force **each** container type and **mixtures** within one bitmap.
+
+### Required building blocks
+
+A bitmap is built per-chunk (a chunk = one 16-bit high key = 65536 contiguous values). The generator picks, for each populated chunk, a **container profile**:
+
+| Profile        | How to fill the chunk                                              | Forces container type |
+|----------------|-------------------------------------------------------------------|-----------------------|
+| `sparse`       | N random low-16 values, N < 4096                                  | array                 |
+| `dense`        | N random low-16 values, N > 4096 (e.g. 4097–60000)               | bitset                |
+| `full`         | all 65536 values in the chunk                                     | run (after optimize) / bitset |
+| `runs`         | K disjoint consecutive ranges (e.g. 3–10 runs of length 50–2000) | run (after optimize)  |
+| `single`       | one value                                                         | array (size 1)        |
+| `boundary`     | low-16 values {0, 1, 65534, 65535}                               | array, edge offsets   |
+
+The generator API (suggested):
+
+```zig
+pub const Profile = enum { sparse, dense, full, runs, single, boundary };
+
+/// Build a bitmap with explicitly chosen container profiles per chunk.
+/// `chunks` maps a high-key -> profile. Returns a rawr bitmap AND the sorted
+/// unique value list used to build it (so the oracle can be built identically
+/// and so membership probes know ground truth).
+pub fn build(
+    allocator: Allocator,
+    rng: std.Random,
+    chunks: []const struct { key: u16, profile: Profile },
+    run_optimize: bool,
+) !struct { bm: RoaringBitmap, values: []u32 };
+
+/// Build an oracle CRoaring bitmap from the same value list.
+pub fn buildOracle(values: []const u32, run_optimize: bool) *c.roaring_bitmap_t;
+
+/// Fully random bitmap: random number of chunks (0..a few hundred), each with a
+/// randomly chosen profile. Used by the randomized differential loop.
+pub fn randomMixed(allocator: Allocator, rng: std.Random, max_chunks: usize, run_optimize: bool)
+    !struct { bm: RoaringBitmap, values: []u32 };
+```
+
+### Hard requirements on the generator
+
+1. It must be possible to produce a bitmap where **chunk 0 is an array, chunk 1 is a bitset, chunk 2 is a run** in a single bitmap. This is what makes the container-dispatch loop see heterogeneous operands.
+2. `randomMixed` must, over a run of a few hundred iterations, produce **every profile** and **every adjacent profile pairing** with high probability. (Don't leave it to chance on a uniform distribution — weight `dense`/`runs`/`full` up so they actually appear; uniform-random would bury them.)
+3. The returned `values` slice is the ground-truth oracle input. Build the CRoaring bitmap from the identical slice so the two are guaranteed to start equal, independent of how rawr chose to lay out containers.
+4. Always offer a `run_optimize` toggle; run containers only exist after `runOptimize`, so half the matrix must run with it on.
+
+---
+
+## Task 2 — The differential operation harness
+
+Create `src/diff_test.zig` built as a new `zig build difftest` step (mirror the existing `validate` step in `build.zig`). It is an executable (like `validate_croaring.zig`), not a unit test, because it links CRoaring.
+
+### Core comparator
+
+```zig
+/// The single assertion used everywhere. Compares a rawr result bitmap against
+/// a CRoaring result bitmap on all four axes. Frees nothing (caller owns).
+fn assertAgree(name: []const u8, rawr_bm: *RoaringBitmap, oracle: *c.roaring_bitmap_t) !void {
+    // 1. cardinality
+    // 2. byte-identical portable serialization
+    // 3. membership probes: every value in rawr's iterator is in oracle,
+    //    and a sample of known-absent values is absent in both
+    // 4. cross-deserialize both directions, re-check cardinality + equals
+}
+```
+
+Reuse the byte-diff reporting already in `validate_croaring.zig` (`validateRoundTrip`) — first-divergence-byte printout is good, keep it.
+
+### The operation matrix
+
+For each operation, run it in rawr and in CRoaring on the **same** pair `(A, B)` and call `assertAgree` on the result. Operations:
+
+| rawr op                     | CRoaring op                       |
+|-----------------------------|-----------------------------------|
+| `bitwiseOr`                 | `roaring_bitmap_or`               |
+| `bitwiseAnd`                | `roaring_bitmap_and`              |
+| `bitwiseXor`                | `roaring_bitmap_xor`              |
+| `bitwiseDifference`         | `roaring_bitmap_andnot`           |
+| `bitwiseOrInPlace`          | `roaring_bitmap_or_inplace`       |
+| `bitwiseAndInPlace`         | `roaring_bitmap_and_inplace`      |
+| `bitwiseXorInPlace`         | `roaring_bitmap_xor_inplace`      |
+| `bitwiseDifferenceInPlace`  | `roaring_bitmap_andnot_inplace`   |
+
+For in-place ops: clone A first (`A.clone()` / `roaring_bitmap_copy`), mutate the clone, then `assertAgree`. **Also** assert the in-place result equals the allocating result (`bitwiseXorInPlace(clone, B)` ⇄ `bitwiseXor(A, B)`). This catches the class of bug where the allocating path is correct but the in-place
+path diverges — currently only OR has this cross-check.
+
+Non-producing predicates (compare scalar/bool directly, no `assertAgree`):
+
+| rawr                | CRoaring                         |
+|---------------------|----------------------------------|
+| `andCardinality`    | `roaring_bitmap_and_cardinality` |
+| `intersects`        | `roaring_bitmap_intersect`       |
+| `isSubsetOf`        | `roaring_bitmap_is_subset`       |
+| `equals`            | `roaring_bitmap_equals`          |
+| `cardinality`       | `roaring_bitmap_get_cardinality` |
+| `minimum`/`maximum` | `roaring_bitmap_minimum/maximum` |
+
+### Required explicit pairings (the 9-pair matrix)
+
+Beyond randomized testing, write **deterministic** cases that force each operand type pairing, because randomized runs can under-sample specific pairs. For every operation in the matrix above, run it on at least these `(A-profile, B-profile)` pairings, in the **same chunk** (so the containers actually meet) and run with both `run_optimize` off and on:
+
+```
+(sparse,  sparse)   -> array  X array
+(sparse,  dense)    -> array  X bitset
+(dense,   sparse)   -> bitset X array     (asymmetric — test both orders!)
+(dense,   dense)    -> bitset X bitset
+(sparse,  runs)     -> array  X run
+(runs,    sparse)   -> run    X array
+(dense,   runs)     -> bitset X run
+(runs,    dense)    -> run    X bitset
+(runs,    runs)     -> run    X run
+(full,    sparse)   -> full-chunk edge
+(X,       empty)    -> every op against an empty operand
+(empty,   X)        -> and empty on the left
+```
+
+Order matters for ANDNOT/difference (non-commutative) — always test both `A op B` and `B op A` for those. AND/OR/XOR are commutative; still test both orders once to catch order-dependent container-allocation bugs.
+
+### Container-transition cases (explicitly)
+
+These target the logic in `optimize.zig` / container promotion-demotion under operations, which is currently untested:
+
+1. **Promotion**: two `sparse` arrays in the same chunk whose union exceeds 4096 → result must become a bitset. `OR` and verify against oracle.
+2. **Demotion**: two `dense` bitsets whose **intersection** drops below 4096 → result should become an array. `AND` and verify. (Construct B to share few elements with A.)
+3. **Empty-out-one-of-many**: A has containers in chunks {0,1,2}; B equals A's chunk 1 exactly. `A andnot B` must **drop** chunk 1 entirely while chunks 0 and 2 survive. Assert the result has exactly 2 containers and byte-matches oracle. This is the ghost-container invariant — the highest-value missing
+   case.
+4. **Run boundary**: a `full` chunk (all 65536) `andnot` a single value → verify the run splits correctly. Run-optimize on.
+
+---
+
+## Task 3 — Property tests, re-pointed at the oracle
+
+Keep the algebraic identities in `property_tests.zig` (they're good), but change two things:
+
+1. Swap `randomBitmap` for `test_gen.randomMixed` so the identities run over bitset/run containers, not just arrays.
+2. For each identity, **also** assert the rawr result byte-matches the CRoaring result of the equivalent operation, not only that the two rawr expressions agree with each other. An identity like `A∩(B∪C) = (A∩B)∪(A∩C)` that's computed two ways in rawr can pass even if *both* sides share the same bug; anchoring at least one side to CRoaring removes that blind spot.
+
+Increase iteration counts modestly (e.g. 50 → 200) now that each iteration covers more container variety. No need for AFL-scale volume.
+
+---
+
+## Task 4 — Round-trip and addRange coverage (extend existing)
+
+`validate_croaring.zig` already does build→serialize→cross-deserialize well. Extend its fixture list to drive the generator profiles rather than hand-rolled arrays:
+
+- Round-trip a `randomMixed` bitmap for each profile combination, both run-optimized and not.
+- Keep the existing hand-picked boundary fixtures (chunk boundaries, NO_OFFSET_THRESHOLD container counts 3/4/5) — those are valuable and targeted.
+- Add `addRange` differential cases that span container types: a range that produces a run, a range >4096 that produces a bitset, a range crossing several chunk boundaries. Compare bytes against `roaring_bitmap_add_range` (remember the +1 exclusive-end convention).
+
+---
+
+## Task 5 (optional, low effort, high surprise value) — malformed input smoke test
+
+Untrusted input is out of scope as a feature, but a tiny corruption sweep is a cheap way to surface real bugs (panics, OOB reads, infinite loops) in `deserialize`:
+
+1. Serialize a known-good mixed bitmap to bytes.
+2. In a loop, copy the bytes and corrupt them: flip a random byte; truncate to a random length; zero the cardinality field; set a container's cardinality to `0xFFFF`.
+3. Call `RoaringBitmap.deserialize` on each corrupted buffer. The **only** acceptable outcomes are: returns a valid bitmap, or returns a Zig error. A crash/panic/hang is a finding.
+
+This is ~40 lines, needs no CRoaring, and tends to expose missing bounds checks fast. Treat any non-error crash as a bug to file, not necessarily to fix now.
+
+---
+
+## Build wiring
+
+Add to `build.zig`, mirroring the existing `validate` step:
+
+```zig
+const difftest_exe = b.addExecutable(.{ .name = "diff_test", ... });
+// link the CRoaring amalgamation exactly as validate_croaring does
+const difftest_step = b.step("difftest", "Differential tests vs CRoaring");
+difftest_step.dependOn(&run_difftest.step);
+```
+
+`src/test_gen.zig` is imported by both the `difftest` exe and (via the test build) `property_tests.zig`. Make sure it compiles in both the test and the CRoaring-linked executable contexts — keep the CRoaring `@cImport` out of `test_gen.zig` itself (generator stays pure rawr; only `diff_test.zig` and
+`validate_croaring.zig` import CRoaring). `buildOracle` therefore lives in `diff_test.zig`, not `test_gen.zig`.
+
+---
+
+## Acceptance criteria
+
+The suite is "at parity with CRoaring's test suite" when:
+
+1. Every operation in the Task 2 matrix is differentially checked against CRoaring on **all 9 container-pair combinations** plus the empty-operand and full-chunk edges, run-optimized and not.
+2. Both orderings are tested for the non-commutative ops (difference/andnot).
+3. In-place results are asserted equal to allocating results for **all four** ops (not just OR).
+4. The four container-transition cases in Task 2 pass (promotion, demotion, empty-out-one-of-many, run boundary).
+5. The algebraic property tests run over the mixed generator and anchor at least one side to CRoaring.
+6. `zig build difftest` runs the full matrix and a randomized loop (≥1000 random `(A,B)` pairs across mixed profiles) with zero failures.
+7. `zig build test` and `zig build validate` still pass unchanged.
+
+## Sequencing for the implementer
+
+1. Task 0 (wrapper) — 30 min.
+2. Task 1 (generator) — the bulk of the work; everything depends on it.
+3. Task 2 (harness + matrix + transitions) — the payload.
+4. Task 3 (re-point property tests) — small.
+5. Task 4 (extend round-trip) — small.
+6. Task 5 (malformed smoke) — optional, last.
+
+Implement Task 1 fully and get one `(sparse, dense)` OR case passing end-to-end through `assertAgree` before fanning out the whole matrix — that proves the generator, the oracle build, and the comparator all line up.
