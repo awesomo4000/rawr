@@ -92,7 +92,15 @@ Because the borrowed buffer is immutable for the view's lifetime, the `card` and
 `n_runs` values read during validation equal those read during access, so a
 successful `init` guarantees every later accessor is in-bounds.
 
-Implementation note: this walk recomputes the same per-container offsets that
+**Zero-allocation requirement:** `FrozenBitmap.init` is allocation-free today and
+must stay that way. The validation is a **bounds walk only** — no heap
+allocation, no scratch buffers. It reads fields already in the buffer and
+compares offsets; nothing more.
+
+Implementation note (non-binding): a `validateContainerBounds()` helper called
+from `init` after the offsets are constructed, plus a checked
+`containerDataOffset(idx, sequential_offset)`-style helper (or a local loop),
+keeps this clean. This walk recomputes the same per-container offsets that
 `getContainerDataOffset` derives. The no-offset-header fallback in
 `getContainerDataOffset` (`:128-134`) is already O(n²) (re-walks from the start
 each call); the validation walk is O(n) and may share a helper with it, but
@@ -102,20 +110,62 @@ refactoring that fallback for speed is **not** required by this spec — correct
 ## Task 2 — `size` cap (fold in)
 
 In the no-run path, `size` is read as a full `u32` from the buffer (`:39`). The
-maximum legal container count is 65536 (one per high-16 key). After reading
-`size`, reject `size > 65536` with `error.InvalidFormat`. (The run-cookie path
-derives `size` from 16 bits + 1, max 65536, so it is already bounded.) Cheap,
-and it caps the validation walk and all header-size arithmetic.
+maximum legal container count is 65536 (one per high-16 key). Reject `size >
+65536` with `error.InvalidFormat` **immediately after reading the no-run size,
+before any header-size arithmetic** (the `pos += size * 4` computations at
+`:46`/`:54`) — don't compute offsets from an unbounded `size` first. (The
+run-cookie path derives `size` from 16 bits + 1, max 65536, so it is already
+bounded.) Cheap, and it caps the validation walk and all header-size arithmetic.
 
-## Task 3 — Extend the malformed-input smoke test to the frozen path
+## Task 3 — Deterministic malformed reproducers (write these FIRST, red → green)
 
-The existing smoke test (`bitmap_tests.zig`, "deserialize malformed input
-smoke") corrupts a serialized bitmap and calls `RoaringBitmap.deserialize`. It
-does **not** exercise `FrozenBitmap`, which is exactly where the missing checks
-bite. Extend it (same file, no CRoaring needed):
+Drive this fix test-first. Before touching `init`, write a deterministic
+reproducer for each unsafe shape below. Each constructs a buffer that **today's
+`init` wrongly accepts** (and whose first `contains`/`iterator` access would read
+OOB — in Debug that may already panic). After Tasks 1–2 land, each test's final
+asserted behavior is simply:
 
-1. Serialize a known-good **mixed** bitmap (array + bitset + run containers, so
-   all three validation branches are hit). Reuse `test_gen` profiles if handy.
+```zig
+try std.testing.expectError(error.InvalidFormat, FrozenBitmap.init(bad_bytes));
+```
+
+The point of writing them first is to *prove the bug exists* (init currently
+accepts the buffer) and to lock in regression coverage on the exact bad fields —
+randomized corruption can't be relied on to hit them. Required cases, one
+deterministic test each:
+
+1. **Valid header, truncated array container data** — header declares an array of
+   cardinality N, buffer cut so fewer than `N*2` value bytes remain.
+2. **Valid header, truncated bitset container data** — header declares a bitset,
+   buffer cut so fewer than 8192 word bytes remain.
+3. **Valid header, truncated run container data** — header declares a run
+   container; `n_runs = N` in the data prefix but fewer than `2 + N*4` bytes
+   follow.
+4. **Offset table entry before `data_offset`** — an offset-header entry points
+   back into the header region (`< data_offset`).
+5. **Offset table entry past `data.len`** — an offset-header entry points beyond
+   the buffer end.
+6. **No-run cookie with `size > 65536`**.
+
+Build the start fixtures by serializing a real bitmap of the right container
+type, then hand-corrupt the specific field/length. **The bitset fixture must be a
+real bitset container** — do **not** use `addRange` for it, because contiguous
+ranges now store as run containers. Force a bitset with scattered individual
+adds, `fromSorted` of >4096 non-contiguous values, or the `test_gen` `dense`
+profile. Likewise build an actual run container via `addRange` + `runOptimize`
+for cases 3.
+
+## Task 4 — Extend the randomized malformed smoke test to the frozen path
+
+Keep this as a backstop *after* the deterministic reproducers pass. The existing
+smoke test (`bitmap_tests.zig`, "deserialize malformed input smoke") corrupts a
+serialized bitmap and calls `RoaringBitmap.deserialize`; it does **not** exercise
+`FrozenBitmap`. Extend it (same file, no CRoaring needed):
+
+1. Serialize a known-good **mixed** bitmap that truly contains **array + bitset +
+   run** containers so all three validation branches are hit. Per Task 3, build
+   the bitset branch with scattered adds / `fromSorted` / `test_gen` `dense` (not
+   `addRange`), and the run branch via `addRange` + `runOptimize`.
 2. For each corrupted buffer (reuse the existing corruption modes: bit-flip,
    truncate to random length, zero/corrupt the size field, set a container
    cardinality high), call `FrozenBitmap.init`. The **only** acceptable outcomes:
@@ -123,22 +173,22 @@ bite. Extend it (same file, no CRoaring needed):
    - `init` succeeds **and** a follow-up `contains` over a sweep of probe values
      plus a full `iterator` drain complete without a crash/panic.
 3. A panic/crash is a failure. Run under `zig build test` (Debug, bounds checks
-   on) so any surviving OOB surfaces as a panic and fails the test — that's what
-   makes this an effective check.
+   on) so any surviving OOB surfaces as a panic and fails the test.
 
 ## Acceptance criteria
 
-1. `FrozenBitmap.init` returns `error.InvalidFormat` for: a truncated buffer
-   whose header is valid but container data is short; an offset-header entry
-   pointing past `data.len` or before the data region; a run container whose
-   `n_runs` would read past `data.len`; `size > 65536`.
+1. Each of the six deterministic reproducers in Task 3 asserts
+   `expectError(error.InvalidFormat, FrozenBitmap.init(bad_bytes))` and passes.
+   (Each must have been demonstrated to *fail* against the pre-fix `init` — i.e.
+   pre-fix `init` wrongly accepted the buffer — so the tests prove the bug.)
 2. After a successful `init`, `contains` and `iterator` never read outside
    `data` for any input (guaranteed by the Task 1 walk).
-3. The frozen malformed-smoke test (Task 3) passes under `zig build test` — for
+3. `FrozenBitmap.init` remains **allocation-free** (Task 1).
+4. The randomized frozen smoke test (Task 4) passes under `zig build test` — for
    every corrupted buffer, `init` either errors or the view is safely traversable.
-4. All existing tests still pass (`zig build test`, `zig build validate`,
+5. All existing tests still pass (`zig build test`, `zig build validate`,
    `zig build difftest`); valid round-trips through `FrozenBitmap` are unchanged.
-5. The immutability/TOCTOU invariant is documented on `FrozenBitmap`.
+6. The immutability/TOCTOU invariant is documented on `FrozenBitmap`.
 
 ## Out of scope (explicitly)
 
@@ -154,6 +204,14 @@ bite. Extend it (same file, no CRoaring needed):
 
 ## Sequencing for the implementer
 
-Small enough to do in one pass: Task 2 (trivial), Task 1 (the validation walk —
-the substance), Task 3 (the test that proves it). No chunking unless Task 1 grows
-beyond expectation while wiring the no-offset-header fallback.
+Test-first, single pass:
+
+1. **Task 3 reproducers** — write the six deterministic malformed buffers and
+   confirm pre-fix `init` wrongly accepts them (the bug, demonstrated). This is
+   the red step.
+2. **Task 2** (size cap, trivial) then **Task 1** (the validation walk — the
+   substance) until all six reproducers go green.
+3. **Task 4** (randomized smoke backstop) and the doc note (AC 6).
+
+No chunking unless Task 1 grows beyond expectation while wiring the
+no-offset-header fallback.
