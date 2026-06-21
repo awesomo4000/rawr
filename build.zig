@@ -60,19 +60,13 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     validate_mod.addImport("rawr", bench_lib_mod);
-    validate_mod.addIncludePath(b.path("vendor/"));
-    validate_mod.addCSourceFile(.{
-        .file = b.path("vendor/roaring.c"),
-        .flags = &.{ "-std=c11", "-O3", "-DNDEBUG" },
-    });
-    validate_mod.link_libc = true;
-    const validate_c = b.addTranslateC(.{
-        .root_source_file = b.path("vendor/croaring_wrapper.h"),
+    addTranslatedCImport(b, validate_mod, .{
+        .header = "vendor/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
         .target = target,
         .optimize = .ReleaseFast,
     });
-    validate_c.addIncludePath(b.path("vendor/"));
-    validate_mod.addImport("c", validate_c.createModule());
 
     const validate_exe = b.addExecutable(.{
         .name = "validate_croaring",
@@ -91,19 +85,13 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     bench_cr_mod.addImport("rawr", bench_lib_mod);
-    bench_cr_mod.addIncludePath(b.path("vendor/"));
-    bench_cr_mod.addCSourceFile(.{
-        .file = b.path("vendor/roaring.c"),
-        .flags = &.{ "-std=c11", "-O3", "-DNDEBUG" },
-    });
-    bench_cr_mod.link_libc = true;
-    const bench_cr_c = b.addTranslateC(.{
-        .root_source_file = b.path("vendor/croaring_wrapper.h"),
+    addTranslatedCImport(b, bench_cr_mod, .{
+        .header = "vendor/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
         .target = target,
         .optimize = .ReleaseFast,
     });
-    bench_cr_c.addIncludePath(b.path("vendor/"));
-    bench_cr_mod.addImport("c", bench_cr_c.createModule());
 
     const bench_cr_exe = b.addExecutable(.{
         .name = "bench_croaring",
@@ -137,4 +125,33 @@ pub fn build(b: *std.Build) void {
         "git", "archive", "--format=tar.gz", "--prefix=rawr/", "HEAD", "-o", "rawr.tar.gz",
     });
     tarball_step.dependOn(&tarball_cmd.step);
+}
+
+fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
+    import_name: []const u8 = "c",
+    header: []const u8,
+    include_dir: []const u8,
+    c_source: ?[]const u8 = null,
+    c_flags: []const []const u8 = &.{ "-std=c11", "-O3", "-DNDEBUG" },
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+}) void {
+    mod.addIncludePath(b.path(opts.include_dir));
+
+    if (opts.c_source) |c_source| {
+        mod.addCSourceFile(.{
+            .file = b.path(c_source),
+            .flags = opts.c_flags,
+        });
+    }
+    mod.link_libc = true;
+
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.path(opts.header),
+        .target = opts.target,
+        .optimize = opts.optimize,
+    });
+    translate_c.addIncludePath(b.path(opts.include_dir));
+
+    mod.addImport(opts.import_name, translate_c.createModule());
 }

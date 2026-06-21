@@ -271,8 +271,8 @@ This is ~40 lines, needs no CRoaring, and tends to expose missing bounds checks 
 
 The 0.16 upgrade already converted CRoaring interop to build-system `translate-c`
 (`b.addTranslateC`), imported as `const c = @import("c");`. **There is no
-`@cImport` anymore** — clone the existing `validate` module wiring in `build.zig`
-exactly. That recipe is:
+legacy C import builtin anymore** — use the existing `addTranslatedCImport`
+helper in `build.zig`. That recipe is:
 
 ```zig
 const difftest_mod = b.createModule(.{
@@ -281,19 +281,13 @@ const difftest_mod = b.createModule(.{
     .optimize = .ReleaseFast,
 });
 difftest_mod.addImport("rawr", bench_lib_mod); // reuse the ReleaseFast lib module
-difftest_mod.addIncludePath(b.path("vendor/"));
-difftest_mod.addCSourceFile(.{
-    .file = b.path("vendor/roaring.c"),
-    .flags = &.{ "-std=c11", "-O3", "-DNDEBUG" },
-});
-difftest_mod.link_libc = true;
-const difftest_c = b.addTranslateC(.{
-    .root_source_file = b.path("vendor/croaring_wrapper.h"),
+addTranslatedCImport(b, difftest_mod, .{
+    .header = "vendor/croaring_wrapper.h",
+    .include_dir = "vendor/",
+    .c_source = "vendor/roaring.c",
     .target = target,
     .optimize = .ReleaseFast,
 });
-difftest_c.addIncludePath(b.path("vendor/"));
-difftest_mod.addImport("c", difftest_c.createModule());
 
 const difftest_exe = b.addExecutable(.{ .name = "diff_test", .root_module = difftest_mod });
 b.installArtifact(difftest_exe);
