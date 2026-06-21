@@ -358,7 +358,7 @@ fn arrayIntersectBitset(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *
         }
     }
     result.cardinality = @intCast(k);
-    return arrayToArrayOrRun(allocator, result);
+    return .{ .array = result };
 }
 
 fn arrayIntersectRun(allocator: std.mem.Allocator, ac: *ArrayContainer, rc: *RunContainer) !Container {
@@ -373,7 +373,7 @@ fn arrayIntersectRun(allocator: std.mem.Allocator, ac: *ArrayContainer, rc: *Run
         }
     }
     result.cardinality = @intCast(k);
-    return arrayToArrayOrRun(allocator, result);
+    return .{ .array = result };
 }
 
 fn bitsetIntersectBitset(allocator: std.mem.Allocator, a: *BitsetContainer, b: *BitsetContainer) !Container {
@@ -404,7 +404,12 @@ fn bitsetIntersectRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *R
         }
     }
     _ = result.computeCardinality();
-    return bitsetToArrayOrRun(allocator, result);
+    if (result.getCardinality() <= ArrayContainer.MAX_CARDINALITY) {
+        const arr = try bitsetToArray(allocator, result);
+        result.deinit(allocator);
+        return .{ .array = arr };
+    }
+    return .{ .bitset = result };
 }
 
 fn runIntersectRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
