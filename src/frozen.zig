@@ -5,6 +5,10 @@ const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
 
 /// A read-only bitmap view over serialized bytes. Zero-copy - no allocation for container data.
 /// Use this for zero-copy reads from mmap'd LMDB values.
+///
+/// The borrowed byte buffer must remain immutable for the lifetime of this view.
+/// `init` validates bounds once; concurrent mutation after validation can break
+/// the safety guarantees inherent to any zero-copy reader.
 pub const FrozenBitmap = struct {
     data: []const u8,
     size: u32,
@@ -15,6 +19,7 @@ pub const FrozenBitmap = struct {
     run_bitset: []const u8, // empty if no runs
 
     const Self = @This();
+    const MAX_CONTAINER_COUNT = 65_536;
 
     /// Create a frozen bitmap view over serialized bytes. Zero allocation.
     pub fn init(data: []const u8) !Self {
@@ -37,6 +42,7 @@ pub const FrozenBitmap = struct {
         } else if (cookie == fmt.SERIAL_COOKIE_NO_RUNCONTAINER) {
             if (data.len < 8) return error.InvalidFormat;
             size = std.mem.readInt(u32, data[4..8], .little);
+            if (size > MAX_CONTAINER_COUNT) return error.InvalidFormat;
             pos = 8;
         } else {
             return error.InvalidFormat;
@@ -56,7 +62,7 @@ pub const FrozenBitmap = struct {
 
         if (pos > data.len) return error.InvalidFormat;
 
-        return .{
+        const self: Self = .{
             .data = data,
             .size = size,
             .has_runs = has_runs,
@@ -65,6 +71,48 @@ pub const FrozenBitmap = struct {
             .data_offset = pos,
             .run_bitset = run_bitset,
         };
+        try self.validateContainerBounds();
+        return self;
+    }
+
+    fn validateContainerBounds(self: *const Self) !void {
+        var sequential_offset = self.data_offset;
+
+        for (0..self.size) |idx| {
+            const data_offset = if (self.offsets_offset != 0) blk: {
+                const offset_pos = self.offsets_offset + idx * 4;
+                const value = std.mem.readInt(u32, self.data[offset_pos..][0..4], .little);
+                const start: usize = value;
+                if (start < self.data_offset or start > self.data.len) return error.InvalidFormat;
+                break :blk start;
+            } else sequential_offset;
+
+            const container_size = try self.checkedContainerSize(idx, data_offset);
+            if (container_size > self.data.len - data_offset) return error.InvalidFormat;
+
+            if (self.offsets_offset == 0) {
+                sequential_offset = data_offset + container_size;
+            }
+        }
+    }
+
+    fn checkedContainerSize(self: *const Self, idx: usize, data_offset: usize) !usize {
+        if (data_offset > self.data.len) return error.InvalidFormat;
+
+        const card = self.getCardinality(idx);
+        if (self.isRunContainer(idx)) {
+            if (2 > self.data.len - data_offset) return error.InvalidFormat;
+            const n_runs = std.mem.readInt(u16, self.data[data_offset..][0..2], .little);
+            const run_bytes = @as(usize, n_runs) * 4;
+            if (run_bytes > self.data.len - data_offset - 2) return error.InvalidFormat;
+            return 2 + run_bytes;
+        }
+
+        if (card > ArrayContainer.MAX_CARDINALITY) {
+            return BitsetContainer.SIZE_BYTES;
+        }
+
+        return @as(usize, card) * 2;
     }
 
     /// No deallocation needed - this is a view over borrowed data.
@@ -390,6 +438,72 @@ pub const FrozenBitmap = struct {
 
 const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
 
+fn writeU16LE(data: []u8, offset: usize, value: u16) void {
+    data[offset] = @truncate(value);
+    data[offset + 1] = @truncate(value >> 8);
+}
+
+fn writeU32LE(data: []u8, offset: usize, value: u32) void {
+    data[offset] = @truncate(value);
+    data[offset + 1] = @truncate(value >> 8);
+    data[offset + 2] = @truncate(value >> 16);
+    data[offset + 3] = @truncate(value >> 24);
+}
+
+fn descStart(data: []const u8) usize {
+    const cookie = std.mem.readInt(u32, data[0..4], .little);
+    if ((cookie & 0xFFFF) == fmt.SERIAL_COOKIE) {
+        const size = ((cookie >> 16) & 0xFFFF) + 1;
+        return 4 + ((@as(usize, size) + 7) / 8);
+    }
+    return 8;
+}
+
+fn offsetTableStart(data: []const u8) usize {
+    const cookie = std.mem.readInt(u32, data[0..4], .little);
+    const size = if ((cookie & 0xFFFF) == fmt.SERIAL_COOKIE)
+        ((cookie >> 16) & 0xFFFF) + 1
+    else
+        std.mem.readInt(u32, data[4..8], .little);
+    return descStart(data) + @as(usize, size) * 4;
+}
+
+fn firstDataOffset(data: []const u8) usize {
+    return std.mem.readInt(u32, data[offsetTableStart(data)..][0..4], .little);
+}
+
+fn buildArraySerialized(allocator: std.mem.Allocator) ![]u8 {
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    _ = try bm.add(10);
+    _ = try bm.add(20);
+    _ = try bm.add(30);
+
+    return bm.serialize(allocator);
+}
+
+fn buildBitsetSerialized(allocator: std.mem.Allocator) ![]u8 {
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    for (0..5000) |i| {
+        _ = try bm.add(@as(u32, @intCast(i)) * 13);
+    }
+
+    return bm.serialize(allocator);
+}
+
+fn buildRunSerialized(allocator: std.mem.Allocator) ![]u8 {
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    _ = try bm.addRange(100, 200);
+    _ = try bm.runOptimize();
+
+    return bm.serialize(allocator);
+}
+
 test "FrozenBitmap from empty bitmap" {
     const allocator = std.testing.allocator;
 
@@ -519,4 +633,75 @@ test "FrozenBitmap iterator" {
         idx += 1;
     }
     try std.testing.expectEqual(values.len, idx);
+}
+
+test "FrozenBitmap rejects truncated array container data" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildArraySerialized(allocator);
+    defer allocator.free(serialized);
+
+    try std.testing.expectError(error.InvalidFormat, FrozenBitmap.init(serialized[0 .. serialized.len - 1]));
+}
+
+test "FrozenBitmap rejects truncated bitset container data" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildBitsetSerialized(allocator);
+    defer allocator.free(serialized);
+
+    try std.testing.expectError(error.InvalidFormat, FrozenBitmap.init(serialized[0 .. serialized.len - 1]));
+}
+
+test "FrozenBitmap rejects truncated run container data" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildRunSerialized(allocator);
+    defer allocator.free(serialized);
+
+    const corrupted = try allocator.dupe(u8, serialized);
+    defer allocator.free(corrupted);
+
+    writeU16LE(corrupted, descStart(corrupted) + 4, 2);
+    try std.testing.expectError(error.InvalidFormat, FrozenBitmap.init(corrupted));
+}
+
+test "FrozenBitmap rejects offset before data region" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildArraySerialized(allocator);
+    defer allocator.free(serialized);
+
+    const corrupted = try allocator.dupe(u8, serialized);
+    defer allocator.free(corrupted);
+
+    writeU32LE(corrupted, offsetTableStart(corrupted), @intCast(firstDataOffset(corrupted) - 1));
+    try std.testing.expectError(error.InvalidFormat, FrozenBitmap.init(corrupted));
+}
+
+test "FrozenBitmap rejects offset past buffer" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildArraySerialized(allocator);
+    defer allocator.free(serialized);
+
+    const corrupted = try allocator.dupe(u8, serialized);
+    defer allocator.free(corrupted);
+
+    writeU32LE(corrupted, offsetTableStart(corrupted), @intCast(corrupted.len + 1));
+    try std.testing.expectError(error.InvalidFormat, FrozenBitmap.init(corrupted));
+}
+
+test "FrozenBitmap rejects no-run size above maximum container count" {
+    const allocator = std.testing.allocator;
+
+    const size = 65_537;
+    const header_len = 8 + size * 4 + size * 4;
+    const corrupted = try allocator.alloc(u8, header_len);
+    defer allocator.free(corrupted);
+    @memset(corrupted, 0);
+
+    writeU32LE(corrupted, 0, fmt.SERIAL_COOKIE_NO_RUNCONTAINER);
+    writeU32LE(corrupted, 4, 65_537);
+    try std.testing.expectError(error.InvalidFormat, FrozenBitmap.init(corrupted));
 }

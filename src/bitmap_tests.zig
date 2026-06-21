@@ -1,6 +1,7 @@
 const std = @import("std");
 const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
 const OwnedBitmap = @import("bitmap.zig").OwnedBitmap;
+const FrozenBitmap = @import("frozen.zig").FrozenBitmap;
 const fmt = @import("format.zig");
 
 const MALFORMED_SMOKE_SEED: u64 = 0xBAD5_EED0_1609;
@@ -1188,7 +1189,7 @@ fn buildMixedSerializedBitmap(allocator: std.mem.Allocator) ![]u8 {
         _ = try bm.add(@intCast(i * 17));
     }
     for (0..5000) |i| {
-        _ = try bm.add(65_536 + @as(u32, @intCast(i)));
+        _ = try bm.add(65_536 + @as(u32, @intCast(i)) * 13);
     }
     _ = try bm.addRange(131_072 + 100, 131_072 + 2_000);
     _ = try bm.runOptimize();
@@ -1204,6 +1205,28 @@ fn tryDeserializeCorrupted(allocator: std.mem.Allocator, data: []const u8) !void
     _ = restored.contains(0);
     var iter = restored.iterator();
     _ = iter.next();
+}
+
+fn tryFrozenCorrupted(data: []const u8) !void {
+    var frozen = FrozenBitmap.init(data) catch return;
+    defer frozen.deinit();
+
+    _ = frozen.cardinality();
+    const probes = [_]u32{
+        0,
+        10,
+        65_536,
+        65_536 + 13,
+        131_072 + 100,
+        131_072 + 2_000,
+        0xFFFF_FFFF,
+    };
+    for (probes) |probe| {
+        _ = frozen.contains(probe);
+    }
+
+    var iter = frozen.iterator();
+    while (iter.next()) |_| {}
 }
 
 fn serializedDescStart(data: []const u8) ?usize {
@@ -1242,11 +1265,13 @@ test "deserialize malformed input smoke" {
         const idx = rng.uintLessThan(usize, corrupted.len);
         corrupted[idx] ^= @as(u8, 1) << @intCast(rng.uintLessThan(u4, 8));
         try tryDeserializeCorrupted(allocator, corrupted);
+        try tryFrozenCorrupted(corrupted);
     }
 
     for (0..16) |_| {
         const new_len = rng.uintLessThan(usize, bytes.len);
         try tryDeserializeCorrupted(allocator, bytes[0..new_len]);
+        try tryFrozenCorrupted(bytes[0..new_len]);
     }
 
     if (serializedDescStart(bytes)) |desc_start| {
@@ -1255,11 +1280,13 @@ test "deserialize malformed input smoke" {
             defer allocator.free(zero_cardinality);
             writeU16LE(zero_cardinality, desc_start + 2, 0);
             try tryDeserializeCorrupted(allocator, zero_cardinality);
+            try tryFrozenCorrupted(zero_cardinality);
 
             const max_cardinality = try allocator.dupe(u8, bytes);
             defer allocator.free(max_cardinality);
             writeU16LE(max_cardinality, desc_start + 2, 0xFFFF);
             try tryDeserializeCorrupted(allocator, max_cardinality);
+            try tryFrozenCorrupted(max_cardinality);
         }
     }
 }
