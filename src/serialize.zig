@@ -7,6 +7,8 @@ const ArrayContainer = @import("array_container.zig").ArrayContainer;
 const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
 const RunContainer = @import("run_container.zig").RunContainer;
 
+const MAX_CONTAINER_COUNT = 65_536;
+
 // Serialization format is little-endian; bulk I/O requires matching host endianness
 comptime {
     if (@import("builtin").cpu.arch.endian() != .little) {
@@ -182,6 +184,15 @@ pub fn deserialize(allocator: std.mem.Allocator, data: []const u8) !RoaringBitma
     return deserializeFromReader(allocator, &reader, data.len);
 }
 
+/// Deserialize, then validate semantic invariants. Use for untrusted input.
+pub fn deserializeSafe(allocator: std.mem.Allocator, data: []const u8) !RoaringBitmap {
+    var bm = try deserialize(allocator, data);
+    errdefer bm.deinit();
+
+    try bm.validate();
+    return bm;
+}
+
 /// Deserialize from any reader.
 ///
 /// Performance: Use `std.heap.ArenaAllocator` for ~6x faster deserialization.
@@ -199,6 +210,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
         // Format with run containers
         has_runs = true;
         size = ((cookie >> 16) & 0xFFFF) + 1;
+        std.debug.assert(size <= MAX_CONTAINER_COUNT);
 
         // Read run container bitset
         const bitset_bytes = (size + 7) / 8;
@@ -207,6 +219,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
     } else if (cookie == fmt.SERIAL_COOKIE_NO_RUNCONTAINER) {
         // Format without run containers
         size = try reader.takeInt(u32, .little);
+        if (size > MAX_CONTAINER_COUNT) return error.InvalidFormat;
     } else {
         return error.InvalidFormat;
     }
@@ -224,9 +237,10 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
     var cardinalities = try allocator.alloc(u32, size);
     defer allocator.free(cardinalities);
 
-    const desc_buf = try allocator.alloc(u16, size * 2);
+    const desc_len = @as(usize, size) * 2;
+    const desc_buf = try allocator.alloc(u16, desc_len);
     defer allocator.free(desc_buf);
-    reader.readSliceAll(std.mem.sliceAsBytes(desc_buf)) catch return error.InvalidFormat;
+    reader.readSliceAll(std.mem.sliceAsBytes(desc_buf[0..desc_len])) catch return error.InvalidFormat;
 
     for (0..size) |i| {
         result.keys[i] = desc_buf[i * 2];
@@ -237,7 +251,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
     // - Always for no-run format (RoaringFormatSpec requirement)
     // - For run format only when size >= NO_OFFSET_THRESHOLD
     if (!has_runs or size >= fmt.NO_OFFSET_THRESHOLD) {
-        reader.discardAll(size * 4) catch return error.InvalidFormat;
+        reader.discardAll(@as(usize, size) * 4) catch return error.InvalidFormat;
     }
 
     // Read container data (bulk read - assumes little-endian, checked at comptime)
@@ -258,7 +272,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
 
             reader.readSliceAll(std.mem.sliceAsBytes(rc.runs[0..n_runs])) catch return error.InvalidFormat;
             rc.n_runs = n_runs;
-            rc.cardinality = -1;
+            rc.cardinality = @intCast(card);
             result.containers[i] = TaggedPtr.initRun(rc);
         } else if (card > ArrayContainer.MAX_CARDINALITY) {
             // Bitset container
@@ -384,4 +398,14 @@ test "serialize round-trip preserves all values" {
         try std.testing.expectEqual(v1, v2.?);
     }
     try std.testing.expectEqual(@as(?u32, null), it2.next());
+}
+
+test "deserialize rejects no-run size above maximum container count" {
+    const allocator = std.testing.allocator;
+    const data = [_]u8{
+        0x3A, 0x30, 0x00, 0x00, // SERIAL_COOKIE_NO_RUNCONTAINER
+        0x01, 0x00, 0x01, 0x00, // 65537 containers
+    };
+
+    try std.testing.expectError(error.InvalidFormat, deserialize(allocator, &data));
 }

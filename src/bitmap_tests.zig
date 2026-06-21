@@ -3,6 +3,7 @@ const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
 const OwnedBitmap = @import("bitmap.zig").OwnedBitmap;
 const FrozenBitmap = @import("frozen.zig").FrozenBitmap;
 const fmt = @import("format.zig");
+const test_gen = @import("test_gen.zig");
 
 const MALFORMED_SMOKE_SEED: u64 = 0xBAD5_EED0_1609;
 
@@ -1243,9 +1244,91 @@ fn serializedDescStart(data: []const u8) ?usize {
     return null;
 }
 
+fn serializedSize(data: []const u8) u32 {
+    const cookie = std.mem.readInt(u32, data[0..4], .little);
+    if ((cookie & 0xFFFF) == fmt.SERIAL_COOKIE) {
+        return ((cookie >> 16) & 0xFFFF) + 1;
+    }
+    return std.mem.readInt(u32, data[4..8], .little);
+}
+
+fn serializedOffsetTableStart(data: []const u8) usize {
+    return serializedDescStart(data).? + @as(usize, serializedSize(data)) * 4;
+}
+
+fn serializedHasOffsetTable(data: []const u8) bool {
+    const cookie = std.mem.readInt(u32, data[0..4], .little);
+    const has_runs = (cookie & 0xFFFF) == fmt.SERIAL_COOKIE;
+    const size = serializedSize(data);
+    return !has_runs or size >= fmt.NO_OFFSET_THRESHOLD;
+}
+
+fn serializedDataStart(data: []const u8) usize {
+    if (serializedHasOffsetTable(data)) {
+        return std.mem.readInt(u32, data[serializedOffsetTableStart(data)..][0..4], .little);
+    }
+    return serializedDescStart(data).? + @as(usize, serializedSize(data)) * 4;
+}
+
 fn writeU16LE(data: []u8, offset: usize, value: u16) void {
     data[offset] = @truncate(value);
     data[offset + 1] = @truncate(value >> 8);
+}
+
+fn writeU32LE(data: []u8, offset: usize, value: u32) void {
+    data[offset] = @truncate(value);
+    data[offset + 1] = @truncate(value >> 8);
+    data[offset + 2] = @truncate(value >> 16);
+    data[offset + 3] = @truncate(value >> 24);
+}
+
+fn expectValidateError(allocator: std.mem.Allocator, expected: RoaringBitmap.ValidateError, data: []const u8) !void {
+    var bm = try RoaringBitmap.deserialize(allocator, data);
+    defer bm.deinit();
+    try std.testing.expectError(expected, bm.validate());
+}
+
+fn buildTwoContainerSerialized(allocator: std.mem.Allocator) ![]u8 {
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    _ = try bm.add(65_536 + 1);
+    _ = try bm.add(131_072 + 1);
+
+    return bm.serialize(allocator);
+}
+
+fn buildArraySerialized(allocator: std.mem.Allocator) ![]u8 {
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    _ = try bm.add(10);
+    _ = try bm.add(20);
+    _ = try bm.add(30);
+
+    return bm.serialize(allocator);
+}
+
+fn buildBitsetSerialized(allocator: std.mem.Allocator) ![]u8 {
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    for (0..5000) |i| {
+        _ = try bm.add(@as(u32, @intCast(i)) * 13);
+    }
+
+    return bm.serialize(allocator);
+}
+
+fn buildRunSerialized(allocator: std.mem.Allocator) ![]u8 {
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    _ = try bm.addRange(100, 200);
+    _ = try bm.addRange(300, 400);
+    _ = try bm.runOptimize();
+
+    return bm.serialize(allocator);
 }
 
 test "deserialize malformed input smoke" {
@@ -1289,4 +1372,120 @@ test "deserialize malformed input smoke" {
             try tryFrozenCorrupted(max_cardinality);
         }
     }
+}
+
+test "validate rejects unsorted keys" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildTwoContainerSerialized(allocator);
+    defer allocator.free(serialized);
+
+    const corrupted = try allocator.dupe(u8, serialized);
+    defer allocator.free(corrupted);
+
+    writeU16LE(corrupted, serializedDescStart(corrupted).? + 4, 0);
+    try expectValidateError(allocator, error.UnsortedKeys, corrupted);
+}
+
+test "validate rejects duplicate keys" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildTwoContainerSerialized(allocator);
+    defer allocator.free(serialized);
+
+    const corrupted = try allocator.dupe(u8, serialized);
+    defer allocator.free(corrupted);
+
+    writeU16LE(corrupted, serializedDescStart(corrupted).? + 4, 1);
+    try expectValidateError(allocator, error.DuplicateKeys, corrupted);
+}
+
+test "validate rejects unsorted array values" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildArraySerialized(allocator);
+    defer allocator.free(serialized);
+
+    const corrupted = try allocator.dupe(u8, serialized);
+    defer allocator.free(corrupted);
+
+    writeU16LE(corrupted, serializedDataStart(corrupted) + 2, 5);
+    try expectValidateError(allocator, error.UnsortedArray, corrupted);
+}
+
+test "validate rejects bitset cardinality mismatch" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildBitsetSerialized(allocator);
+    defer allocator.free(serialized);
+
+    const corrupted = try allocator.dupe(u8, serialized);
+    defer allocator.free(corrupted);
+
+    corrupted[serializedDataStart(corrupted)] ^= 1;
+    try expectValidateError(allocator, error.BitsetCardinalityMismatch, corrupted);
+}
+
+test "validate rejects adjacent runs" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildRunSerialized(allocator);
+    defer allocator.free(serialized);
+
+    const corrupted = try allocator.dupe(u8, serialized);
+    defer allocator.free(corrupted);
+
+    const data_start = serializedDataStart(corrupted);
+    writeU16LE(corrupted, data_start + 2 + 4, 201);
+    try expectValidateError(allocator, error.RunOrdering, corrupted);
+}
+
+test "validate rejects run cardinality mismatch" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildRunSerialized(allocator);
+    defer allocator.free(serialized);
+
+    const corrupted = try allocator.dupe(u8, serialized);
+    defer allocator.free(corrupted);
+
+    writeU16LE(corrupted, serializedDescStart(corrupted).? + 2, 999 - 1);
+    try expectValidateError(allocator, error.RunCardinalityMismatch, corrupted);
+}
+
+test "validate accepts generated profile roundtrips" {
+    const allocator = std.testing.allocator;
+    const profiles = [_]test_gen.Profile{ .sparse, .dense, .full, .runs, .single, .boundary };
+
+    for (profiles, 0..) |profile, i| {
+        for (&[_]bool{ false, true }) |run_optimize| {
+            const optimize_seed: u64 = if (run_optimize) 0x100 else 0;
+            var prng = std.Random.DefaultPrng.init(0x5AFE_0000 + @as(u64, @intCast(i)) + optimize_seed);
+            const chunks = [_]test_gen.ChunkProfile{.{ .key = 0, .profile = profile }};
+            var generated = try test_gen.build(allocator, prng.random(), &chunks, run_optimize);
+            defer generated.deinit();
+
+            const serialized = try generated.bm.serialize(allocator);
+            defer allocator.free(serialized);
+
+            var restored = try RoaringBitmap.deserialize(allocator, serialized);
+            defer restored.deinit();
+
+            try restored.validate();
+        }
+    }
+}
+
+test "deserializeSafe rejects invalid bitmap without leaking" {
+    const allocator = std.testing.allocator;
+
+    const serialized = try buildBitsetSerialized(allocator);
+    defer allocator.free(serialized);
+
+    const corrupted = try allocator.dupe(u8, serialized);
+    defer allocator.free(corrupted);
+
+    corrupted[serializedDataStart(corrupted)] ^= 1;
+    try std.testing.expectError(error.BitsetCardinalityMismatch, RoaringBitmap.deserializeSafe(allocator, corrupted));
+    try std.testing.expectError(error.BitsetCardinalityMismatch, RoaringBitmap.deserializeSafeOwned(allocator, corrupted));
 }

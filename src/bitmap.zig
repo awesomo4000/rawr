@@ -37,6 +37,18 @@ pub const RoaringBitmap = struct {
     const Self = @This();
     const INITIAL_CAPACITY: u32 = 4;
 
+    pub const ValidateError = error{
+        UnsortedKeys,
+        DuplicateKeys,
+        EmptyContainer,
+        UnsortedArray,
+        ArrayCardinalityRange,
+        BitsetCardinalityMismatch,
+        BitsetCardinalityRange,
+        RunOrdering,
+        RunCardinalityMismatch,
+    };
+
     pub fn init(allocator: std.mem.Allocator) !Self {
         const keys = try allocator.alloc(u16, INITIAL_CAPACITY);
         errdefer allocator.free(keys);
@@ -78,6 +90,72 @@ pub const RoaringBitmap = struct {
         result.cached_cardinality = self.cached_cardinality;
 
         return result;
+    }
+
+    /// Verify structural invariants without mutating or repairing the bitmap.
+    pub fn validate(self: *const Self) ValidateError!void {
+        for (self.keys[1..self.size], 1..) |key, i| {
+            const prev = self.keys[i - 1];
+            if (key == prev) return ValidateError.DuplicateKeys;
+            if (key < prev) return ValidateError.UnsortedKeys;
+        }
+
+        for (self.containers[0..self.size]) |tp| {
+            switch (Container.fromTagged(tp)) {
+                .array => |ac| try validateArrayContainer(ac),
+                .bitset => |bc| try validateBitsetContainer(bc),
+                .run => |rc| try validateRunContainer(rc),
+                .reserved => unreachable,
+            }
+        }
+    }
+
+    fn validateArrayContainer(ac: *const ArrayContainer) ValidateError!void {
+        if (ac.cardinality == 0) return ValidateError.EmptyContainer;
+        if (ac.cardinality > ArrayContainer.MAX_CARDINALITY or ac.cardinality > ac.capacity) {
+            return ValidateError.ArrayCardinalityRange;
+        }
+
+        for (ac.values[1..ac.cardinality], 1..) |value, i| {
+            if (value <= ac.values[i - 1]) return ValidateError.UnsortedArray;
+        }
+    }
+
+    fn validateBitsetContainer(bc: *const BitsetContainer) ValidateError!void {
+        if (bc.cardinality <= ArrayContainer.MAX_CARDINALITY) {
+            return ValidateError.BitsetCardinalityRange;
+        }
+
+        var actual: u32 = 0;
+        for (bc.words) |word| {
+            actual += @popCount(word);
+        }
+
+        if (bc.cardinality != @as(i32, @intCast(actual))) {
+            return ValidateError.BitsetCardinalityMismatch;
+        }
+    }
+
+    fn validateRunContainer(rc: *const RunContainer) ValidateError!void {
+        if (rc.n_runs == 0) return ValidateError.EmptyContainer;
+        if (rc.n_runs > rc.capacity) return ValidateError.RunOrdering;
+
+        var actual: u32 = 0;
+        for (rc.runs[0..rc.n_runs], 0..) |run, i| {
+            const end: u32 = @as(u32, run.start) + @as(u32, run.length);
+            if (end > std.math.maxInt(u16)) return ValidateError.RunOrdering;
+            actual += @as(u32, run.length) + 1;
+
+            if (i > 0) {
+                const prev = rc.runs[i - 1];
+                const prev_end = @as(u32, prev.start) + @as(u32, prev.length);
+                if (@as(u32, run.start) <= prev_end + 1) return ValidateError.RunOrdering;
+            }
+        }
+
+        if (rc.cardinality >= 0 and rc.cardinality != @as(i32, @intCast(actual))) {
+            return ValidateError.RunCardinalityMismatch;
+        }
     }
 
     /// Extract high 16 bits (chunk key) from a 32-bit value.
@@ -1427,6 +1505,11 @@ pub const RoaringBitmap = struct {
         return ser.deserialize(allocator, data);
     }
 
+    /// Deserialize and validate semantic invariants. Use for untrusted input.
+    pub fn deserializeSafe(allocator: std.mem.Allocator, data: []const u8) !Self {
+        return ser.deserializeSafe(allocator, data);
+    }
+
     /// Deserialize from any reader.
     ///
     /// See `deserialize` for performance notes on arena allocation.
@@ -1444,6 +1527,14 @@ pub const RoaringBitmap = struct {
         var arena = std.heap.ArenaAllocator.init(backing);
         errdefer arena.deinit();
         const bm = try Self.deserialize(arena.allocator(), data);
+        return .{ .bitmap = bm, .arena = arena };
+    }
+
+    /// Deserialize and validate using arena allocation.
+    pub fn deserializeSafeOwned(backing: std.mem.Allocator, data: []const u8) !OwnedBitmap {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        errdefer arena.deinit();
+        const bm = try Self.deserializeSafe(arena.allocator(), data);
         return .{ .bitmap = bm, .arena = arena };
     }
 
