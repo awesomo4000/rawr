@@ -45,11 +45,12 @@ rawr `addRange(start, end)` is **inclusive** on both ends; CRoaring
 
 ## Task 0 — Extend the CRoaring wrapper
 
-`vendor/croaring_wrapper.h` currently exposes serialization + basic ops. Add any of the following that are missing, so the oracle can do every op the harness needs:
+`vendor/croaring_wrapper.h` already exposes creation, basic ops, all four set
+ops + their in-place forms, `run_optimize`, and portable serialization. The
+differential harness additionally needs the following, which are **currently
+missing** from the wrapper and must be added:
 
 ```c
-roaring_bitmap_t *roaring_bitmap_andnot(const roaring_bitmap_t*, const roaring_bitmap_t*);
-void roaring_bitmap_andnot_inplace(roaring_bitmap_t*, const roaring_bitmap_t*);
 bool roaring_bitmap_equals(const roaring_bitmap_t*, const roaring_bitmap_t*);
 bool roaring_bitmap_is_subset(const roaring_bitmap_t*, const roaring_bitmap_t*);
 uint64_t roaring_bitmap_and_cardinality(const roaring_bitmap_t*, const roaring_bitmap_t*);
@@ -58,7 +59,16 @@ uint32_t roaring_bitmap_minimum(const roaring_bitmap_t*);
 uint32_t roaring_bitmap_maximum(const roaring_bitmap_t*);
 ```
 
-Do **not** vendor the whole CRoaring header; keep the wrapper minimal as it is now.
+(`roaring_bitmap_andnot` and `roaring_bitmap_andnot_inplace` are already present
+— do not re-add them.) After editing the header, confirm the `translate-c` step
+picks them up: they appear as `c.roaring_bitmap_*` in both `validate_croaring.zig`
+and the new `diff_test.zig` without any other build change, because the existing
+`b.addTranslateC` already points at this header.
+
+Do **not** vendor the whole CRoaring header; keep the wrapper minimal as it is
+now. This stays within the spirit of the 0.16 `00-04` interop chunk, which
+asked to keep `croaring_wrapper.h` the single imported header and avoid widening
+the C surface area beyond what's needed.
 
 ---
 
@@ -95,14 +105,17 @@ pub fn build(
     run_optimize: bool,
 ) !struct { bm: RoaringBitmap, values: []u32 };
 
-/// Build an oracle CRoaring bitmap from the same value list.
-pub fn buildOracle(values: []const u32, run_optimize: bool) *c.roaring_bitmap_t;
-
 /// Fully random bitmap: random number of chunks (0..a few hundred), each with a
 /// randomly chosen profile. Used by the randomized differential loop.
 pub fn randomMixed(allocator: Allocator, rng: std.Random, max_chunks: usize, run_optimize: bool)
     !struct { bm: RoaringBitmap, values: []u32 };
 ```
+
+Note: `buildOracle` (constructing the CRoaring oracle from a `values` slice) is
+**not** part of `test_gen.zig` — it needs the `c` import and therefore lives in
+`diff_test.zig`. `test_gen.zig` only ever produces rawr bitmaps plus the
+ground-truth `values` slice; the harness builds the oracle from that slice. See
+Build wiring.
 
 ### Hard requirements on the generator
 
@@ -195,14 +208,40 @@ These target the logic in `optimize.zig` / container promotion-demotion under op
 
 ---
 
-## Task 3 — Property tests, re-pointed at the oracle
+## Task 3 — Property tests over the mixed generator, plus oracle-anchored identities
 
-Keep the algebraic identities in `property_tests.zig` (they're good), but change two things:
+This splits into two parts because of a build constraint: `property_tests.zig`
+runs inside `zig build test` (pulled in via `src/roaring.zig`) and that build
+**does not link CRoaring**. So the oracle cannot be called from
+`property_tests.zig`. Do not try to import `c` there.
 
-1. Swap `randomBitmap` for `test_gen.randomMixed` so the identities run over bitset/run containers, not just arrays.
-2. For each identity, **also** assert the rawr result byte-matches the CRoaring result of the equivalent operation, not only that the two rawr expressions agree with each other. An identity like `A∩(B∪C) = (A∩B)∪(A∩C)` that's computed two ways in rawr can pass even if *both* sides share the same bug; anchoring at least one side to CRoaring removes that blind spot.
+**Part A — in `property_tests.zig` (pure rawr, no oracle):**
 
-Increase iteration counts modestly (e.g. 50 → 200) now that each iteration covers more container variety. No need for AFL-scale volume.
+1. Swap `randomBitmap` for `test_gen.randomMixed` so the existing algebraic
+   identities (commutativity, associativity, distributivity, De Morgan, xor
+   decomposition, absorption, etc.) run over bitset/run containers instead of
+   only arrays. This alone is a large coverage win — the identities currently
+   never see a non-array container.
+2. Increase iteration counts modestly (e.g. 50 → 200) now that each iteration
+   covers more container variety. No AFL-scale volume.
+
+   Note: `test_gen.zig` stays pure rawr, so it imports cleanly into the unit-test
+   build. Keep it that way — no `c` import.
+
+**Part B — in `diff_test.zig` (oracle available):**
+
+3. Add oracle-anchored versions of the most bug-revealing identities. The
+   blind spot in Part A is that an identity computed two ways in rawr
+   (`A∩(B∪C)` vs `(A∩B)∪(A∩C)`) can pass even if **both** sides share the
+   same bug. Anchoring at least one side to CRoaring removes that blind spot.
+   For each anchored identity, compute the left side in rawr and assert it
+   byte-matches the CRoaring result of the equivalent operation via
+   `assertAgree`. A handful of the highest-value identities is enough
+   (distributivity, xor decomposition); they don't all need anchoring since the
+   Task 2 matrix already pins every individual op to the oracle.
+
+The division of labor: Part A proves rawr is *internally consistent* over all
+container types; the Task 2 matrix + Part B prove rawr *agrees with CRoaring*.
 
 ---
 
@@ -230,17 +269,64 @@ This is ~40 lines, needs no CRoaring, and tends to expose missing bounds checks 
 
 ## Build wiring
 
-Add to `build.zig`, mirroring the existing `validate` step:
+The 0.16 upgrade already converted CRoaring interop to build-system `translate-c`
+(`b.addTranslateC`), imported as `const c = @import("c");`. **There is no
+`@cImport` anymore** — clone the existing `validate` module wiring in `build.zig`
+exactly. That recipe is:
 
 ```zig
-const difftest_exe = b.addExecutable(.{ .name = "diff_test", ... });
-// link the CRoaring amalgamation exactly as validate_croaring does
+const difftest_mod = b.createModule(.{
+    .root_source_file = b.path("src/diff_test.zig"),
+    .target = target,
+    .optimize = .ReleaseFast,
+});
+difftest_mod.addImport("rawr", bench_lib_mod); // reuse the ReleaseFast lib module
+difftest_mod.addIncludePath(b.path("vendor/"));
+difftest_mod.addCSourceFile(.{
+    .file = b.path("vendor/roaring.c"),
+    .flags = &.{ "-std=c11", "-O3", "-DNDEBUG" },
+});
+difftest_mod.link_libc = true;
+const difftest_c = b.addTranslateC(.{
+    .root_source_file = b.path("vendor/croaring_wrapper.h"),
+    .target = target,
+    .optimize = .ReleaseFast,
+});
+difftest_c.addIncludePath(b.path("vendor/"));
+difftest_mod.addImport("c", difftest_c.createModule());
+
+const difftest_exe = b.addExecutable(.{ .name = "diff_test", .root_module = difftest_mod });
+b.installArtifact(difftest_exe);
 const difftest_step = b.step("difftest", "Differential tests vs CRoaring");
-difftest_step.dependOn(&run_difftest.step);
+difftest_step.dependOn(&b.addRunArtifact(difftest_exe).step);
 ```
 
-`src/test_gen.zig` is imported by both the `difftest` exe and (via the test build) `property_tests.zig`. Make sure it compiles in both the test and the CRoaring-linked executable contexts — keep CRoaring bindings out of `test_gen.zig` itself (generator stays pure rawr; only `diff_test.zig` and
-`validate_croaring.zig` import CRoaring). `buildOracle` therefore lives in `diff_test.zig`, not `test_gen.zig`.
+Note: the existing `validate`/`bench-compare` modules build at `.ReleaseFast`.
+For a *correctness* harness we want a debug-friendly, leak-checking allocator on
+the rawr side (see Allocator below), which is independent of the module's
+optimize level — the allocator is chosen in `diff_test.zig`, not via the build
+graph. Keeping `.ReleaseFast` is fine and matches the other interop targets.
+
+`src/test_gen.zig` is imported by both the `difftest` exe and (via the test
+build) `property_tests.zig`. It must compile in both contexts, so **`test_gen.zig`
+stays pure rawr** — it never imports `c`. `buildOracle` (which needs `c`) therefore
+lives in `diff_test.zig`, not `test_gen.zig`. This is also why oracle-anchoring
+for the property tests lives in `diff_test.zig` rather than in the unit-test
+build (see Task 3).
+
+### Allocator
+
+The rawr side of the harness MUST use a leak-checking allocator
+(`std.heap.GeneralPurposeAllocator(.{})` / `DebugAllocator` with leak detection),
+not `c_allocator`. A differential harness running millions of ops is the ideal
+place to catch a leak, double-free, or use-after-free in rawr's own container
+lifecycle — `c_allocator` would silently hide exactly those. Check
+`gpa.deinit() == .ok` at the end and treat a leak as a harness failure. The
+CRoaring side allocates via its own malloc and is unaffected.
+
+`diff_test.zig` follows the `validate_croaring.zig` entry-point shape:
+`pub fn main() !void` (no `std.process.Init` / `std.Io` needed — the harness has
+no timing loop, unlike `bench_croaring.zig`).
 
 ---
 
@@ -252,7 +338,10 @@ The suite is "at parity with CRoaring's test suite" when:
 2. Both orderings are tested for the non-commutative ops (difference/andnot).
 3. In-place results are asserted equal to allocating results for **all four** ops (not just OR).
 4. The four container-transition cases in Task 2 pass (promotion, demotion, empty-out-one-of-many, run boundary).
-5. The algebraic property tests run over the mixed generator and anchor at least one side to CRoaring.
+5. Part A: the algebraic property tests in `property_tests.zig` run over the
+   mixed generator (`test_gen.randomMixed`), exercising bitset/run containers.
+   Part B: a handful of the highest-value identities are oracle-anchored in
+   `diff_test.zig` via `assertAgree`.
 6. `zig build difftest` runs the full matrix and a randomized loop (≥1000 random `(A,B)` pairs across mixed profiles) with zero failures.
 7. `zig build test` and `zig build validate` still pass unchanged.
 
