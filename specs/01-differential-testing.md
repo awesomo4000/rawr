@@ -78,16 +78,18 @@ Create `src/test_gen.zig`. This is the single most important piece. The current 
 
 ### Required building blocks
 
-A bitmap is built per-chunk (a chunk = one 16-bit high key = 65536 contiguous values). The generator picks, for each populated chunk, a **container profile**:
+A bitmap is built per-chunk (a chunk = one 16-bit high key = 65536 contiguous values). The generator picks, for each populated chunk, a **container profile**. The container type a profile yields **depends on `run_optimize`** — be explicit about this in tests so they assert the right type:
 
-| Profile        | How to fill the chunk                                              | Forces container type |
-|----------------|-------------------------------------------------------------------|-----------------------|
-| `sparse`       | N random low-16 values, N < 4096                                  | array                 |
-| `dense`        | N random low-16 values, N > 4096 (e.g. 4097–60000)               | bitset                |
-| `full`         | all 65536 values in the chunk                                     | run (after optimize) / bitset |
-| `runs`         | K disjoint consecutive ranges (e.g. 3–10 runs of length 50–2000) | run (after optimize)  |
-| `single`       | one value                                                         | array (size 1)        |
-| `boundary`     | low-16 values {0, 1, 65534, 65535}                               | array, edge offsets   |
+| Profile        | How to fill the chunk                                              | Type w/o `runOptimize` | Type after `runOptimize` |
+|----------------|-------------------------------------------------------------------|------------------------|--------------------------|
+| `sparse`       | N random low-16 values, N < 4096                                  | array                  | array (unchanged)        |
+| `dense`        | N random low-16 values, N > 4096 (e.g. 4097–60000)               | bitset                 | bitset (unless runs win) |
+| `full`         | all 65536 values in the chunk (build via `addRange`, see below)   | bitset                 | run                      |
+| `runs`         | K disjoint consecutive ranges (e.g. 3–10 runs of length 50–2000) | array or bitset (by count) | run                  |
+| `single`       | one value                                                         | array (size 1)         | array (unchanged)        |
+| `boundary`     | low-16 values {0, 1, 65534, 65535}                               | array, edge offsets    | array (unchanged)        |
+
+**Important:** with `run_optimize = false`, `runs` and `full` do **not** produce run containers — `runs` is whatever its raw cardinality dictates (array if < 4096, else bitset), and `full` is a bitset. Run containers only exist after `runOptimize`. Chunk specs must state the expected container type **for the optimize setting they test under** so they don't assert the wrong thing.
 
 The generator API (suggested):
 
@@ -123,6 +125,11 @@ Build wiring.
 2. `randomMixed` must, over a run of a few hundred iterations, produce **every profile** and **every adjacent profile pairing** with high probability. (Don't leave it to chance on a uniform distribution — weight `dense`/`runs`/`full` up so they actually appear; uniform-random would bury them.)
 3. The returned `values` slice is the ground-truth oracle input. Build the CRoaring bitmap from the identical slice so the two are guaranteed to start equal, independent of how rawr chose to lay out containers.
 4. Always offer a `run_optimize` toggle; run containers only exist after `runOptimize`, so half the matrix must run with it on.
+5. **Build `full` (and large `runs`) compactly** via `addRange`, not by adding 65536 individual values — the latter is slow and pointless. Note the cost tradeoff: the ground-truth `values` slice still has to enumerate every value (the oracle is built from it), so a `full` chunk contributes 65536 `u32`s to that slice. Across many `full`/`dense` chunks the slice gets large fast; keep `max_chunks` and the per-profile sizes modest in the randomized loop (see Acceptance criteria) so the harness stays fast. An optional future optimization is to let the oracle also build via `roaring_bitmap_add_range` for `full`/`runs` chunks instead of value-by-value, but value-by-value from the slice is fine to start.
+
+### Generator self-test (ships with this piece)
+
+The generator must come with a small self-test (unit tests, pure rawr — no oracle) proving it can **force each container type**: build a single bitmap with chunk 0 = `sparse`, chunk 1 = `dense`, chunk 2 = `runs` (run-optimized), chunk 3 = `full`, and assert each chunk's container is the expected type (array / bitset / run / run) by inspecting the container tag. This is the proof that the generator does its one job before anything depends on it.
 
 ---
 
@@ -336,16 +343,31 @@ The suite is "at parity with CRoaring's test suite" when:
    mixed generator (`test_gen.randomMixed`), exercising bitset/run containers.
    Part B: a handful of the highest-value identities are oracle-anchored in
    `diff_test.zig` via `assertAgree`.
-6. `zig build difftest` runs the full matrix and a randomized loop (≥1000 random `(A,B)` pairs across mixed profiles) with zero failures.
+6. `zig build difftest` runs the full matrix and a randomized loop across mixed profiles with zero failures. The loop's iteration count and profile sizes must be **tunable constants** at the top of `diff_test.zig` so `difftest` stays a fast, run-it-every-time command rather than a soak test. Target ≥1000 random `(A,B)` pairs as the default, but if dense/full-heavy profiles make that impractically slow, cap `max_chunks` / dense sizes so a default run finishes in a few seconds — and leave the constants obvious so a deeper soak is one edit away. A practical `difftest` beats a thorough one nobody runs.
 7. `zig build test` and `zig build validate` still pass unchanged.
 
-## Sequencing for the implementer
+## Chunk plan
 
-1. Task 0 (wrapper) — 30 min.
-2. Task 1 (generator) — the bulk of the work; everything depends on it.
-3. Task 2 (harness + matrix + transitions) — the payload.
-4. Task 3 (re-point property tests) — small.
-5. Task 4 (extend round-trip) — small.
-6. Task 5 (malformed smoke) — optional, last.
+This spec is chunked into the following standalone sub-specs. Each has its own
+acceptance criteria and pass/fail. Dependency order is roughly top-to-bottom;
+01-04/01-05 can proceed in parallel once 01-03 lands.
 
-Implement Task 1 fully and get one `(sparse, dense)` OR case passing end-to-end through `assertAgree` before fanning out the whole matrix — that proves the generator, the oracle build, and the comparator all line up.
+| Chunk | Title | Covers | Depends on |
+|-------|-------|--------|------------|
+| `01-01` | CRoaring wrapper extension | Task 0 | — |
+| `01-02` | Container-type-aware generator + self-test | Task 1 | — |
+| `01-03` | Prove the rig (wiring, oracle, `assertAgree`, one case) | Task 2 core | 01-01, 01-02 |
+| `01-04` | Operation matrix (8 ops + predicates + 9 pairs) | Task 2 matrix | 01-03 |
+| `01-05` | Container-transition + edge cases | Task 2 transitions | 01-03 |
+| `01-06` | Randomized differential loop + tunability | Task 2 random | 01-03, 01-04 |
+| `01-07` | Property tests (A) + oracle-anchored identities (B) | Task 3 | 01-02, 01-03 |
+| `01-08` | Round-trip + addRange coverage | Task 4 | 01-02 |
+| `01-09` | Malformed input smoke test (optional) | Task 5 | 01-02 |
+
+The critical path is `01-02` (the generator — design-risky, universal dependency)
+then `01-03` (prove the rig). `01-03` deliberately bundles the `assertAgree`
+comparator with the first passing case: a "passing case" *is* an `assertAgree`
+call, so splitting them would only manufacture throwaway inline checks. Get the
+one `(sparse, dense)` OR case passing end-to-end through `assertAgree` before
+fanning out 01-04/01-05 — that proves the generator, the oracle build, and the
+comparator all line up.
