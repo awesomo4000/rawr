@@ -343,7 +343,7 @@ fn arrayIntersectArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *Arr
     }
 
     result.cardinality = @intCast(k);
-    return arrayToArrayOrRun(allocator, result);
+    return .{ .array = result };
 }
 
 fn arrayIntersectBitset(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *BitsetContainer) !Container {
