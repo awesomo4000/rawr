@@ -56,8 +56,24 @@ In `deserializeFromReader` (`serialize.zig:188`):
    cap in place these can't overflow anyway, but the widening is belt-and-suspenders
    and matches how `frozen.zig` already does it.
 
-This is a behavior-preserving change for all valid input (valid `size` is always
-`<= 65536`); it only adds rejection of out-of-range `size`.
+3. **Preserve run-container header cardinality.** Today deserialize reads each
+   container's header cardinality into `cardinalities[i]` but then builds run
+   containers with `rc.cardinality = -1` (`serialize.zig:261`), discarding it —
+   so `validate()` would have nothing to compare a recomputed run cardinality
+   against. Change deserialize to store the header cardinality into
+   `rc.cardinality` (i.e. `@intCast(cardinalities[i])`), exactly as it already
+   does for bitset containers (`:269`). This makes deserialize uniform across
+   container types (header cardinality is trusted on the fast path for *all*
+   types), and gives `validate()` a stored value to check the recomputed
+   `sum(length+1)` against. **This is the one change that unblocks the run
+   cardinality check below — without it, run-cardinality corruption is not
+   observable.**
+
+Points 1–2 are behavior-preserving for valid input (valid `size` is always
+`<= 65536`); they only add rejection of out-of-range `size`. Point 3 is also
+behavior-preserving for valid input (the stored value equals the recomputed one)
+and additionally makes `cardinality()` on a freshly-deserialized run container
+O(1) instead of lazily recomputed.
 
 ## Task 2 — `validate()` semantic check
 
@@ -99,11 +115,23 @@ Checks (mirroring CRoaring `internal_validate`, scoped to rawr's representation)
      **non-overlapping, non-adjacent** — for consecutive runs, the next run's
      `start` must be `> prev.start + prev.length + 1` (a gap of at least one;
      adjacent/overlapping runs should have been merged) → `RunOrdering`; each run
-     within `u16` range; `sum(length + 1)` over all runs equals the run
-     container's cardinality (`RunCardinalityMismatch`). Note rawr stores run
-     cardinality lazily (`cardinality == -1` until computed) — compute it for the
-     check without persisting if you want to keep `validate` non-mutating, or
-     allow it to populate the cache (document which).
+     within `u16` range; `sum(length + 1)` over all runs equals
+     `rc.cardinality` → `RunCardinalityMismatch`.
+- **`.reserved`**: cannot arise from deserialize (the tagged-pointer type is
+  always array/bitset/run on that path) and cannot be constructed by user code.
+  Match the rest of the codebase and treat it as `unreachable` in the switch — do
+  **not** add a `ValidateError` variant for it.
+
+**Run cardinality — firm decision (resolves Morty's points 2 & 3):** `validate`
+stays strictly non-mutating (`self: *const Self`). It reads the **field**
+`rc.cardinality` directly (not `getCardinality()`, which may recompute/mutate) and
+compares it to the freshly recomputed `sum(length + 1)`. This is observable only
+because **Task 1 point 3** makes deserialize store the header cardinality into
+`rc.cardinality` instead of `-1`. (If some other code path ever leaves a run
+container at `rc.cardinality == -1`, treat that as "nothing to check" for the
+mismatch test — the ordering/range checks still apply — rather than recomputing
+and persisting.) The same pattern applies to bitset: compare the **field**
+`bc.cardinality` to the recomputed popcount, no mutation.
 
 Rationale notes for the implementer:
 - The array-vs-bitset cardinality-range checks encode rawr's own representation
@@ -111,11 +139,24 @@ Rationale notes for the implementer:
   A deserialized bitmap always satisfies them by construction; the checks matter
   when `validate` is run on a bitmap built some other way or from corrupted
   bytes where the type bit and the cardinality disagree.
-- Keep it allocation-free: all checks are scans over existing container memory.
+- Keep it allocation-free and non-mutating: all checks are scans over existing
+  container memory, reading cardinality fields directly.
 
-## Task 3 (optional) — `deserializeSafe` convenience wrapper
+### Performance
 
-A one-call wrapper for the untrusted-allocating-input case:
+`validate()` is **O(serialized size)** — a single linear pass, no nested loops.
+The dominant term is the bitset popcount (1024-word `@popCount` per bitset
+container; worst case an all-bitset bitmap ≈ one full scan of the data). It runs
+at multiple GB/s (sequential, hardware popcount), so validating roughly **doubles
+deserialize time** in the bitset-heavy worst case and less otherwise. There is no
+superlinear behavior. This linear-but-real extra pass is the reason `validate()`
+is opt-in and kept off the trusted deserialize fast path.
+
+## Task 3 — `deserializeSafe` convenience wrapper
+
+Included (not optional): if untrusted allocating input is the use case, the API
+story should be complete so callers don't have to remember `deserialize` +
+`validate` + cleanup themselves. A one-call wrapper:
 
 ```zig
 /// Deserialize, then validate. On validation failure, frees the partially-built
@@ -129,8 +170,8 @@ pub fn deserializeSafe(allocator, data) (DeserializeError || ValidateError)!Self
 ```
 
 The only subtlety is the `errdefer bm.deinit()` so a validation failure doesn't
-leak the bitmap. Add the `OwnedBitmap` equivalent (`deserializeSafeOwned`) only if
-the owned API already mirrors the others.
+leak the bitmap. Add the `OwnedBitmap` equivalent (`deserializeSafeOwned`) to
+match the existing `*Owned` API surface.
 
 ## Task 4 — Tests (test-first for the reject cases, like spec 04)
 
@@ -144,19 +185,28 @@ build a valid serialized bitmap, corrupt the one relevant field, `deserialize`
    leaving the header cardinality untouched)
 4. overlapping/adjacent runs (corrupt run pairs)
 5. run cardinality mismatch
-6. `size > 65536` rejected by **Task 1** at `deserialize` time
-   (`expectError(error.InvalidFormat, deserialize(...))`)
 
 Build the bitset fixture as a **real bitset** (scattered adds / `fromSorted` of
 >4096 non-contiguous values / `test_gen` `dense`), not `addRange`, since
 contiguous ranges store as runs (same caveat as spec 04). Build run fixtures via
 `addRange` + `runOptimize`.
 
+**`size > 65536` cap (Task 1):** assert `expectError(error.InvalidFormat,
+deserialize(bad))`. Treat this as a **hardening test, not a "the old tree
+accepted it" reproducer** — a crafted oversized-`size` buffer may, on the pre-fix
+tree, fail earlier via EOF or a failed giant allocation rather than by being
+accepted, so don't require demonstrating prior acceptance (unlike the semantic
+reproducers above). Just assert the cap rejects it cleanly.
+
 **Accept side:** every valid bitmap passes. Round-trip a `test_gen` bitmap for
 each profile (`sparse`/`dense`/`full`/`runs`/`single`/`boundary`),
 run-optimized and not, through `serialize` → `deserialize` → `validate()` and
-assert no error. These are pure rawr — put them in `bitmap_tests.zig` /
-`serialize.zig` tests, no CRoaring needed.
+assert no error. These are pure rawr, no CRoaring needed.
+
+**Test placement:** `validate()` semantic tests (reject reproducers + accept
+side) go in `bitmap_tests.zig` since `validate()` is a `RoaringBitmap` method;
+the `size > 65536` deserialize-time cap test goes with the other serialize tests
+in `serialize.zig`.
 
 **Differential (optional, nice-to-have):** expose
 `roaring_bitmap_internal_validate` in `vendor/croaring_wrapper.h` and, in
@@ -169,16 +219,20 @@ different first-violations), so only the accept side is differentially anchored.
 
 1. `deserialize` rejects `size > 65536` with `error.InvalidFormat`; `size * 2`
    and `size * 4` are computed in `usize`. Valid round-trips unchanged.
-2. `validate()` exists, is allocation-free and non-`c`, and returns the listed
-   errors for each malformed shape.
-3. Each Task 4 reject reproducer was shown to fail against the pre-`validate`
-   tree (i.e. the malformed bitmap deserializes "successfully") and now returns
-   the specific `ValidateError`.
-4. Every valid `test_gen` bitmap (all profiles, run-optimized and not) passes
+2. `deserialize` stores run-container header cardinality into `rc.cardinality`
+   (Task 1 point 3), matching the bitset path; valid round-trips unchanged.
+3. `validate()` exists, is allocation-free, non-mutating (`*const Self`), and
+   non-`c`, and returns the listed errors for each malformed shape; `.reserved`
+   is `unreachable`, not an error variant.
+4. Each **semantic** Task 4 reject reproducer was shown to fail against the
+   pre-`validate` tree (the malformed bitmap deserializes "successfully") and now
+   returns the specific `ValidateError`. The `size > 65536` case is a hardening
+   test (clean rejection), not a prior-acceptance reproducer.
+5. Every valid `test_gen` bitmap (all profiles, run-optimized and not) passes
    `validate()` (accept side).
-5. `deserializeSafe` (if implemented) frees the bitmap on validation failure
-   (no leak — confirm under the leak-checking test allocator).
-6. `zig build test`, `zig build validate`, `zig build difftest` all pass.
+6. `deserializeSafe` (and `deserializeSafeOwned`) free the bitmap on validation
+   failure with no leak — confirm under the leak-checking test allocator.
+7. `zig build test`, `zig build validate`, `zig build difftest` all pass.
 
 ## Out of scope
 
