@@ -277,6 +277,8 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
             ac.cardinality = @intCast(card);
             result.containers[i] = TaggedPtr.initArray(ac);
         }
+
+        result.size = @intCast(i + 1);
     }
 
     // Compute total cardinality from header data (free - already parsed)
@@ -284,7 +286,6 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
     for (cardinalities[0..size]) |c| total_cardinality += c;
     result.cached_cardinality = @intCast(total_cardinality);
 
-    result.size = size;
     return result;
 }
 

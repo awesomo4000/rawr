@@ -2,12 +2,20 @@ const std = @import("std");
 const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
 const FrozenBitmap = rawr.FrozenBitmap;
+const test_gen = rawr.test_gen;
 const c = @import("c");
 
 const allocator = std.heap.c_allocator;
 
 var tests_passed: u32 = 0;
 var tests_failed: u32 = 0;
+
+fn bitmapHasRunContainers(bm: *const RoaringBitmap) bool {
+    for (bm.containers[0..bm.size]) |tp| {
+        if (tp.getType() == .run) return true;
+    }
+    return false;
+}
 
 /// Build identical bitmaps in rawr and CRoaring from a value list.
 /// Serialize both, compare bytes, cross-deserialize, verify contents.
@@ -22,18 +30,24 @@ fn validateRoundTrip(name: []const u8, values: []const u32, run_optimize: bool) 
         _ = try rbm.runOptimize();
     }
 
+    try validateBitmapRoundTrip(name, &rbm, values, run_optimize);
+}
+
+/// Validate an already-built rawr bitmap against a CRoaring oracle built from
+/// the same sorted value list.
+fn validateBitmapRoundTrip(name: []const u8, rbm: *RoaringBitmap, values: []const u32, run_optimize: bool) !void {
     // --- Build CRoaring bitmap ---
     const cr = c.roaring_bitmap_create() orelse return error.CRoaringAllocFailed;
     defer c.roaring_bitmap_free(cr);
     for (values) |v| {
         c.roaring_bitmap_add(cr, v);
     }
-    if (run_optimize) {
+    if (run_optimize or bitmapHasRunContainers(rbm)) {
         _ = c.roaring_bitmap_run_optimize(cr);
     }
 
     // --- Serialize both ---
-    const rawr_bytes = try rawr.RoaringBitmap.serialize(&rbm, allocator);
+    const rawr_bytes = try rawr.RoaringBitmap.serialize(rbm, allocator);
     defer allocator.free(rawr_bytes);
 
     const cr_size = c.roaring_bitmap_portable_size_in_bytes(cr);
@@ -90,7 +104,7 @@ fn validateRoundTrip(name: []const u8, values: []const u32, run_optimize: bool) 
         tests_failed += 1;
         return error.CardinalityMismatch;
     }
-    if (!rbm2.equals(&rbm)) {
+    if (!rbm2.equals(rbm)) {
         std.debug.print("FAIL: {s} - content mismatch after rawr deserialize\n", .{name});
         tests_failed += 1;
         return error.ContentMismatch;
@@ -99,6 +113,60 @@ fn validateRoundTrip(name: []const u8, values: []const u32, run_optimize: bool) 
     tests_passed += 1;
     const suffix = if (run_optimize) " [run-optimized]" else "";
     std.debug.print("  PASS: {s}{s} ({d} values, {d} bytes)\n", .{ name, suffix, values.len, rawr_bytes.len });
+}
+
+fn profileName(profile: test_gen.Profile) []const u8 {
+    return switch (profile) {
+        .sparse => "sparse",
+        .dense => "dense",
+        .full => "full",
+        .runs => "runs",
+        .single => "single",
+        .boundary => "boundary",
+    };
+}
+
+fn validateGeneratedRoundTrip(
+    name: []const u8,
+    seed: u64,
+    chunks: []const test_gen.ChunkProfile,
+    run_optimize: bool,
+) !void {
+    var prng = std.Random.DefaultPrng.init(seed);
+    var generated = try test_gen.build(allocator, prng.random(), chunks, run_optimize);
+    defer generated.deinit();
+
+    try validateBitmapRoundTrip(name, &generated.bm, generated.values, run_optimize);
+}
+
+fn validateGeneratedProfileMatrix(run_optimize: bool) !void {
+    const profiles = [_]test_gen.Profile{ .sparse, .dense, .full, .runs, .single, .boundary };
+
+    for (profiles, 0..) |a, ai| {
+        for (profiles, 0..) |b, bi| {
+            const chunks = [_]test_gen.ChunkProfile{
+                .{ .key = 0, .profile = a },
+                .{ .key = 1, .profile = b },
+            };
+
+            var name_buf: [96]u8 = undefined;
+            const name = try std.fmt.bufPrint(
+                &name_buf,
+                "generated_{s}_{s}",
+                .{ profileName(a), profileName(b) },
+            );
+            const seed = 0xA11C_E000 + (@as(u64, @intCast(ai)) << 8) + @as(u64, @intCast(bi));
+            try validateGeneratedRoundTrip(name, seed, &chunks, run_optimize);
+        }
+    }
+}
+
+fn validateRandomMixedRoundTrip(name: []const u8, seed: u64, run_optimize: bool) !void {
+    var prng = std.Random.DefaultPrng.init(seed);
+    var generated = try test_gen.randomMixed(allocator, prng.random(), 6, run_optimize);
+    defer generated.deinit();
+
+    try validateBitmapRoundTrip(name, &generated.bm, generated.values, run_optimize);
 }
 
 /// Validate using addRange instead of individual adds.
@@ -322,6 +390,24 @@ pub fn main() !void {
     for (0..100) |i| four_chunks_runs[200 + i] = @intCast(131072 + i); // chunk 2
     for (0..100) |i| four_chunks_runs[300 + i] = @intCast(196608 + i); // chunk 3
     try validateRoundTrip("four_chunks_run_optimized", &four_chunks_runs, true);
+
+    // ========== Generated profile tests ==========
+    std.debug.print("\nGenerated profile matrix tests:\n", .{});
+    try validateGeneratedProfileMatrix(false);
+    try validateGeneratedProfileMatrix(true);
+
+    try validateRandomMixedRoundTrip("random_mixed_seed_01", 0xD1FF_7E57_1001, false);
+    try validateRandomMixedRoundTrip("random_mixed_seed_02", 0xD1FF_7E57_1002, false);
+    try validateRandomMixedRoundTrip("random_mixed_seed_03", 0xD1FF_7E57_1003, false);
+    try validateRandomMixedRoundTrip("random_mixed_seed_01", 0xD1FF_7E57_1001, true);
+    try validateRandomMixedRoundTrip("random_mixed_seed_02", 0xD1FF_7E57_1002, true);
+    try validateRandomMixedRoundTrip("random_mixed_seed_03", 0xD1FF_7E57_1003, true);
+
+    // ========== addRange differential tests ==========
+    std.debug.print("\naddRange differential tests:\n", .{});
+    try validateRangeRoundTrip("addrange_run_single_chunk", 100, 10_000, true);
+    try validateRangeRoundTrip("addrange_large_contiguous", 0, 5_000, false);
+    try validateRangeRoundTrip("addrange_cross_chunks", 65_530, 196_620, true);
 
     // ========== Large scale tests ==========
     std.debug.print("\nLarge scale tests:\n", .{});

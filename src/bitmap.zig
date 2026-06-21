@@ -630,20 +630,36 @@ pub const RoaringBitmap = struct {
             } else if (key_a > key_b) {
                 j += 1;
             } else {
-                // Try scratch allocator first (works for array containers)
-                // Falls back to real allocator for bitset/run containers that don't fit
+                // Try scratch allocator first (works for small array results).
+                // Reset before fallback so failed scratch attempts don't affect ownership.
                 const scratch_alloc = scratch.allocator();
-                const c = ops.containerIntersection(
-                    scratch_alloc,
-                    Container.fromTagged(self.containers[i]),
-                    Container.fromTagged(other.containers[j]),
-                ) catch try ops.containerIntersection(
-                    allocator,
-                    Container.fromTagged(self.containers[i]),
-                    Container.fromTagged(other.containers[j]),
-                );
-
-                const used_scratch = scratch.end_index > 0;
+                const IntersectionResult = struct {
+                    container: Container,
+                    used_scratch: bool,
+                };
+                const intersection: IntersectionResult = blk: {
+                    const scratch_container = ops.containerIntersection(
+                        scratch_alloc,
+                        Container.fromTagged(self.containers[i]),
+                        Container.fromTagged(other.containers[j]),
+                    ) catch {
+                        scratch.reset();
+                        break :blk .{
+                            .container = try ops.containerIntersection(
+                                allocator,
+                                Container.fromTagged(self.containers[i]),
+                                Container.fromTagged(other.containers[j]),
+                            ),
+                            .used_scratch = false,
+                        };
+                    };
+                    break :blk .{
+                        .container = scratch_container,
+                        .used_scratch = true,
+                    };
+                };
+                const c = intersection.container;
+                const used_scratch = intersection.used_scratch;
 
                 if (c.getCardinality() > 0) {
                     if (used_scratch) {

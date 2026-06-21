@@ -1,19 +1,19 @@
 const std = @import("std");
 const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
+const test_gen = @import("test_gen.zig");
+
+const PROPERTY_ITERS: usize = 200;
+const PROPERTY_COMPLEX_ITERS: usize = 100;
+const PROPERTY_MAX_CHUNKS: usize = 3;
 
 /// Property-based tests verifying set algebra axioms.
 /// Uses random bitmaps and checks algebraic identities.
 
 fn randomBitmap(allocator: std.mem.Allocator, rng: std.Random, max_values: usize) !RoaringBitmap {
-    var bm = try RoaringBitmap.init(allocator);
-    errdefer bm.deinit();
-
-    const num_values = rng.intRangeAtMost(usize, 1, max_values);
-    for (0..num_values) |_| {
-        const value = rng.int(u32);
-        _ = try bm.add(value);
-    }
-    return bm;
+    _ = max_values;
+    const generated = try test_gen.randomMixed(allocator, rng, PROPERTY_MAX_CHUNKS, rng.boolean());
+    allocator.free(generated.values);
+    return generated.bm;
 }
 
 fn expectBitmapEqual(a: *const RoaringBitmap, b: *const RoaringBitmap) !void {
@@ -31,7 +31,7 @@ test "commutativity: A ∪ B = B ∪ A" {
     var prng = std.Random.DefaultPrng.init(12345);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 100);
@@ -51,7 +51,7 @@ test "commutativity: A ∩ B = B ∩ A" {
     var prng = std.Random.DefaultPrng.init(12346);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 100);
@@ -71,7 +71,7 @@ test "commutativity: A ⊕ B = B ⊕ A" {
     var prng = std.Random.DefaultPrng.init(12347);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 100);
@@ -91,7 +91,7 @@ test "associativity: (A ∪ B) ∪ C = A ∪ (B ∪ C)" {
     var prng = std.Random.DefaultPrng.init(12348);
     const rng = prng.random();
 
-    for (0..30) |_| {
+    for (0..PROPERTY_COMPLEX_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 50);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 50);
@@ -120,7 +120,7 @@ test "associativity: (A ∩ B) ∩ C = A ∩ (B ∩ C)" {
     var prng = std.Random.DefaultPrng.init(12349);
     const rng = prng.random();
 
-    for (0..30) |_| {
+    for (0..PROPERTY_COMPLEX_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 50);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 50);
@@ -149,7 +149,7 @@ test "distributivity: A ∩ (B ∪ C) = (A ∩ B) ∪ (A ∩ C)" {
     var prng = std.Random.DefaultPrng.init(12350);
     const rng = prng.random();
 
-    for (0..30) |_| {
+    for (0..PROPERTY_COMPLEX_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 50);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 50);
@@ -180,7 +180,7 @@ test "identity: A ∪ ∅ = A" {
     var prng = std.Random.DefaultPrng.init(12351);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
         var empty = try RoaringBitmap.init(allocator);
@@ -198,7 +198,7 @@ test "idempotence: A ∪ A = A" {
     var prng = std.Random.DefaultPrng.init(12352);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
 
@@ -214,7 +214,7 @@ test "idempotence: A ∩ A = A" {
     var prng = std.Random.DefaultPrng.init(12353);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
 
@@ -230,7 +230,7 @@ test "complement: A − A = ∅" {
     var prng = std.Random.DefaultPrng.init(12354);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
 
@@ -246,7 +246,7 @@ test "self xor: A ⊕ A = ∅" {
     var prng = std.Random.DefaultPrng.init(12355);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
 
@@ -262,7 +262,7 @@ test "cardinality: |A ∪ B| + |A ∩ B| = |A| + |B|" {
     var prng = std.Random.DefaultPrng.init(12356);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 100);
@@ -285,7 +285,7 @@ test "subset transitivity: (A ∩ B) ⊆ A and (A ∩ B) ⊆ B" {
     var prng = std.Random.DefaultPrng.init(12357);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 100);
@@ -304,7 +304,7 @@ test "difference subset: (A − B) ⊆ A" {
     var prng = std.Random.DefaultPrng.init(12358);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 100);
@@ -322,7 +322,7 @@ test "xor decomposition: A ⊕ B = (A − B) ∪ (B − A)" {
     var prng = std.Random.DefaultPrng.init(12359);
     const rng = prng.random();
 
-    for (0..30) |_| {
+    for (0..PROPERTY_COMPLEX_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 50);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 50);
@@ -349,7 +349,7 @@ test "absorption: A ∪ (A ∩ B) = A" {
     var prng = std.Random.DefaultPrng.init(12360);
     const rng = prng.random();
 
-    for (0..50) |_| {
+    for (0..PROPERTY_ITERS) |_| {
         var a = try randomBitmap(allocator, rng, 100);
         defer a.deinit();
         var b = try randomBitmap(allocator, rng, 100);

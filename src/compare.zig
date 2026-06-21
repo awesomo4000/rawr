@@ -180,8 +180,10 @@ fn runSubsetRun(a: *RunContainer, b: *RunContainer) bool {
             if (j >= b.n_runs) return false; // No more runs in B
             if (b.runs[j].start > pos) return false; // Gap in B's coverage
             // B.runs[j] covers up to its end
-            pos = b.runs[j].end() + 1;
-            if (pos <= end_a) j += 1; // Need next run in B
+            const b_end: u32 = b.runs[j].end();
+            if (b_end >= end_a) break;
+            pos = b_end + 1;
+            j += 1; // Need next run in B
         }
     }
     return true;

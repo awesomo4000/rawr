@@ -1,6 +1,9 @@
 const std = @import("std");
 const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
 const OwnedBitmap = @import("bitmap.zig").OwnedBitmap;
+const fmt = @import("format.zig");
+
+const MALFORMED_SMOKE_SEED: u64 = 0xBAD5_EED0_1609;
 
 // ============================================================================
 // Tests
@@ -1175,4 +1178,88 @@ test "fromSlice cross-container with duplicates" {
 
     try std.testing.expectEqual(@as(u64, 5), bm.cardinality());
     try std.testing.expectEqual(@as(u32, 3), bm.size); // 3 containers
+}
+
+fn buildMixedSerializedBitmap(allocator: std.mem.Allocator) ![]u8 {
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    for (0..128) |i| {
+        _ = try bm.add(@intCast(i * 17));
+    }
+    for (0..5000) |i| {
+        _ = try bm.add(65_536 + @as(u32, @intCast(i)));
+    }
+    _ = try bm.addRange(131_072 + 100, 131_072 + 2_000);
+    _ = try bm.runOptimize();
+
+    return bm.serialize(allocator);
+}
+
+fn tryDeserializeCorrupted(allocator: std.mem.Allocator, data: []const u8) !void {
+    var restored = RoaringBitmap.deserialize(allocator, data) catch return;
+    defer restored.deinit();
+
+    _ = restored.cardinality();
+    _ = restored.contains(0);
+    var iter = restored.iterator();
+    _ = iter.next();
+}
+
+fn serializedDescStart(data: []const u8) ?usize {
+    if (data.len < 4) return null;
+
+    const cookie = std.mem.readInt(u32, data[0..4], .little);
+    if ((cookie & 0xFFFF) == fmt.SERIAL_COOKIE) {
+        const size = ((cookie >> 16) & 0xFFFF) + 1;
+        return 4 + ((@as(usize, size) + 7) / 8);
+    }
+    if (cookie == fmt.SERIAL_COOKIE_NO_RUNCONTAINER) {
+        return 8;
+    }
+    return null;
+}
+
+fn writeU16LE(data: []u8, offset: usize, value: u16) void {
+    data[offset] = @truncate(value);
+    data[offset + 1] = @truncate(value >> 8);
+}
+
+test "deserialize malformed input smoke" {
+    const allocator = std.testing.allocator;
+
+    const bytes = try buildMixedSerializedBitmap(allocator);
+    defer allocator.free(bytes);
+    try std.testing.expect(bytes.len > 0);
+
+    var prng = std.Random.DefaultPrng.init(MALFORMED_SMOKE_SEED);
+    const rng = prng.random();
+
+    for (0..16) |_| {
+        var corrupted = try allocator.dupe(u8, bytes);
+        defer allocator.free(corrupted);
+
+        const idx = rng.uintLessThan(usize, corrupted.len);
+        corrupted[idx] ^= @as(u8, 1) << @intCast(rng.uintLessThan(u4, 8));
+        try tryDeserializeCorrupted(allocator, corrupted);
+    }
+
+    for (0..16) |_| {
+        const new_len = rng.uintLessThan(usize, bytes.len);
+        try tryDeserializeCorrupted(allocator, bytes[0..new_len]);
+    }
+
+    if (serializedDescStart(bytes)) |desc_start| {
+        if (desc_start + 4 <= bytes.len) {
+            const zero_cardinality = try allocator.dupe(u8, bytes);
+            defer allocator.free(zero_cardinality);
+            writeU16LE(zero_cardinality, desc_start + 2, 0);
+            try tryDeserializeCorrupted(allocator, zero_cardinality);
+
+            const max_cardinality = try allocator.dupe(u8, bytes);
+            defer allocator.free(max_cardinality);
+            writeU16LE(max_cardinality, desc_start + 2, 0xFFFF);
+            try tryDeserializeCorrupted(allocator, max_cardinality);
+        }
+    }
 }

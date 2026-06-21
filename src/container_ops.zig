@@ -62,7 +62,7 @@ pub fn containerUnionInPlace(allocator: std.mem.Allocator, a: Container, b: Cont
         .bitset => |ac| switch (b) {
             .array => |bc| bitsetUnionArrayInPlace(ac, bc),
             .bitset => |bc| bitsetUnionBitsetInPlace(ac, bc),
-            .run => |rc| bitsetUnionRunInPlace(ac, rc),
+            .run => |rc| bitsetUnionRun(allocator, ac, rc),
             .reserved => unreachable,
         },
         .run => |ac| switch (b) {
@@ -191,7 +191,7 @@ fn arrayUnionArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayCo
         k += 1;
     }
     result.cardinality = @intCast(k);
-    return .{ .array = result };
+    return arrayToArrayOrRun(allocator, result);
 }
 
 fn arrayUnionBitset(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *BitsetContainer) !Container {
@@ -229,13 +229,8 @@ fn arrayUnionRun(allocator: std.mem.Allocator, ac: *ArrayContainer, rc: *RunCont
     }
 
     const card = result.computeCardinality();
-    if (card <= ArrayContainer.MAX_CARDINALITY) {
-        // Convert to array
-        const arr = try bitsetToArray(allocator, result);
-        result.deinit(allocator);
-        return .{ .array = arr };
-    }
-    return .{ .bitset = result };
+    _ = card;
+    return bitsetToArrayOrRun(allocator, result);
 }
 
 fn bitsetUnionBitset(allocator: std.mem.Allocator, a: *BitsetContainer, b: *BitsetContainer) !Container {
@@ -257,7 +252,7 @@ fn bitsetUnionRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *RunCo
         }
     }
     _ = result.computeCardinality();
-    return .{ .bitset = result };
+    return bitsetToArrayOrRun(allocator, result);
 }
 
 fn runUnionRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
@@ -348,7 +343,7 @@ fn arrayIntersectArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *Arr
     }
 
     result.cardinality = @intCast(k);
-    return .{ .array = result };
+    return arrayToArrayOrRun(allocator, result);
 }
 
 fn arrayIntersectBitset(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *BitsetContainer) !Container {
@@ -363,7 +358,7 @@ fn arrayIntersectBitset(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *
         }
     }
     result.cardinality = @intCast(k);
-    return .{ .array = result };
+    return arrayToArrayOrRun(allocator, result);
 }
 
 fn arrayIntersectRun(allocator: std.mem.Allocator, ac: *ArrayContainer, rc: *RunContainer) !Container {
@@ -378,7 +373,7 @@ fn arrayIntersectRun(allocator: std.mem.Allocator, ac: *ArrayContainer, rc: *Run
         }
     }
     result.cardinality = @intCast(k);
-    return .{ .array = result };
+    return arrayToArrayOrRun(allocator, result);
 }
 
 fn bitsetIntersectBitset(allocator: std.mem.Allocator, a: *BitsetContainer, b: *BitsetContainer) !Container {
@@ -397,29 +392,19 @@ fn bitsetIntersectBitset(allocator: std.mem.Allocator, a: *BitsetContainer, b: *
 }
 
 fn bitsetIntersectRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *RunContainer) !Container {
-    // Result is at most the run's cardinality
-    const result = try ArrayContainer.init(allocator, @intCast(@min(rc.getCardinality(), ArrayContainer.MAX_CARDINALITY)));
+    const result = try BitsetContainer.init(allocator);
     errdefer result.deinit(allocator);
 
-    var k: usize = 0;
     for (rc.runs[0..rc.n_runs]) |run| {
         var v: u32 = run.start;
         while (v <= run.end()) : (v += 1) {
             if (bc.contains(@intCast(v))) {
-                result.values[k] = @intCast(v);
-                k += 1;
+                _ = result.add(@intCast(v));
             }
         }
     }
-    result.cardinality = @intCast(k);
-
-    // If too large for array, convert to bitset
-    if (result.cardinality > ArrayContainer.MAX_CARDINALITY) {
-        const bs = try arrayToBitset(allocator, result);
-        result.deinit(allocator);
-        return .{ .bitset = bs };
-    }
-    return .{ .array = result };
+    _ = result.computeCardinality();
+    return bitsetToArrayOrRun(allocator, result);
 }
 
 fn runIntersectRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
@@ -758,7 +743,7 @@ fn arrayDifferenceRun(allocator: std.mem.Allocator, ac: *ArrayContainer, rc: *Ru
         }
     }
     result.cardinality = @intCast(k);
-    return .{ .array = result };
+    return arrayToArrayOrRun(allocator, result);
 }
 
 fn bitsetDifferenceArray(allocator: std.mem.Allocator, bc: *BitsetContainer, ac: *ArrayContainer) !Container {
@@ -807,12 +792,8 @@ fn bitsetDifferenceRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *
     }
 
     const card = result.computeCardinality();
-    if (card <= ArrayContainer.MAX_CARDINALITY) {
-        const arr = try bitsetToArray(allocator, result);
-        result.deinit(allocator);
-        return .{ .array = arr };
-    }
-    return .{ .bitset = result };
+    _ = card;
+    return bitsetToArrayOrRun(allocator, result);
 }
 
 fn runDifferenceArray(allocator: std.mem.Allocator, rc: *RunContainer, ac: *ArrayContainer) !Container {
@@ -832,12 +813,8 @@ fn runDifferenceArray(allocator: std.mem.Allocator, rc: *RunContainer, ac: *Arra
     }
 
     const card = result.computeCardinality();
-    if (card <= ArrayContainer.MAX_CARDINALITY) {
-        const arr = try bitsetToArray(allocator, result);
-        result.deinit(allocator);
-        return .{ .array = arr };
-    }
-    return .{ .bitset = result };
+    _ = card;
+    return bitsetToArrayOrRun(allocator, result);
 }
 
 fn runDifferenceBitset(allocator: std.mem.Allocator, rc: *RunContainer, bc: *BitsetContainer) !Container {
@@ -851,6 +828,7 @@ fn runDifferenceBitset(allocator: std.mem.Allocator, rc: *RunContainer, bc: *Bit
             if (!bc.contains(@intCast(v))) {
                 if (k >= ArrayContainer.MAX_CARDINALITY) {
                     // Need to convert to bitset
+                    result.cardinality = @intCast(k);
                     const bs = try arrayToBitset(allocator, result);
                     result.deinit(allocator);
                     // Finish current run
@@ -869,7 +847,7 @@ fn runDifferenceBitset(allocator: std.mem.Allocator, rc: *RunContainer, bc: *Bit
                         }
                     }
                     _ = bs.computeCardinality();
-                    return .{ .bitset = bs };
+                    return bitsetToArrayOrRun(allocator, bs);
                 }
                 result.values[k] = @intCast(v);
                 k += 1;
@@ -877,7 +855,7 @@ fn runDifferenceBitset(allocator: std.mem.Allocator, rc: *RunContainer, bc: *Bit
         }
     }
     result.cardinality = @intCast(k);
-    return .{ .array = result };
+    return arrayToArrayOrRun(allocator, result);
 }
 
 fn runDifferenceRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
@@ -891,6 +869,7 @@ fn runDifferenceRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunConta
             if (!b.contains(@intCast(v))) {
                 if (k >= ArrayContainer.MAX_CARDINALITY) {
                     // Convert to bitset and continue
+                    result.cardinality = @intCast(k);
                     const bs = try arrayToBitset(allocator, result);
                     result.deinit(allocator);
                     // Finish current run
@@ -909,7 +888,7 @@ fn runDifferenceRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunConta
                         }
                     }
                     _ = bs.computeCardinality();
-                    return .{ .bitset = bs };
+                    return bitsetToArrayOrRun(allocator, bs);
                 }
                 result.values[k] = @intCast(v);
                 k += 1;
@@ -917,7 +896,7 @@ fn runDifferenceRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunConta
         }
     }
     result.cardinality = @intCast(k);
-    return .{ .array = result };
+    return arrayToArrayOrRun(allocator, result);
 }
 
 // ============================================================================
@@ -1052,12 +1031,8 @@ fn arrayXorRun(allocator: std.mem.Allocator, ac: *ArrayContainer, rc: *RunContai
     }
 
     const card = result.computeCardinality();
-    if (card <= ArrayContainer.MAX_CARDINALITY) {
-        const arr = try bitsetToArray(allocator, result);
-        result.deinit(allocator);
-        return .{ .array = arr };
-    }
-    return .{ .bitset = result };
+    _ = card;
+    return bitsetToArrayOrRun(allocator, result);
 }
 
 fn bitsetXorBitset(allocator: std.mem.Allocator, a: *BitsetContainer, b: *BitsetContainer) !Container {
@@ -1093,12 +1068,8 @@ fn bitsetXorRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *RunCont
     }
 
     const card = result.computeCardinality();
-    if (card <= ArrayContainer.MAX_CARDINALITY) {
-        const arr = try bitsetToArray(allocator, result);
-        result.deinit(allocator);
-        return .{ .array = arr };
-    }
-    return .{ .bitset = result };
+    _ = card;
+    return bitsetToArrayOrRun(allocator, result);
 }
 
 fn runXorRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
@@ -1125,12 +1096,8 @@ fn runXorRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !
     }
 
     const card = result.computeCardinality();
-    if (card <= ArrayContainer.MAX_CARDINALITY) {
-        const arr = try bitsetToArray(allocator, result);
-        result.deinit(allocator);
-        return .{ .array = arr };
-    }
-    return .{ .bitset = result };
+    _ = card;
+    return bitsetToArrayOrRun(allocator, result);
 }
 
 // ============================================================================
@@ -1162,6 +1129,135 @@ pub fn arrayToBitset(allocator: std.mem.Allocator, ac: *ArrayContainer) !*Bitset
         _ = result.add(v);
     }
     return result;
+}
+
+fn bitsetToArrayOrRun(allocator: std.mem.Allocator, bc: *BitsetContainer) !Container {
+    const card = bc.getCardinality();
+    if (card > ArrayContainer.MAX_CARDINALITY) {
+        const run_count = countRunsInBitset(bc);
+        if (run_count * 4 < BitsetContainer.SIZE_BYTES) {
+            const rc = try bitsetToRun(allocator, bc, run_count);
+            bc.deinit(allocator);
+            return .{ .run = rc };
+        }
+        return .{ .bitset = bc };
+    }
+
+    const arr = try bitsetToArray(allocator, bc);
+    errdefer arr.deinit(allocator);
+    const container = try arrayToArrayOrRun(allocator, arr);
+    bc.deinit(allocator);
+    return container;
+}
+
+fn arrayToArrayOrRun(allocator: std.mem.Allocator, arr: *ArrayContainer) !Container {
+    const run_count = countRunsInArray(arr);
+    if (run_count * 4 < @as(u32, arr.cardinality) * 2) {
+        const rc = try arrayToRun(allocator, arr, run_count);
+        arr.deinit(allocator);
+        return .{ .run = rc };
+    }
+
+    return .{ .array = arr };
+}
+
+fn countRunsInArray(ac: *ArrayContainer) u32 {
+    if (ac.cardinality == 0) return 0;
+
+    var count: u32 = 1;
+    var previous = ac.values[0];
+    for (ac.values[1..ac.cardinality]) |value| {
+        if (value != previous + 1) {
+            count += 1;
+        }
+        previous = value;
+    }
+    return count;
+}
+
+fn countRunsInBitset(bc: *BitsetContainer) u32 {
+    var count: u32 = 0;
+    var previous_high_bit: u64 = 0;
+
+    for (bc.words) |word| {
+        const previous_bits = (word << 1) | previous_high_bit;
+        const run_starts = word & ~previous_bits;
+        count += @popCount(run_starts);
+        previous_high_bit = word >> 63;
+    }
+
+    return count;
+}
+
+fn arrayToRun(allocator: std.mem.Allocator, ac: *ArrayContainer, run_count: u32) !*RunContainer {
+    const rc = try RunContainer.init(allocator, @intCast(run_count));
+    errdefer rc.deinit(allocator);
+
+    if (ac.cardinality == 0) {
+        return rc;
+    }
+
+    var run_idx: usize = 0;
+    var run_start = ac.values[0];
+    var run_len: u16 = 0;
+
+    for (ac.values[1..ac.cardinality]) |value| {
+        if (value == run_start + run_len + 1) {
+            run_len += 1;
+        } else {
+            rc.runs[run_idx] = .{ .start = run_start, .length = run_len };
+            run_idx += 1;
+            run_start = value;
+            run_len = 0;
+        }
+    }
+
+    rc.runs[run_idx] = .{ .start = run_start, .length = run_len };
+    rc.n_runs = @intCast(run_count);
+    rc.cardinality = -1;
+    return rc;
+}
+
+fn bitsetToRun(allocator: std.mem.Allocator, bc: *BitsetContainer, run_count: u32) !*RunContainer {
+    const rc = try RunContainer.init(allocator, @intCast(run_count));
+    errdefer rc.deinit(allocator);
+
+    var run_idx: u16 = 0;
+    var in_run = false;
+    var run_start: u16 = 0;
+
+    for (bc.words, 0..) |word, word_idx| {
+        const base: u16 = @intCast(word_idx * 64);
+        var bits = word;
+        var bit_idx: u6 = 0;
+
+        while (bits != 0 or in_run) {
+            const bit: u1 = @truncate(bits);
+            const pos = base + bit_idx;
+
+            if (bit == 1 and !in_run) {
+                run_start = pos;
+                in_run = true;
+            } else if (bit == 0 and in_run) {
+                rc.runs[run_idx] = .{ .start = run_start, .length = pos - run_start - 1 };
+                run_idx += 1;
+                in_run = false;
+            }
+
+            if (bit_idx == 63) break;
+            bits >>= 1;
+            bit_idx += 1;
+        }
+    }
+
+    if (in_run) {
+        rc.runs[run_idx] = .{ .start = run_start, .length = 65535 - run_start };
+        run_idx += 1;
+    }
+
+    rc.n_runs = run_idx;
+    rc.cardinality = -1;
+    return rc;
 }
 
 // ============================================================================

@@ -78,6 +78,31 @@ pub fn build(b: *std.Build) void {
     const run_validate = b.addRunArtifact(validate_exe);
     validate_step.dependOn(&run_validate.step);
 
+    // Differential tests against CRoaring
+    const difftest_mod = b.createModule(.{
+        .root_source_file = b.path("src/diff_test.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    difftest_mod.addImport("rawr", bench_lib_mod);
+    addTranslatedCImport(b, difftest_mod, .{
+        .header = "vendor/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const difftest_exe = b.addExecutable(.{
+        .name = "diff_test",
+        .root_module = difftest_mod,
+    });
+    b.installArtifact(difftest_exe);
+
+    const difftest_step = b.step("difftest", "Differential tests vs CRoaring");
+    const run_difftest = b.addRunArtifact(difftest_exe);
+    difftest_step.dependOn(&run_difftest.step);
+
     // CRoaring benchmark comparison
     const bench_cr_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_croaring.zig"),

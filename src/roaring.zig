@@ -13,6 +13,7 @@ pub const Container = @import("container.zig").Container;
 pub const TaggedPtr = @import("container.zig").TaggedPtr;
 pub const container_ops = @import("container_ops.zig");
 pub const optimize = @import("optimize.zig");
+pub const test_gen = @import("test_gen.zig");
 
 test {
     _ = @import("array_container.zig");
@@ -25,5 +26,6 @@ test {
     _ = @import("compare.zig");
     _ = @import("serialize.zig");
     _ = @import("optimize.zig");
+    _ = test_gen;
     _ = @import("property_tests.zig");
 }

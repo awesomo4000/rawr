@@ -23,12 +23,18 @@ void roaring_bitmap_add_range(roaring_bitmap_t *r, uint64_t min, uint64_t max);
 bool roaring_bitmap_contains(const roaring_bitmap_t *r, uint32_t x);
 uint64_t roaring_bitmap_get_cardinality(const roaring_bitmap_t *r);
 bool roaring_bitmap_is_empty(const roaring_bitmap_t *r);
+uint32_t roaring_bitmap_minimum(const roaring_bitmap_t *r);
+uint32_t roaring_bitmap_maximum(const roaring_bitmap_t *r);
 
 // Set operations
 roaring_bitmap_t *roaring_bitmap_and(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 roaring_bitmap_t *roaring_bitmap_or(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 roaring_bitmap_t *roaring_bitmap_xor(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 roaring_bitmap_t *roaring_bitmap_andnot(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
+uint64_t roaring_bitmap_and_cardinality(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
+bool roaring_bitmap_intersect(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
+bool roaring_bitmap_equals(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
+bool roaring_bitmap_is_subset(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 
 // In-place set operations
 void roaring_bitmap_and_inplace(roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
