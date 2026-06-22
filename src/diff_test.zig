@@ -49,6 +49,7 @@ pub fn main() !void {
     {
         try runSparseDenseOrCase(allocator);
         try runOperationMatrix(allocator);
+        try runJaccardEmptyCase(allocator);
         try runTransitionCases(allocator);
         try runOracleAnchoredIdentities(allocator);
         try runRandomizedLoop(allocator);
@@ -110,6 +111,27 @@ fn runOperationMatrix(allocator: Allocator) !void {
             try runMatrixCase(allocator, case, run_optimize);
         }
     }
+}
+
+fn runJaccardEmptyCase(allocator: Allocator) !void {
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    const empty_values = [_]u32{};
+    const oracle_a = try buildOracle(&empty_values, false);
+    defer c.roaring_bitmap_free(oracle_a);
+    const oracle_b = try buildOracle(&empty_values, false);
+    defer c.roaring_bitmap_free(oracle_b);
+
+    try expectEqualFloat(
+        "jaccard_empty_empty",
+        "a_b",
+        "jaccardIndex",
+        a.jaccardIndex(&b),
+        c.roaring_bitmap_jaccard_index(oracle_a, oracle_b),
+    );
 }
 
 fn runTransitionCases(allocator: Allocator) !void {
@@ -589,8 +611,13 @@ fn assertPredicatesAgree(
     oracle_b: *c.roaring_bitmap_t,
 ) !void {
     try expectEqualScalar(case_name, order_name, "andCardinality", a.andCardinality(b), c.roaring_bitmap_and_cardinality(oracle_a, oracle_b));
+    try expectEqualScalar(case_name, order_name, "orCardinality", a.orCardinality(b), c.roaring_bitmap_or_cardinality(oracle_a, oracle_b));
+    try expectEqualScalar(case_name, order_name, "xorCardinality", a.xorCardinality(b), c.roaring_bitmap_xor_cardinality(oracle_a, oracle_b));
+    try expectEqualScalar(case_name, order_name, "differenceCardinality", a.differenceCardinality(b), c.roaring_bitmap_andnot_cardinality(oracle_a, oracle_b));
+    try expectEqualFloat(case_name, order_name, "jaccardIndex", a.jaccardIndex(b), c.roaring_bitmap_jaccard_index(oracle_a, oracle_b));
     try expectEqualBool(case_name, order_name, "intersects", a.intersects(b), c.roaring_bitmap_intersect(oracle_a, oracle_b));
     try expectEqualBool(case_name, order_name, "isSubsetOf", a.isSubsetOf(b), c.roaring_bitmap_is_subset(oracle_a, oracle_b));
+    try expectEqualBool(case_name, order_name, "isStrictSubsetOf", a.isStrictSubsetOf(b), c.roaring_bitmap_is_strict_subset(oracle_a, oracle_b));
     try expectEqualBool(case_name, order_name, "equals", a.equals(b), c.roaring_bitmap_equals(oracle_a, oracle_b));
     try expectEqualScalar(case_name, order_name, "cardinality(a)", a.cardinality(), c.roaring_bitmap_get_cardinality(oracle_a));
     try expectEqualScalar(case_name, order_name, "cardinality(b)", b.cardinality(), c.roaring_bitmap_get_cardinality(oracle_b));
@@ -638,6 +665,29 @@ fn expectEqualBool(
         });
         return error.PredicateMismatch;
     }
+}
+
+fn expectEqualFloat(
+    case_name: []const u8,
+    order_name: []const u8,
+    predicate_name: []const u8,
+    rawr_value: f64,
+    oracle_value: f64,
+) !void {
+    if (std.math.isNan(rawr_value) and std.math.isNan(oracle_value)) return;
+    if (rawr_value == oracle_value) return;
+
+    const diff = @abs(rawr_value - oracle_value);
+    if (diff <= 1e-12) return;
+
+    std.debug.print("FAIL: {s}:{s}:{s} differs: rawr={d} croaring={d}\n", .{
+        case_name,
+        order_name,
+        predicate_name,
+        rawr_value,
+        oracle_value,
+    });
+    return error.PredicateMismatch;
 }
 
 fn expectEqualScalar(

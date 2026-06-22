@@ -796,6 +796,123 @@ pub const RoaringBitmap = struct {
         return total;
     }
 
+    /// Compute |self ∪ other| without allocating a result bitmap.
+    pub fn orCardinality(self: *const Self, other: *const Self) u64 {
+        var total: u64 = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < self.size and j < other.size) {
+            const key_a = self.keys[i];
+            const key_b = other.keys[j];
+
+            if (key_a < key_b) {
+                total += Container.fromTagged(self.containers[i]).getCardinality();
+                i += 1;
+            } else if (key_a > key_b) {
+                total += Container.fromTagged(other.containers[j]).getCardinality();
+                j += 1;
+            } else {
+                const card_a = Container.fromTagged(self.containers[i]).getCardinality();
+                const card_b = Container.fromTagged(other.containers[j]).getCardinality();
+                const intersection = ops.containerIntersectionCardinality(
+                    Container.fromTagged(self.containers[i]),
+                    Container.fromTagged(other.containers[j]),
+                );
+                total += card_a + card_b - intersection;
+                i += 1;
+                j += 1;
+            }
+        }
+
+        while (i < self.size) : (i += 1) {
+            total += Container.fromTagged(self.containers[i]).getCardinality();
+        }
+        while (j < other.size) : (j += 1) {
+            total += Container.fromTagged(other.containers[j]).getCardinality();
+        }
+
+        return total;
+    }
+
+    /// Compute |self △ other| without allocating a result bitmap.
+    pub fn xorCardinality(self: *const Self, other: *const Self) u64 {
+        var total: u64 = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < self.size and j < other.size) {
+            const key_a = self.keys[i];
+            const key_b = other.keys[j];
+
+            if (key_a < key_b) {
+                total += Container.fromTagged(self.containers[i]).getCardinality();
+                i += 1;
+            } else if (key_a > key_b) {
+                total += Container.fromTagged(other.containers[j]).getCardinality();
+                j += 1;
+            } else {
+                const card_a = Container.fromTagged(self.containers[i]).getCardinality();
+                const card_b = Container.fromTagged(other.containers[j]).getCardinality();
+                const intersection = ops.containerIntersectionCardinality(
+                    Container.fromTagged(self.containers[i]),
+                    Container.fromTagged(other.containers[j]),
+                );
+                total += card_a + card_b - 2 * intersection;
+                i += 1;
+                j += 1;
+            }
+        }
+
+        while (i < self.size) : (i += 1) {
+            total += Container.fromTagged(self.containers[i]).getCardinality();
+        }
+        while (j < other.size) : (j += 1) {
+            total += Container.fromTagged(other.containers[j]).getCardinality();
+        }
+
+        return total;
+    }
+
+    /// Compute |self \ other| without allocating a result bitmap.
+    pub fn differenceCardinality(self: *const Self, other: *const Self) u64 {
+        var total: u64 = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < self.size and j < other.size) {
+            const key_a = self.keys[i];
+            const key_b = other.keys[j];
+
+            if (key_a < key_b) {
+                total += Container.fromTagged(self.containers[i]).getCardinality();
+                i += 1;
+            } else if (key_a > key_b) {
+                j += 1;
+            } else {
+                const card_a = Container.fromTagged(self.containers[i]).getCardinality();
+                const intersection = ops.containerIntersectionCardinality(
+                    Container.fromTagged(self.containers[i]),
+                    Container.fromTagged(other.containers[j]),
+                );
+                total += card_a - intersection;
+                i += 1;
+                j += 1;
+            }
+        }
+
+        while (i < self.size) : (i += 1) {
+            total += Container.fromTagged(self.containers[i]).getCardinality();
+        }
+
+        return total;
+    }
+
+    /// Compute |self ∩ other| / |self ∪ other|.
+    /// Matches CRoaring's undefined empty/empty behavior by returning NaN.
+    pub fn jaccardIndex(self: *const Self, other: *const Self) f64 {
+        const intersection = self.andCardinality(other);
+        const union_cardinality = self.orCardinality(other);
+        return @as(f64, @floatFromInt(intersection)) / @as(f64, @floatFromInt(union_cardinality));
+    }
+
     /// Return true if self and other have any values in common.
     /// Early-exit: stops at the first match. Much cheaper than andCardinality() > 0
     /// for sparse intersections.
@@ -1268,6 +1385,11 @@ pub const RoaringBitmap = struct {
     /// Check if self is a subset of other. O(n) where n is total container size.
     pub fn isSubsetOf(self: *const Self, other: *const Self) bool {
         return compare.isSubsetOf(self, other);
+    }
+
+    /// Check if self is a proper subset of other.
+    pub fn isStrictSubsetOf(self: *const Self, other: *const Self) bool {
+        return self.isSubsetOf(other) and !self.equals(other);
     }
 
     /// Check if two bitmaps are equal. Single pass O(n).

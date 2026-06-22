@@ -19,11 +19,13 @@ Legend — **Status:** ✅ have · ◑ partial · ❌ missing · ⛔ skip-by-des
 
 `add` (+checked → `add` returns bool), `remove` (+checked), `contains`,
 `add_range`/`add_range_closed` (rawr `addRange`, inclusive), `and`/`or`/`xor`/
-`andnot` (+`_inplace`), `and_cardinality`, `intersect`, `is_subset`, `equals`,
-`get_cardinality`, `is_empty`, `minimum`, `maximum`, `run_optimize`, `copy`
-(`clone`), `internal_validate` (`validate`), portable serialize/deserialize
-(+`_safe`, +`portable_deserialize_frozen` → `FrozenBitmap`), `create`/`init`
-(`init`), `of_ptr` (≈ `fromSorted`/`fromSlice`).
+`andnot` (+`_inplace`), `and_cardinality`, `or_cardinality`,
+`xor_cardinality`, `andnot_cardinality`, `jaccard_index`, `intersect`,
+`is_subset`, `is_strict_subset`, `equals`, `get_cardinality`, `is_empty`,
+`minimum`, `maximum`, `run_optimize`, `copy` (`clone`), `internal_validate`
+(`validate`), portable serialize/deserialize (+`_safe`,
++`portable_deserialize_frozen` → `FrozenBitmap`), `create`/`init` (`init`),
+`of_ptr` (≈ `fromSorted`/`fromSlice`).
 
 ---
 
@@ -36,7 +38,7 @@ Legend — **Status:** ✅ have · ◑ partial · ❌ missing · ⛔ skip-by-des
 | `get_index` | ❌ | S | clean | index of a value in sorted order (= rank-1 if present). Falls out of the rank work. |
 | `flip`, `flip_closed`, `flip_inplace(_closed)` | ❌ | M | needs design | Complement within a range. rawr has **no flip at all**. Per-container flip + may create/destroy containers across the range. Common op. |
 | `remove_range`, `remove_range_closed` | ❌ | M | clean-ish | Counterpart to `addRange`; rawr can add a range but not remove one. Per-container clear-range + drop emptied containers. |
-| `or_cardinality`, `xor_cardinality`, `andnot_cardinality` | ❌ | S | clean | rawr has only `andCardinality`. Same shape — compute cardinality without materializing. Reuse the `containerIntersectionCardinality` pattern in `container_ops.zig`. |
+| `or_cardinality`, `xor_cardinality`, `andnot_cardinality` | ✅ | S | clean | rawr `orCardinality` / `xorCardinality` / `differenceCardinality`. |
 
 **Test:** rank/select/get_index/range-cardinality are scalar results → new
 differential assertion shape (compare scalar over the mixed generator). flip /
@@ -59,8 +61,8 @@ matrix.
 | `remove_many` | ❌ | S | clean | bulk remove. |
 | `add_bulk` | ◑ | M | needs design | uses a reusable "bulk context" cursor for sorted adds. `fromSorted` covers fresh; this is amortized incremental. |
 | `contains_bulk` | ◑ | S | clean | contains with a cursor hint; `contains` covers it, this is the cursor optimization. |
-| `jaccard_index` | ❌ | S | clean | `|A∩B| / |A∪B|`. Trivial once or/and cardinality exist. |
-| `is_strict_subset` | ❌ | S | clean | `is_subset && !equals`. |
+| `jaccard_index` | ✅ | S | clean | rawr `jaccardIndex`. |
+| `is_strict_subset` | ✅ | S | clean | rawr `isStrictSubsetOf`. |
 | `intersect_with_range` | ❌ | S | clean | does the bitmap intersect [a,b). |
 
 ---
@@ -100,7 +102,7 @@ Each parity pick is a chunk under this umbrella: `07-NN`, self-contained with it
 own wrapper/impl/differential-test and pass/fail. Tick them off here as they land.
 
 1. **`07-01` — `or/xor/andnot` cardinality + `jaccard` + `is_strict_subset`**
-   *(written)* — all S-effort, all "clean," unlocks jaccard. Warm-up.
+   *(done)* — all S-effort, all "clean," unlocks jaccard. Warm-up.
 2. **`07-02` — rank / select / get_index** — the marquee missing capability;
    shared machinery.
 3. **`07-03` — flip (+inplace, +closed)** — high-use, self-contained.
