@@ -89,9 +89,14 @@ pub fn rankMany(self: *const Self, values: []const u32, out: []u64) void
 **Debug-assert both** `out.len == values.len` **and** that `values` is sorted
 ascending (document both as preconditions). Baseline: a single forward walk over
 containers shared across all queries (cursor advances monotonically), so it's
-O(containers + values) rather than `values.len ×` a full rank each. A correct but
-slower first cut is `for (values, out) |v, *o| o.* = rank(v);` — leave a comment
-that the cursor-shared walk is the intended form, matching CRoaring's batched API.
+O(containers + values) rather than `values.len ×` a full rank each.
+
+**Decision (cursor-shared preferred, not blocking):** the cursor-shared walk is
+the intended form and is only modestly more code than the loop, so aim for it in
+the first pass. If it proves fiddly, landing the simple cut
+`for (values, out) |v, *o| o.* = rank(v);` is acceptable — then the Task 6
+benchmark ratio is recorded as **known debt** (a follow-up to optimize), not a
+failed implementation. Don't block the chunk on the optimized walk.
 
 ## Task 5 — Differential checks (`diff_test.zig`)
 
@@ -137,7 +142,12 @@ Extend `bench_croaring.zig` (mirrors the existing add/and/or/diff comparisons):
 - **select** on a dense bitmap: many `select(k)` over random `k` in range
   (the iteration-style hot path).
 - **rankMany** vs `roaring_bitmap_rank_many` on a large sorted probe set (this is
-  the batched throughput case CRoaring optimizes for).
+  the batched throughput case CRoaring optimizes for). **Bench probe constraint:**
+  keep all probe values `≤ maximum` (or pre-init / ignore the CRoaring `ans`
+  tail), because `rank_many` leaves entries past the last container unwritten —
+  otherwise the bench reads uninitialized memory. (Correctness is still validated
+  against repeated `rank` per Task 5.4; this constraint is only for the
+  `rank_many`-vs-`rankMany` *timing* comparison.)
 
 Record the rawr/CRoaring ratio as we do for the set ops; flag a regression if
 rawr is materially slower. (Good moment to also add the `andCardinality` /
