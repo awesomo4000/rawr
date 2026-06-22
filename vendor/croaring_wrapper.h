@@ -31,6 +31,7 @@ roaring_bitmap_t *roaring_bitmap_and(const roaring_bitmap_t *r1, const roaring_b
 roaring_bitmap_t *roaring_bitmap_or(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 roaring_bitmap_t *roaring_bitmap_xor(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 roaring_bitmap_t *roaring_bitmap_andnot(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
+roaring_bitmap_t *roaring_bitmap_flip_closed(const roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
 uint64_t roaring_bitmap_and_cardinality(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 uint64_t roaring_bitmap_or_cardinality(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 uint64_t roaring_bitmap_xor_cardinality(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
@@ -40,12 +41,17 @@ bool roaring_bitmap_intersect(const roaring_bitmap_t *r1, const roaring_bitmap_t
 bool roaring_bitmap_equals(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 bool roaring_bitmap_is_subset(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 bool roaring_bitmap_is_strict_subset(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
+uint64_t roaring_bitmap_rank(const roaring_bitmap_t *r, uint32_t x);
+void roaring_bitmap_rank_many(const roaring_bitmap_t *r, const uint32_t *begin, const uint32_t *end, uint64_t *ans);
+bool roaring_bitmap_select(const roaring_bitmap_t *r, uint32_t rank, uint32_t *element);
+int64_t roaring_bitmap_get_index(const roaring_bitmap_t *r, uint32_t x);
 
 // In-place set operations
 void roaring_bitmap_and_inplace(roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 void roaring_bitmap_or_inplace(roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 void roaring_bitmap_xor_inplace(roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 void roaring_bitmap_andnot_inplace(roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
+void roaring_bitmap_flip_inplace_closed(roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
 
 // Optimization
 bool roaring_bitmap_run_optimize(roaring_bitmap_t *r);

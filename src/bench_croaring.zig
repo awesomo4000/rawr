@@ -8,6 +8,7 @@ const allocator = std.heap.smp_allocator;
 const WARMUP_RUNS = 3;
 const BENCH_RUNS = 21;
 const N_VALUES = 1_000_000;
+const N_RANK_MANY_PROBES = 200_000;
 
 const BenchResult = struct {
     median_ns: u64,
@@ -61,6 +62,10 @@ var random_values: [N_VALUES]u32 = undefined;
 var sequential_values: [N_VALUES]u32 = undefined;
 var sparse_values: [500000]u32 = undefined;
 var sparse_len: usize = 0;
+var rank_queries: [N_VALUES]u32 = undefined;
+var select_queries: [N_VALUES]u32 = undefined;
+var rank_many_probes: [N_RANK_MANY_PROBES]u32 = undefined;
+var rank_many_out: [N_RANK_MANY_PROBES]u64 = undefined;
 
 fn initTestData() void {
     var prng = std.Random.DefaultPrng.init(12345);
@@ -68,6 +73,12 @@ fn initTestData() void {
     for (0..N_VALUES) |i| {
         random_values[i] = prng.random().int(u32);
         sequential_values[i] = @intCast(i);
+        rank_queries[i] = @intCast(prng.random().uintLessThan(u32, 500_000));
+        select_queries[i] = @intCast(prng.random().uintLessThan(u32, 500_000));
+    }
+
+    for (0..N_RANK_MANY_PROBES) |i| {
+        rank_many_probes[i] = @intCast((i * 500_000) / N_RANK_MANY_PROBES);
     }
 
     // Sparse values for set operations (across u32 space)
@@ -277,6 +288,37 @@ fn benchRawrCardinality() void {
     std.mem.doNotOptimizeAway(card);
 }
 
+fn benchRawrRankDense() void {
+    const bm = &rawr_dense_a.?;
+    var total: u64 = 0;
+    for (rank_queries) |query| {
+        total +%= bm.rank(query);
+    }
+    std.mem.doNotOptimizeAway(total);
+}
+
+fn benchRawrSelectDense() void {
+    const bm = &rawr_dense_a.?;
+    var total: u64 = 0;
+    for (select_queries) |query| {
+        total +%= bm.select(query).?;
+    }
+    std.mem.doNotOptimizeAway(total);
+}
+
+fn benchRawrRankManyDense() void {
+    const bm = &rawr_dense_a.?;
+    bm.rankMany(&rank_many_probes, &rank_many_out);
+    std.mem.doNotOptimizeAway(rank_many_out[rank_many_out.len - 1]);
+}
+
+fn benchRawrFlipWideDense() void {
+    const bm = &rawr_dense_a.?;
+    var result = bm.flip(allocator, 100_000, 650_000) catch unreachable;
+    defer result.deinit();
+    std.mem.doNotOptimizeAway(&result);
+}
+
 // ============================================================================
 // CRoaring benchmarks
 // ============================================================================
@@ -450,6 +492,44 @@ fn benchCRoaringCardinality() void {
     std.mem.doNotOptimizeAway(card);
 }
 
+fn benchCRoaringRankDense() void {
+    const bm = cr_dense_a.?;
+    var total: u64 = 0;
+    for (rank_queries) |query| {
+        total +%= c.roaring_bitmap_rank(bm, query);
+    }
+    std.mem.doNotOptimizeAway(total);
+}
+
+fn benchCRoaringSelectDense() void {
+    const bm = cr_dense_a.?;
+    var total: u64 = 0;
+    for (select_queries) |query| {
+        var value: u32 = undefined;
+        _ = c.roaring_bitmap_select(bm, query, &value);
+        total +%= value;
+    }
+    std.mem.doNotOptimizeAway(total);
+}
+
+fn benchCRoaringRankManyDense() void {
+    const bm = cr_dense_a.?;
+    c.roaring_bitmap_rank_many(
+        bm,
+        &rank_many_probes,
+        rank_many_probes[rank_many_probes.len..].ptr,
+        &rank_many_out,
+    );
+    std.mem.doNotOptimizeAway(rank_many_out[rank_many_out.len - 1]);
+}
+
+fn benchCRoaringFlipWideDense() void {
+    const bm = cr_dense_a.?;
+    const result = c.roaring_bitmap_flip_closed(bm, 100_000, 650_000) orelse unreachable;
+    defer c.roaring_bitmap_free(result);
+    std.mem.doNotOptimizeAway(result);
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -564,6 +644,28 @@ pub fn main(init: std.process.Init) !void {
     r = benchmark(init.io, benchRawrCardinality, .{});
     cr = benchmark(init.io, benchCRoaringCardinality, .{});
     printResult("cardinality", r.median_ns, cr.median_ns);
+
+    // --- Positional queries ---
+    std.debug.print("\nPOSITIONAL QUERIES\n", .{});
+
+    r = benchmark(init.io, benchRawrRankDense, .{});
+    cr = benchmark(init.io, benchCRoaringRankDense, .{});
+    printResult("rank (dense)", r.median_ns, cr.median_ns);
+
+    r = benchmark(init.io, benchRawrSelectDense, .{});
+    cr = benchmark(init.io, benchCRoaringSelectDense, .{});
+    printResult("select (dense)", r.median_ns, cr.median_ns);
+
+    r = benchmark(init.io, benchRawrRankManyDense, .{});
+    cr = benchmark(init.io, benchCRoaringRankManyDense, .{});
+    printResult("rankMany (dense)", r.median_ns, cr.median_ns);
+
+    // --- Range operations ---
+    std.debug.print("\nRANGE OPERATIONS\n", .{});
+
+    r = benchmark(init.io, benchRawrFlipWideDense, .{});
+    cr = benchmark(init.io, benchCRoaringFlipWideDense, .{});
+    printResult("flip wide range (dense)", r.median_ns, cr.median_ns);
 
     // Cleanup
     if (rawr_contains_bm) |*bm| bm.deinit();

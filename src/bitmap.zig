@@ -913,6 +913,88 @@ pub const RoaringBitmap = struct {
         return @as(f64, @floatFromInt(intersection)) / @as(f64, @floatFromInt(union_cardinality));
     }
 
+    /// Count values <= `value`.
+    pub fn rank(self: *const Self, value: u32) u64 {
+        const target_key = highBits(value);
+        const target_low = lowBits(value);
+
+        var total: u64 = 0;
+        for (self.keys[0..self.size], self.containers[0..self.size]) |key, tp| {
+            if (key < target_key) {
+                total += Container.fromTagged(tp).getCardinality();
+            } else if (key == target_key) {
+                return total + ops.containerRank(Container.fromTagged(tp), target_low);
+            } else {
+                return total;
+            }
+        }
+        return total;
+    }
+
+    /// Return the 0-based position of `value`, or null if absent.
+    pub fn getIndex(self: *const Self, value: u32) ?u64 {
+        const target_key = highBits(value);
+        const target_low = lowBits(value);
+
+        var total: u64 = 0;
+        for (self.keys[0..self.size], self.containers[0..self.size]) |key, tp| {
+            const container = Container.fromTagged(tp);
+            if (key < target_key) {
+                total += container.getCardinality();
+            } else if (key == target_key) {
+                if (!container.contains(target_low)) return null;
+                return total + ops.containerRank(container, target_low) - 1;
+            } else {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /// Return the k-th smallest value, 0-based, or null if out of range.
+    pub fn select(self: *const Self, k: u64) ?u32 {
+        var prior: u64 = 0;
+        for (self.keys[0..self.size], self.containers[0..self.size]) |key, tp| {
+            const container = Container.fromTagged(tp);
+            const card = container.getCardinality();
+            if (k < prior + card) {
+                const low = ops.containerSelect(container, @intCast(k - prior)) orelse return null;
+                return combine(key, low);
+            }
+            prior += card;
+        }
+        return null;
+    }
+
+    /// Fill `out` with ranks for sorted `values`.
+    /// Preconditions: `out.len == values.len` and `values` is sorted ascending.
+    pub fn rankMany(self: *const Self, values: []const u32, out: []u64) void {
+        std.debug.assert(out.len == values.len);
+        if (std.debug.runtime_safety) {
+            for (values[1..], 0..) |value, i| {
+                std.debug.assert(value >= values[i]);
+            }
+        }
+
+        var container_idx: usize = 0;
+        var prior: u64 = 0;
+
+        for (values, out) |value, *rank_out| {
+            const target_key = highBits(value);
+            const target_low = lowBits(value);
+
+            while (container_idx < self.size and self.keys[container_idx] < target_key) : (container_idx += 1) {
+                prior += Container.fromTagged(self.containers[container_idx]).getCardinality();
+            }
+
+            if (container_idx < self.size and self.keys[container_idx] == target_key) {
+                rank_out.* = prior + ops.containerRank(Container.fromTagged(self.containers[container_idx]), target_low);
+            } else {
+                rank_out.* = prior;
+            }
+        }
+    }
+
     /// Return true if self and other have any values in common.
     /// Early-exit: stops at the first match. Much cheaper than andCardinality() > 0
     /// for sparse intersections.
@@ -1016,6 +1098,14 @@ pub const RoaringBitmap = struct {
         }
 
         result.cached_cardinality = -1;
+        return result;
+    }
+
+    /// Return a new bitmap with values in [lo, hi] complemented.
+    pub fn flip(self: *const Self, allocator: std.mem.Allocator, lo: u32, hi: u32) !Self {
+        var result = try self.clone(allocator);
+        errdefer result.deinit();
+        try result.flipInplace(lo, hi);
         return result;
     }
 
@@ -1350,6 +1440,16 @@ pub const RoaringBitmap = struct {
             self.capacity = @intCast(max_size);
         }
         self.size = @intCast(k);
+    }
+
+    /// Complement values in [lo, hi] in place.
+    pub fn flipInplace(self: *Self, lo: u32, hi: u32) !void {
+        if (lo > hi) return;
+
+        var mask = try Self.init(self.allocator);
+        defer mask.deinit();
+        _ = try mask.addRange(lo, hi);
+        try self.bitwiseXorInPlace(&mask);
     }
 
     // ========================================================================
@@ -1691,6 +1791,14 @@ pub const RoaringBitmap = struct {
         var arena = std.heap.ArenaAllocator.init(backing);
         errdefer arena.deinit();
         const result = try self.bitwiseDifference(arena.allocator(), other);
+        return .{ .bitmap = result, .arena = arena };
+    }
+
+    /// Flip a range using arena allocation.
+    pub fn flipOwned(self: *const Self, backing: std.mem.Allocator, lo: u32, hi: u32) !OwnedBitmap {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        errdefer arena.deinit();
+        const result = try self.flip(arena.allocator(), lo, hi);
         return .{ .bitmap = result, .arena = arena };
     }
 

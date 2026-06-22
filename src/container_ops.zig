@@ -43,6 +43,108 @@ fn gallopSearch(arr: []const u16, target: u16, start: usize) usize {
     return lo;
 }
 
+/// Count values <= `low` in a container.
+pub fn containerRank(c: Container, low: u16) u32 {
+    return switch (c) {
+        .array => |ac| arrayRank(ac, low),
+        .bitset => |bc| bitsetRank(bc, low),
+        .run => |rc| runRank(rc, low),
+        .reserved => unreachable,
+    };
+}
+
+/// Return the k-th value in a container, 0-based.
+pub fn containerSelect(c: Container, k: u32) ?u16 {
+    return switch (c) {
+        .array => |ac| arraySelect(ac, k),
+        .bitset => |bc| bitsetSelect(bc, k),
+        .run => |rc| runSelect(rc, k),
+        .reserved => unreachable,
+    };
+}
+
+fn arrayRank(ac: *const ArrayContainer, low: u16) u32 {
+    var lo: usize = 0;
+    var hi: usize = ac.cardinality;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (ac.values[mid] <= low) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return @intCast(lo);
+}
+
+fn bitsetRank(bc: *const BitsetContainer, low: u16) u32 {
+    const word_idx: usize = low >> 6;
+    const bit: u6 = @truncate(low);
+
+    var count: u32 = 0;
+    for (bc.words[0..word_idx]) |word| {
+        count += @popCount(word);
+    }
+
+    const mask = if (bit == 63)
+        ~@as(u64, 0)
+    else
+        (@as(u64, 1) << (bit + 1)) - 1;
+    count += @popCount(bc.words[word_idx] & mask);
+    return count;
+}
+
+fn runRank(rc: *const RunContainer, low: u16) u32 {
+    var count: u32 = 0;
+    for (rc.runs[0..rc.n_runs]) |run| {
+        if (low < run.start) return count;
+
+        const end = run.end();
+        if (low <= end) {
+            count += @as(u32, low - run.start) + 1;
+            return count;
+        }
+
+        count += run.size();
+    }
+    return count;
+}
+
+fn arraySelect(ac: *const ArrayContainer, k: u32) ?u16 {
+    if (k >= ac.cardinality) return null;
+    return ac.values[k];
+}
+
+fn bitsetSelect(bc: *const BitsetContainer, k: u32) ?u16 {
+    var remaining = k;
+    for (bc.words, 0..) |word, word_idx| {
+        const word_card: u32 = @popCount(word);
+        if (remaining >= word_card) {
+            remaining -= word_card;
+            continue;
+        }
+
+        var bits = word;
+        while (remaining > 0) : (remaining -= 1) {
+            bits &= bits - 1;
+        }
+        return @intCast(word_idx * 64 + @ctz(bits));
+    }
+    return null;
+}
+
+fn runSelect(rc: *const RunContainer, k: u32) ?u16 {
+    var remaining = k;
+    for (rc.runs[0..rc.n_runs]) |run| {
+        const size = run.size();
+        if (remaining < size) {
+            return run.start + @as(u16, @intCast(remaining));
+        }
+        remaining -= size;
+    }
+    return null;
+}
+
 // ============================================================================
 // Union (OR)
 // ============================================================================

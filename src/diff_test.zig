@@ -50,6 +50,7 @@ pub fn main() !void {
         try runSparseDenseOrCase(allocator);
         try runOperationMatrix(allocator);
         try runJaccardEmptyCase(allocator);
+        try runFlipCases(allocator);
         try runTransitionCases(allocator);
         try runOracleAnchoredIdentities(allocator);
         try runRandomizedLoop(allocator);
@@ -132,6 +133,75 @@ fn runJaccardEmptyCase(allocator: Allocator) !void {
         a.jaccardIndex(&b),
         c.roaring_bitmap_jaccard_index(oracle_a, oracle_b),
     );
+}
+
+fn runFlipCases(allocator: Allocator) !void {
+    for (&[_]bool{ false, true }) |run_optimize| {
+        var prng = std.Random.DefaultPrng.init(if (run_optimize) 0xF11F_0001 else 0xF11F_0000);
+        const rng = prng.random();
+
+        for (&[_]Profile{ .sparse, .dense, .runs }) |profile| {
+            const chunks = [_]test_gen.ChunkProfile{.{ .key = 77, .profile = profile }};
+            var generated = try test_gen.build(allocator, rng, &chunks, run_optimize);
+            defer generated.deinit();
+
+            const oracle = try buildOracle(generated.values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+
+            var name_buf: [96]u8 = undefined;
+            const name = try std.fmt.bufPrint(&name_buf, "flip:within:{s}:runopt={}", .{ @tagName(profile), run_optimize });
+            try assertFlipAgree(allocator, name, &generated.bm, oracle, (77 << 16) + 10, (77 << 16) + 2000);
+        }
+
+        {
+            const chunks = [_]test_gen.ChunkProfile{.{ .key = 77, .profile = .full }};
+            var generated = try test_gen.build(allocator, rng, &chunks, run_optimize);
+            defer generated.deinit();
+
+            const oracle = try buildOracle(generated.values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+            try assertFlipAgree(allocator, "flip:full-populated", &generated.bm, oracle, 77 << 16, (77 << 16) + 65_535);
+        }
+
+        {
+            var bm = try RoaringBitmap.init(allocator);
+            defer bm.deinit();
+            const empty_values = [_]u32{};
+            const oracle = try buildOracle(&empty_values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+            try assertFlipAgree(allocator, "flip:full-empty", &bm, oracle, 78 << 16, (78 << 16) + 65_535);
+        }
+
+        {
+            const chunks = [_]test_gen.ChunkProfile{
+                .{ .key = 76, .profile = .sparse },
+                .{ .key = 78, .profile = .dense },
+            };
+            var generated = try test_gen.build(allocator, rng, &chunks, run_optimize);
+            defer generated.deinit();
+
+            const oracle = try buildOracle(generated.values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+            try assertFlipAgree(allocator, "flip:cross-chunk", &generated.bm, oracle, (76 << 16) + 50_000, (79 << 16) + 100);
+        }
+
+        {
+            const values = try valuesFromRanges(allocator, &.{
+                .{ .start = 0, .end = 10 },
+                .{ .start = 65_530, .end = 65_540 },
+            });
+            defer allocator.free(values);
+
+            var bm = try buildRawrFromValues(allocator, values, run_optimize);
+            defer bm.deinit();
+            const oracle = try buildOracle(values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+
+            try assertFlipAgree(allocator, "flip:single-zero", &bm, oracle, 0, 0);
+            try assertFlipAgree(allocator, "flip:boundary", &bm, oracle, 65_535, 65_536);
+            try assertFlipAgree(allocator, "flip:empty-range", &bm, oracle, 100, 99);
+        }
+    }
 }
 
 fn runTransitionCases(allocator: Allocator) !void {
@@ -255,6 +325,13 @@ fn runRandomIteration(allocator: Allocator, rng: std.Random, iteration: usize, r
     const case_name = try std.fmt.bufPrint(&case_name_buf, "random:{d}", .{iteration});
     try runOrderedChecks(allocator, case_name, "a_b", &a.bm, &b.bm, oracle_a, oracle_b);
     try runOrderedChecks(allocator, case_name, "b_a", &b.bm, &a.bm, oracle_b, oracle_a);
+
+    const flip_lo = @as(u32, @intCast((iteration % 3) * 65_536)) + rng.uintLessThan(u32, 65_536);
+    const flip_len = rng.uintLessThan(u32, 150_000);
+    const flip_hi = if (iteration % 10 == 0 and flip_lo > 0) flip_lo - 1 else flip_lo +| flip_len;
+    var flip_name_buf: [80]u8 = undefined;
+    const flip_name = try std.fmt.bufPrint(&flip_name_buf, "random:{d}:flip", .{iteration});
+    try assertFlipAgree(allocator, flip_name, &a.bm, oracle_a, flip_lo, flip_hi);
 }
 
 fn logPass(comptime fmt: []const u8, args: anytype) void {
@@ -566,6 +643,42 @@ fn assertInPlaceOpAgree(
     try assertAgree(allocator, name, &rawr_in_place, oracle_in_place);
 }
 
+fn assertFlipAgree(
+    allocator: Allocator,
+    name: []const u8,
+    bm: *RoaringBitmap,
+    oracle: *c.roaring_bitmap_t,
+    lo: u32,
+    hi: u32,
+) !void {
+    var rawr_result = try bm.flip(allocator, lo, hi);
+    defer rawr_result.deinit();
+
+    const oracle_result = c.roaring_bitmap_flip_closed(oracle, lo, hi) orelse return error.CRoaringAllocFailed;
+    defer c.roaring_bitmap_free(oracle_result);
+
+    var alloc_name_buf: [128]u8 = undefined;
+    const alloc_name = try std.fmt.bufPrint(&alloc_name_buf, "{s}:alloc", .{name});
+    try assertSameValues(allocator, alloc_name, &rawr_result, oracle_result);
+
+    var rawr_in_place = try bm.clone(allocator);
+    defer rawr_in_place.deinit();
+    try rawr_in_place.flipInplace(lo, hi);
+
+    if (!rawr_in_place.equals(&rawr_result)) {
+        std.debug.print("FAIL: {s}:inplace - rawr in-place result differs from allocating result\n", .{name});
+        return error.InPlaceMismatch;
+    }
+
+    const oracle_in_place = c.roaring_bitmap_copy(oracle) orelse return error.CRoaringAllocFailed;
+    defer c.roaring_bitmap_free(oracle_in_place);
+    c.roaring_bitmap_flip_inplace_closed(oracle_in_place, lo, hi);
+
+    var inplace_name_buf: [128]u8 = undefined;
+    const inplace_name = try std.fmt.bufPrint(&inplace_name_buf, "{s}:inplace", .{name});
+    try assertSameValues(allocator, inplace_name, &rawr_in_place, oracle_in_place);
+}
+
 fn rawrAllocatingOp(allocator: Allocator, op: BinaryOp, a: *RoaringBitmap, b: *RoaringBitmap) !RoaringBitmap {
     return switch (op) {
         .bitwise_or => a.bitwiseOr(allocator, b),
@@ -621,8 +734,173 @@ fn assertPredicatesAgree(
     try expectEqualBool(case_name, order_name, "equals", a.equals(b), c.roaring_bitmap_equals(oracle_a, oracle_b));
     try expectEqualScalar(case_name, order_name, "cardinality(a)", a.cardinality(), c.roaring_bitmap_get_cardinality(oracle_a));
     try expectEqualScalar(case_name, order_name, "cardinality(b)", b.cardinality(), c.roaring_bitmap_get_cardinality(oracle_b));
+    try assertPositionalsAgree(case_name, order_name, "a", a, oracle_a);
+    try assertPositionalsAgree(case_name, order_name, "b", b, oracle_b);
     try assertMinMaxAgree(case_name, order_name, "a", a, oracle_a);
     try assertMinMaxAgree(case_name, order_name, "b", b, oracle_b);
+}
+
+fn assertPositionalsAgree(
+    case_name: []const u8,
+    order_name: []const u8,
+    operand_name: []const u8,
+    bm: *RoaringBitmap,
+    oracle: *c.roaring_bitmap_t,
+) !void {
+    var probes: [32]u32 = undefined;
+    var probe_count: usize = 0;
+
+    addProbe(&probes, &probe_count, 0);
+    addProbe(&probes, &probe_count, 65_535);
+    addProbe(&probes, &probe_count, 65_536);
+    addProbe(&probes, &probe_count, std.math.maxInt(u32));
+
+    if (bm.minimum()) |min| {
+        addProbe(&probes, &probe_count, min);
+        if (min > 0) addProbe(&probes, &probe_count, min - 1);
+    }
+    if (bm.maximum()) |max| {
+        addProbe(&probes, &probe_count, max);
+        if (max < std.math.maxInt(u32)) addProbe(&probes, &probe_count, max + 1);
+    }
+
+    var it = bm.iterator();
+    var present_seen: usize = 0;
+    while (present_seen < 8) : (present_seen += 1) {
+        const value = it.next() orelse break;
+        addProbe(&probes, &probe_count, value);
+        if (value < std.math.maxInt(u32)) addProbe(&probes, &probe_count, value + 1);
+    }
+
+    std.mem.sort(u32, probes[0..probe_count], {}, std.sort.asc(u32));
+    probe_count = dedupeSortedProbes(probes[0..probe_count]);
+
+    var rawr_ranks: [32]u64 = undefined;
+    bm.rankMany(probes[0..probe_count], rawr_ranks[0..probe_count]);
+
+    for (probes[0..probe_count], rawr_ranks[0..probe_count]) |probe, rank_many_value| {
+        try expectEqualScalar(case_name, order_name, "rankMany", rank_many_value, c.roaring_bitmap_rank(oracle, probe));
+        try expectEqualScalar(case_name, order_name, "rank", bm.rank(probe), c.roaring_bitmap_rank(oracle, probe));
+
+        const rawr_index = bm.getIndex(probe);
+        const oracle_index = c.roaring_bitmap_get_index(oracle, probe);
+        if (oracle_index < 0) {
+            if (rawr_index != null) {
+                std.debug.print("FAIL: {s}:{s}:getIndex({s},{d}) differs: rawr={?d} croaring=-1\n", .{
+                    case_name,
+                    order_name,
+                    operand_name,
+                    probe,
+                    rawr_index,
+                });
+                return error.PredicateMismatch;
+            }
+        } else if (rawr_index == null or rawr_index.? != @as(u64, @intCast(oracle_index))) {
+            std.debug.print("FAIL: {s}:{s}:getIndex({s},{d}) differs: rawr={?d} croaring={d}\n", .{
+                case_name,
+                order_name,
+                operand_name,
+                probe,
+                rawr_index,
+                oracle_index,
+            });
+            return error.PredicateMismatch;
+        }
+    }
+
+    const card = bm.cardinality();
+    var ranks: [8]u64 = undefined;
+    var rank_count: usize = 0;
+    addRankProbe(&ranks, &rank_count, 0);
+    if (card > 1) addRankProbe(&ranks, &rank_count, 1);
+    if (card > 0) {
+        addRankProbe(&ranks, &rank_count, card / 2);
+        addRankProbe(&ranks, &rank_count, card - 1);
+    }
+    addRankProbe(&ranks, &rank_count, card);
+    addRankProbe(&ranks, &rank_count, card + 1);
+    addRankProbe(&ranks, &rank_count, std.math.maxInt(u64));
+
+    for (ranks[0..rank_count]) |rank_probe| {
+        const rawr_value = bm.select(rank_probe);
+        if (rank_probe <= std.math.maxInt(u32)) {
+            var oracle_value: u32 = undefined;
+            const oracle_ok = c.roaring_bitmap_select(oracle, @intCast(rank_probe), &oracle_value);
+            if (!oracle_ok) {
+                if (rawr_value != null) {
+                    std.debug.print("FAIL: {s}:{s}:select({s},{d}) differs: rawr={?d} croaring=null\n", .{
+                        case_name,
+                        order_name,
+                        operand_name,
+                        rank_probe,
+                        rawr_value,
+                    });
+                    return error.PredicateMismatch;
+                }
+            } else if (rawr_value == null or rawr_value.? != oracle_value) {
+                std.debug.print("FAIL: {s}:{s}:select({s},{d}) differs: rawr={?d} croaring={d}\n", .{
+                    case_name,
+                    order_name,
+                    operand_name,
+                    rank_probe,
+                    rawr_value,
+                    oracle_value,
+                });
+                return error.PredicateMismatch;
+            }
+        } else if (rawr_value != null) {
+            std.debug.print("FAIL: {s}:{s}:select({s},{d}) expected null for oversized rank, got {?d}\n", .{
+                case_name,
+                order_name,
+                operand_name,
+                rank_probe,
+                rawr_value,
+            });
+            return error.PredicateMismatch;
+        }
+
+        if (rawr_value) |value| {
+            try expectEqualScalar(case_name, order_name, "rank(select(k))", bm.rank(value), rank_probe + 1);
+            const selected_again = bm.select(bm.rank(value) - 1);
+            if (selected_again == null or selected_again.? != value) {
+                std.debug.print("FAIL: {s}:{s}:select(rank(v)-1)({s},{d}) got {?d}\n", .{
+                    case_name,
+                    order_name,
+                    operand_name,
+                    value,
+                    selected_again,
+                });
+                return error.PredicateMismatch;
+            }
+        }
+    }
+}
+
+fn addProbe(probes: *[32]u32, count: *usize, value: u32) void {
+    if (count.* == probes.len) return;
+    probes[count.*] = value;
+    count.* += 1;
+}
+
+fn dedupeSortedProbes(probes: []u32) usize {
+    if (probes.len == 0) return 0;
+    var write_idx: usize = 1;
+    for (probes[1..]) |probe| {
+        if (probe != probes[write_idx - 1]) {
+            probes[write_idx] = probe;
+            write_idx += 1;
+        }
+    }
+    return write_idx;
+}
+
+fn addRankProbe(probes: *[8]u64, count: *usize, value: u64) void {
+    if (count.* == probes.len) return;
+    for (probes[0..count.*]) |existing| {
+        if (existing == value) return;
+    }
+    probes[count.*] = value;
+    count.* += 1;
 }
 
 fn assertMinMaxAgree(
@@ -803,6 +1081,43 @@ fn assertAgree(
         rawr_cardinality,
         rawr_bytes.len,
     });
+}
+
+fn assertSameValues(
+    allocator: Allocator,
+    name: []const u8,
+    rawr_bm: *RoaringBitmap,
+    oracle: *c.roaring_bitmap_t,
+) !void {
+    const rawr_cardinality = rawr_bm.cardinality();
+    const oracle_cardinality = c.roaring_bitmap_get_cardinality(oracle);
+    if (rawr_cardinality != oracle_cardinality) {
+        std.debug.print("FAIL: {s} - cardinality differs: rawr={d} croaring={d}\n", .{
+            name,
+            rawr_cardinality,
+            oracle_cardinality,
+        });
+        return error.CardinalityMismatch;
+    }
+
+    var iter = rawr_bm.iterator();
+    while (iter.next()) |value| {
+        if (!c.roaring_bitmap_contains(oracle, value)) {
+            std.debug.print("FAIL: {s} - CRoaring missing rawr value {d}\n", .{ name, value });
+            return error.MissingValue;
+        }
+    }
+
+    try assertAbsentSamplesAgree(name, rawr_bm, oracle);
+
+    const rawr_bytes = try rawr_bm.serialize(allocator);
+    defer allocator.free(rawr_bytes);
+    const oracle_size = c.roaring_bitmap_portable_size_in_bytes(oracle);
+    const oracle_bytes = try allocator.alloc(u8, oracle_size);
+    defer allocator.free(oracle_bytes);
+    _ = c.roaring_bitmap_portable_serialize(oracle, @ptrCast(oracle_bytes.ptr));
+
+    try assertCrossDeserializeAgree(allocator, name, rawr_bm, oracle, rawr_bytes, oracle_bytes);
 }
 
 fn rawrHasRunContainers(rawr_bm: *const RoaringBitmap) bool {
