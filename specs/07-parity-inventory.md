@@ -94,20 +94,25 @@ matrix.
 
 ---
 
-## Suggested pick order (for turning into impl specs 08+)
+## Pieces (impl specs `07-NN`)
 
-1. **`or/xor/andnot` cardinality + `jaccard` + `is_strict_subset`** — one small
-   spec, all S-effort, all "clean," knocks out several gaps at once and unlocks
-   jaccard. Good warm-up.
-2. **rank / select / get_index** — one spec; the marquee missing capability, and
-   they share machinery.
-3. **flip (+inplace, +closed)** — one spec; high-use, self-contained.
-4. **remove_range + range_cardinality + contains_range + intersect_with_range** —
-   one "range operations" spec; related per-container range logic.
-5. **n-way unions** (`or_many`/`xor_many`), then **lazy + repair** as a follow-on
-   (the lazy machinery is the L-effort design piece — keep it separate).
-6. **bulk + extract** (`add_many`/`remove_many`/`to_uint32_array`) — convenience batch.
-7. Tier 3 as opportunistic one-offs.
+Each parity pick is a chunk under this umbrella: `07-NN`, self-contained with its
+own wrapper/impl/differential-test and pass/fail. Tick them off here as they land.
+
+1. **`07-01` — `or/xor/andnot` cardinality + `jaccard` + `is_strict_subset`**
+   *(written)* — all S-effort, all "clean," unlocks jaccard. Warm-up.
+2. **`07-02` — rank / select / get_index** — the marquee missing capability;
+   shared machinery.
+3. **`07-03` — flip (+inplace, +closed)** — high-use, self-contained.
+4. **`07-04` — range operations** (`remove_range` + `range_cardinality` +
+   `contains_range` + `intersect_with_range`) — related per-container range logic.
+5. **`07-05` — n-way unions** (`or_many`/`xor_many`), then **`07-06` lazy +
+   repair** as a follow-on (the lazy machinery is the L-effort design piece —
+   keep it separate; may itself sub-split `07-06a/b`).
+6. **`07-07` — bulk + extract** (`add_many`/`remove_many`/`to_uint32_array`).
+7. Tier 3 as opportunistic one-offs (`07-08+`).
+
+(Numbering is a guide, not a contract — reorder as priorities shift.)
 
 Each impl spec follows the established discipline: extend `croaring_wrapper.h`
 with the oracle decl, implement, add a differential check (scalar-compare or
