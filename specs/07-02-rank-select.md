@@ -39,7 +39,10 @@ Add to `container_ops.zig` (or alongside the container types), const, no alloc:
   container:
   - array: binary search for the first value `> low`; that index is the count.
   - bitset: `popcount(words[0..word_idx])` + `popcount(words[word_idx] & mask≤bit)`
-    where `word_idx = low >> 6`.
+    where `word_idx = low >> 6`. **Bit-63 caveat:** the "bits ≤ bit" mask is
+    `(1 << (bit+1)) - 1`, which shifts by 64 (UB) when `bit == 63`. Special-case
+    it — when `bit == 63` the mask is all-ones (`~@as(u64,0)`), or build the mask
+    in `u128`/via `@shlWithOverflow`, or count the whole word. Don't `1 << 64`.
   - run: sum `(length+1)` for runs fully below `low`; for the run containing
     `low`, add `low - start + 1`.
 - **`containerSelect(c, k: u32) ?u16`** — the `k`-th smallest low-16 (0-based)
@@ -83,8 +86,8 @@ walk ends with `k ≥ total cardinality`, return `null`.
 ```zig
 pub fn rankMany(self: *const Self, values: []const u32, out: []u64) void
 ```
-`out.len` must equal `values.len`; `values` must be sorted ascending (document
-the precondition; debug-assert it). Baseline: a single forward walk over
+**Debug-assert both** `out.len == values.len` **and** that `values` is sorted
+ascending (document both as preconditions). Baseline: a single forward walk over
 containers shared across all queries (cursor advances monotonically), so it's
 O(containers + values) rather than `values.len ×` a full rank each. A correct but
 slower first cut is `for (values, out) |v, *o| o.* = rank(v);` — leave a comment
@@ -101,16 +104,30 @@ predicates), over the mixed generator, both `run_optimize` states:
    (`0`, `65535`, `65536`). Assert `rank` equals `roaring_bitmap_rank`.
 2. **select:** probe `k` in `0 .. cardinality+2` (including `0`,
    `cardinality-1`, and out-of-range `≥ cardinality` → both `null`/false).
-   Assert agreement (and that rawr `null` ⇔ CRoaring returns false).
+   Assert agreement (and that rawr `null` ⇔ CRoaring returns false). **Cast
+   caveat:** `roaring_bitmap_select` takes `uint32_t rank` — only cast rawr's
+   `u64 k` to `u32` for the oracle call when `k <= maxInt(u32)`; skip/guard the
+   oracle compare otherwise (rawr should still return `null` for such `k`).
 3. **getIndex:** for present values assert `index` matches `get_index`; for absent
    values assert `null` ⇔ `-1`.
-4. **rankMany:** build a sorted probe array, compare the whole `out` array to
-   `roaring_bitmap_rank_many`.
+4. **rankMany:** **oracle = repeated `roaring_bitmap_rank`**, not
+   `roaring_bitmap_rank_many`. CRoaring's `rank_many`
+   (`vendor/roaring.c:~17154`) does **not** fill remaining `ans` entries after it
+   advances past the last container, so for empty bitmaps or probes `> maximum`
+   the tail of `ans` is left unwritten — an unreliable oracle. Compare rawr
+   `rankMany(values, out)` element-wise to `roaring_bitmap_rank(v)` for each
+   `v` (the full documented behavior). Optionally also spot-check against
+   `rank_many` for probes `≤ maximum` only, but `rank` is the authoritative
+   oracle here.
 5. **rank/select round-trip:** for `k in 0..cardinality`, assert
    `rank(select(k).?) == k+1` and `select(rank(v)-1) == v` for present `v`
    (internal consistency, pure rawr — cheap and catches off-by-ones).
-6. Add `rank`, `select`, `getIndex` to the **randomized loop** predicate
-   comparisons.
+6. Add `rank`, `select`, `getIndex` to the **randomized loop** comparisons. These
+   need probe **values** (not just the two operand bitmaps), so add a small
+   helper that derives a deterministic probe set per generated bitmap — e.g.
+   `minimum`/`maximum` ± 1, a few values sampled from the bitmap (via `select` at
+   spread ranks) plus a few known-absent ones, and chunk boundaries. Seed it off
+   the loop's existing seed/iteration so failures stay reproducible.
 
 ## Task 6 — Benchmark vs CRoaring (perf-sensitive)
 
@@ -135,7 +152,9 @@ file — optional.)
    container types.
 3. All four match CRoaring across the mixed generator + edges (boundaries,
    min/max±1, out-of-range `k`, present/absent values), both run-optimized and
-   not, plus the rank/select round-trip consistency check.
+   not, plus the rank/select round-trip consistency check. `rankMany` is
+   validated against repeated `roaring_bitmap_rank` (not `rank_many` — see Task
+   5.4).
 4. `bench_croaring.zig` has rank / select / rankMany comparisons with recorded
    ratios.
 5. `zig build test`, `zig build validate`, `zig build difftest` pass; bench builds.
