@@ -2,6 +2,10 @@ const std = @import("std");
 const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
 const OwnedBitmap = @import("bitmap.zig").OwnedBitmap;
 const FrozenBitmap = @import("frozen.zig").FrozenBitmap;
+const ArrayContainer = @import("array_container.zig").ArrayContainer;
+const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
+const RunContainer = @import("run_container.zig").RunContainer;
+const TaggedPtr = @import("container.zig").TaggedPtr;
 const fmt = @import("format.zig");
 const test_gen = @import("test_gen.zig");
 
@@ -1372,6 +1376,101 @@ test "deserialize malformed input smoke" {
             try tryFrozenCorrupted(max_cardinality);
         }
     }
+}
+
+test "validate accepts empty bitmap and empty roundtrips" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    try bm.validate();
+
+    const serialized = try bm.serialize(allocator);
+    defer allocator.free(serialized);
+
+    var restored = try RoaringBitmap.deserialize(allocator, serialized);
+    defer restored.deinit();
+    try restored.validate();
+
+    var safe = try RoaringBitmap.deserializeSafe(allocator, serialized);
+    defer safe.deinit();
+    try safe.validate();
+
+    var safe_owned = try RoaringBitmap.deserializeSafeOwned(allocator, serialized);
+    defer safe_owned.deinit();
+    try safe_owned.bitmap.validate();
+}
+
+test "validate rejects bitmap size beyond allocation" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer {
+        bm.size = 0;
+        bm.deinit();
+    }
+
+    bm.size = @intCast(bm.keys.len + 1);
+    try std.testing.expectError(error.BitmapSizeRange, bm.validate());
+}
+
+test "validate rejects empty container" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    const ac = try ArrayContainer.init(allocator, 0);
+    bm.keys[0] = 0;
+    bm.containers[0] = TaggedPtr.initArray(ac);
+    bm.size = 1;
+
+    try std.testing.expectError(error.EmptyContainer, bm.validate());
+}
+
+test "validate rejects array cardinality range" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    const ac = try ArrayContainer.init(allocator, 0);
+    ac.cardinality = ArrayContainer.MAX_CARDINALITY + 1;
+    bm.keys[0] = 0;
+    bm.containers[0] = TaggedPtr.initArray(ac);
+    bm.size = 1;
+
+    try std.testing.expectError(error.ArrayCardinalityRange, bm.validate());
+}
+
+test "validate rejects bitset cardinality range" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    const bc = try BitsetContainer.init(allocator);
+    bm.keys[0] = 0;
+    bm.containers[0] = TaggedPtr.initBitset(bc);
+    bm.size = 1;
+
+    try std.testing.expectError(error.BitsetCardinalityRange, bm.validate());
+}
+
+test "validate rejects run count beyond allocation" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    const rc = try RunContainer.init(allocator, 0);
+    rc.n_runs = rc.capacity + 1;
+    bm.keys[0] = 0;
+    bm.containers[0] = TaggedPtr.initRun(rc);
+    bm.size = 1;
+
+    try std.testing.expectError(error.BitmapSizeRange, bm.validate());
 }
 
 test "validate rejects unsorted keys" {

@@ -38,6 +38,7 @@ pub const RoaringBitmap = struct {
     const INITIAL_CAPACITY: u32 = 4;
 
     pub const ValidateError = error{
+        BitmapSizeRange,
         UnsortedKeys,
         DuplicateKeys,
         EmptyContainer,
@@ -94,6 +95,13 @@ pub const RoaringBitmap = struct {
 
     /// Verify structural invariants without mutating or repairing the bitmap.
     pub fn validate(self: *const Self) ValidateError!void {
+        if (self.size == 0) return;
+        if (self.size > self.keys.len or self.size > self.containers.len or
+            self.capacity != self.keys.len or self.capacity != self.containers.len)
+        {
+            return ValidateError.BitmapSizeRange;
+        }
+
         for (self.keys[1..self.size], 1..) |key, i| {
             const prev = self.keys[i - 1];
             if (key == prev) return ValidateError.DuplicateKeys;
@@ -138,7 +146,7 @@ pub const RoaringBitmap = struct {
 
     fn validateRunContainer(rc: *const RunContainer) ValidateError!void {
         if (rc.n_runs == 0) return ValidateError.EmptyContainer;
-        if (rc.n_runs > rc.capacity) return ValidateError.RunOrdering;
+        if (rc.n_runs > rc.capacity) return ValidateError.BitmapSizeRange;
 
         var actual: u32 = 0;
         for (rc.runs[0..rc.n_runs], 0..) |run, i| {
