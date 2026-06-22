@@ -33,10 +33,10 @@ Legend — **Status:** ✅ have · ◑ partial · ❌ missing · ⛔ skip-by-des
 
 | CRoaring | Status | Effort | Maps cleanly? | Notes |
 |---|---|---|---|---|
-| `rank`, `rank_many` | ❌ | M | needs design | "count of elements ≤ x". Per-container rank (array: binsearch; bitset: popcount of words below; run: sum). Needs a per-container `rank` primitive. |
-| `select` | ❌ | M | needs design | "k-th smallest element". Inverse of rank; walk containers accumulating cardinality, then per-container select. |
-| `get_index` | ❌ | S | clean | index of a value in sorted order (= rank-1 if present). Falls out of the rank work. |
-| `flip`, `flip_closed`, `flip_inplace(_closed)` | ❌ | M | needs design | Complement within a range. rawr has **no flip at all**. Per-container flip + may create/destroy containers across the range. Common op. |
+| `rank`, `rank_many` | ✅ | M | needs design | rawr `rank` / `rankMany` (cursor-shared). Per-container rank primitive. |
+| `select` | ✅ | M | needs design | rawr `select(k)` → optional; per-container select primitive. |
+| `get_index` | ✅ | S | clean | rawr `getIndex` → optional. |
+| `flip`, `flip_closed`, `flip_inplace(_closed)` | ✅ | M | clean | rawr `flip`/`flipInplace`/`flipOwned` via XOR-with-range identity (inclusive). |
 | `remove_range`, `remove_range_closed` | ❌ | M | clean-ish | Counterpart to `addRange`; rawr can add a range but not remove one. Per-container clear-range + drop emptied containers. |
 | `or_cardinality`, `xor_cardinality`, `andnot_cardinality` | ✅ | S | clean | rawr `orCardinality` / `xorCardinality` / `differenceCardinality`. |
 
@@ -103,9 +103,9 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
 
 1. **`07-01` — `or/xor/andnot` cardinality + `jaccard` + `is_strict_subset`**
    *(done)* — all S-effort, all "clean," unlocks jaccard. Warm-up.
-2. **`07-02` — rank / select / get_index** — the marquee missing capability;
-   shared machinery.
-3. **`07-03` — flip (+inplace, +closed)** — high-use, self-contained.
+2. **`07-02` — rank / select / get_index** *(done)* — marquee capability; shared
+   machinery. Includes `rankMany` + bench vs CRoaring.
+3. **`07-03` — flip (+inplace, +closed)** *(done)* — XOR-with-range identity.
 4. **`07-04` — range operations** (`remove_range` + `range_cardinality` +
    `contains_range` + `intersect_with_range`) — related per-container range logic.
 5. **`07-05` — n-way unions** (`or_many`/`xor_many`), then **`07-06` lazy +
