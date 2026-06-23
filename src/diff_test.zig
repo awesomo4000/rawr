@@ -51,6 +51,7 @@ pub fn main() !void {
         try runOperationMatrix(allocator);
         try runJaccardEmptyCase(allocator);
         try runFlipCases(allocator);
+        try runRangeCases(allocator);
         try runTransitionCases(allocator);
         try runOracleAnchoredIdentities(allocator);
         try runRandomizedLoop(allocator);
@@ -204,6 +205,77 @@ fn runFlipCases(allocator: Allocator) !void {
     }
 }
 
+fn runRangeCases(allocator: Allocator) !void {
+    for (&[_]bool{ false, true }) |run_optimize| {
+        var prng = std.Random.DefaultPrng.init(if (run_optimize) 0xA11E_0001 else 0xA11E_0000);
+        const rng = prng.random();
+
+        for (&[_]Profile{ .sparse, .dense, .runs }) |profile| {
+            const chunks = [_]test_gen.ChunkProfile{.{ .key = 77, .profile = profile }};
+            var generated = try test_gen.build(allocator, rng, &chunks, run_optimize);
+            defer generated.deinit();
+
+            const oracle = try buildOracle(generated.values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+
+            var name_buf: [96]u8 = undefined;
+            const name = try std.fmt.bufPrint(&name_buf, "range:within:{s}:runopt={}", .{ @tagName(profile), run_optimize });
+            try assertRangeOpsAgree(allocator, name, &generated.bm, oracle, (77 << 16) + 10, (77 << 16) + 2000);
+        }
+
+        {
+            const chunks = [_]test_gen.ChunkProfile{.{ .key = 77, .profile = .full }};
+            var generated = try test_gen.build(allocator, rng, &chunks, run_optimize);
+            defer generated.deinit();
+
+            const oracle = try buildOracle(generated.values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+            try assertRangeOpsAgree(allocator, "range:full-populated", &generated.bm, oracle, 77 << 16, (77 << 16) + 65_535);
+        }
+
+        {
+            var bm = try RoaringBitmap.init(allocator);
+            defer bm.deinit();
+            const empty_values = [_]u32{};
+            const oracle = try buildOracle(&empty_values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+            try assertRangeOpsAgree(allocator, "range:full-empty", &bm, oracle, 78 << 16, (78 << 16) + 65_535);
+        }
+
+        {
+            const chunks = [_]test_gen.ChunkProfile{
+                .{ .key = 76, .profile = .sparse },
+                .{ .key = 78, .profile = .dense },
+            };
+            var generated = try test_gen.build(allocator, rng, &chunks, run_optimize);
+            defer generated.deinit();
+
+            const oracle = try buildOracle(generated.values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+            try assertRangeOpsAgree(allocator, "range:cross-chunk", &generated.bm, oracle, (76 << 16) + 50_000, (79 << 16) + 100);
+        }
+
+        {
+            const values = try valuesFromRanges(allocator, &.{
+                .{ .start = 0, .end = 10 },
+                .{ .start = 65_530, .end = 65_540 },
+                .{ .start = std.math.maxInt(u32) - 10, .end = std.math.maxInt(u32) },
+            });
+            defer allocator.free(values);
+
+            var bm = try buildRawrFromValues(allocator, values, run_optimize);
+            defer bm.deinit();
+            const oracle = try buildOracle(values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+
+            try assertRangeOpsAgree(allocator, "range:single-zero", &bm, oracle, 0, 0);
+            try assertRangeOpsAgree(allocator, "range:boundary", &bm, oracle, 65_535, 65_536);
+            try assertRangeOpsAgree(allocator, "range:max-boundary", &bm, oracle, std.math.maxInt(u32) - 10, std.math.maxInt(u32));
+            try assertRangeOpsAgree(allocator, "range:empty-range", &bm, oracle, 100, 99);
+        }
+    }
+}
+
 fn runTransitionCases(allocator: Allocator) !void {
     try runPromotionCase(allocator);
     try runDemotionCase(allocator);
@@ -332,6 +404,13 @@ fn runRandomIteration(allocator: Allocator, rng: std.Random, iteration: usize, r
     var flip_name_buf: [80]u8 = undefined;
     const flip_name = try std.fmt.bufPrint(&flip_name_buf, "random:{d}:flip", .{iteration});
     try assertFlipAgree(allocator, flip_name, &a.bm, oracle_a, flip_lo, flip_hi);
+
+    const range_lo = @as(u32, @intCast((iteration % 3) * 65_536)) + rng.uintLessThan(u32, 65_536);
+    const range_len = rng.uintLessThan(u32, 150_000);
+    const range_hi = if (iteration % 10 == 1 and range_lo > 0) range_lo - 1 else range_lo +| range_len;
+    var range_name_buf: [80]u8 = undefined;
+    const range_name = try std.fmt.bufPrint(&range_name_buf, "random:{d}:range", .{iteration});
+    try assertRangeOpsAgree(allocator, range_name, &a.bm, oracle_a, range_lo, range_hi);
 }
 
 fn logPass(comptime fmt: []const u8, args: anytype) void {
@@ -677,6 +756,78 @@ fn assertFlipAgree(
     var inplace_name_buf: [128]u8 = undefined;
     const inplace_name = try std.fmt.bufPrint(&inplace_name_buf, "{s}:inplace", .{name});
     try assertSameValues(allocator, inplace_name, &rawr_in_place, oracle_in_place);
+}
+
+fn assertRangeOpsAgree(
+    allocator: Allocator,
+    name: []const u8,
+    bm: *RoaringBitmap,
+    oracle: *c.roaring_bitmap_t,
+    lo: u32,
+    hi: u32,
+) !void {
+    const rawr_cardinality = bm.rangeCardinality(lo, hi);
+    const oracle_cardinality = c.roaring_bitmap_range_cardinality_closed(oracle, lo, hi);
+    try expectEqualScalar(name, "range", "rangeCardinality", rawr_cardinality, oracle_cardinality);
+
+    const rawr_contains = bm.containsRange(lo, hi);
+    const oracle_contains = c.roaring_bitmap_contains_range_closed(oracle, lo, hi);
+    try expectEqualBool(name, "range", "containsRange", rawr_contains, oracle_contains);
+
+    const rawr_intersects = bm.intersectsRange(lo, hi);
+    const oracle_intersects = c.roaring_bitmap_intersect_with_range(oracle, @as(u64, lo), @as(u64, hi) + 1);
+    try expectEqualBool(name, "range", "intersectsRange", rawr_intersects, oracle_intersects);
+
+    if (lo <= hi) {
+        const range_size = @as(u64, hi) - lo + 1;
+        if (rawr_contains != (rawr_cardinality == range_size)) {
+            std.debug.print("FAIL: {s}:containsRange rawr cross-check failed: contains={} card={d} range={d}\n", .{
+                name,
+                rawr_contains,
+                rawr_cardinality,
+                range_size,
+            });
+            return error.PredicateMismatch;
+        }
+    } else if (!rawr_contains or rawr_cardinality != 0) {
+        std.debug.print("FAIL: {s}:empty range cross-check failed: contains={} card={d}\n", .{
+            name,
+            rawr_contains,
+            rawr_cardinality,
+        });
+        return error.PredicateMismatch;
+    }
+
+    if (rawr_intersects != (rawr_cardinality > 0)) {
+        std.debug.print("FAIL: {s}:intersectsRange rawr cross-check failed: intersects={} card={d}\n", .{
+            name,
+            rawr_intersects,
+            rawr_cardinality,
+        });
+        return error.PredicateMismatch;
+    }
+
+    var rawr_removed = try bm.clone(allocator);
+    defer rawr_removed.deinit();
+    const before = rawr_removed.cardinality();
+    const removed = try rawr_removed.removeRange(lo, hi);
+    const after = rawr_removed.cardinality();
+    if (removed != before - after) {
+        std.debug.print("FAIL: {s}:removeRange count differs: removed={d} before-after={d}\n", .{
+            name,
+            removed,
+            before - after,
+        });
+        return error.PredicateMismatch;
+    }
+
+    const oracle_removed = c.roaring_bitmap_copy(oracle) orelse return error.CRoaringAllocFailed;
+    defer c.roaring_bitmap_free(oracle_removed);
+    c.roaring_bitmap_remove_range_closed(oracle_removed, lo, hi);
+
+    var remove_name_buf: [128]u8 = undefined;
+    const remove_name = try std.fmt.bufPrint(&remove_name_buf, "{s}:removeRange", .{name});
+    try assertSameValues(allocator, remove_name, &rawr_removed, oracle_removed);
 }
 
 fn rawrAllocatingOp(allocator: Allocator, op: BinaryOp, a: *RoaringBitmap, b: *RoaringBitmap) !RoaringBitmap {

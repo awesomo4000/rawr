@@ -243,6 +243,79 @@ pub const RoaringBitmap = struct {
         return Container.fromTagged(self.containers[idx]).contains(lowBits(value));
     }
 
+    /// Count values in the inclusive range [lo, hi].
+    pub fn rangeCardinality(self: *const Self, lo: u32, hi: u32) u64 {
+        if (lo > hi) return 0;
+
+        const start_key = highBits(lo);
+        const end_key = highBits(hi);
+        var idx = self.lowerBound(start_key);
+        var total: u64 = 0;
+
+        while (idx < self.size and self.keys[idx] <= end_key) : (idx += 1) {
+            const key = self.keys[idx];
+            const start_low: u16 = if (key == start_key) lowBits(lo) else 0;
+            const end_low: u16 = if (key == end_key) lowBits(hi) else std.math.maxInt(u16);
+            const container = Container.fromTagged(self.containers[idx]);
+
+            if (start_low == 0 and end_low == std.math.maxInt(u16)) {
+                total += container.getCardinality();
+            } else {
+                total += ops.containerRangeCardinality(container, start_low, end_low);
+            }
+        }
+
+        return total;
+    }
+
+    /// Return whether every value in the inclusive range [lo, hi] is present.
+    pub fn containsRange(self: *const Self, lo: u32, hi: u32) bool {
+        if (lo > hi) return true;
+
+        const start_key = highBits(lo);
+        const end_key = highBits(hi);
+        var idx = self.lowerBound(start_key);
+        var key_u32: u32 = start_key;
+        const end_key_u32: u32 = end_key;
+
+        while (key_u32 <= end_key_u32) : (key_u32 += 1) {
+            const key: u16 = @intCast(key_u32);
+            if (idx >= self.size or self.keys[idx] != key) return false;
+
+            const start_low: u16 = if (key == start_key) lowBits(lo) else 0;
+            const end_low: u16 = if (key == end_key) lowBits(hi) else std.math.maxInt(u16);
+            if (!ops.containerContainsRange(Container.fromTagged(self.containers[idx]), start_low, end_low)) {
+                return false;
+            }
+
+            idx += 1;
+            if (key_u32 == end_key_u32) break;
+        }
+
+        return true;
+    }
+
+    /// Return whether any value in the inclusive range [lo, hi] is present.
+    pub fn intersectsRange(self: *const Self, lo: u32, hi: u32) bool {
+        if (lo > hi) return false;
+
+        const start_key = highBits(lo);
+        const end_key = highBits(hi);
+        var idx = self.lowerBound(start_key);
+
+        while (idx < self.size and self.keys[idx] <= end_key) : (idx += 1) {
+            const key = self.keys[idx];
+            const start_low: u16 = if (key == start_key) lowBits(lo) else 0;
+            const end_low: u16 = if (key == end_key) lowBits(hi) else std.math.maxInt(u16);
+
+            if (ops.containerIntersectsRange(Container.fromTagged(self.containers[idx]), start_low, end_low)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// Add a value. Returns true if the value was newly added.
     pub fn add(self: *Self, value: u32) !bool {
         const key = highBits(value);
@@ -288,6 +361,20 @@ pub const RoaringBitmap = struct {
 
         if (self.cached_cardinality >= 0) self.cached_cardinality += @intCast(added);
         return added;
+    }
+
+    /// Remove all values in the inclusive range [lo, hi]. Returns count removed.
+    pub fn removeRange(self: *Self, lo: u32, hi: u32) !u64 {
+        if (lo > hi) return 0;
+
+        const before = self.cardinality();
+        var mask = try Self.init(self.allocator);
+        defer mask.deinit();
+
+        _ = try mask.addRange(lo, hi);
+        try self.bitwiseDifferenceInPlace(&mask);
+
+        return before - self.cardinality();
     }
 
     /// Add a range within a single chunk.

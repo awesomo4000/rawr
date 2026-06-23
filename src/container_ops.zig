@@ -63,6 +63,36 @@ pub fn containerSelect(c: Container, k: u32) ?u16 {
     };
 }
 
+/// Count values in the inclusive low-16 range [start, end].
+pub fn containerRangeCardinality(c: Container, start: u16, end: u16) u32 {
+    if (start > end) return 0;
+    const hi = containerRank(c, end);
+    const lo = if (start == 0) 0 else containerRank(c, start - 1);
+    return hi - lo;
+}
+
+/// Return whether every value in inclusive low-16 range [start, end] is present.
+pub fn containerContainsRange(c: Container, start: u16, end: u16) bool {
+    if (start > end) return true;
+    return switch (c) {
+        .array => |ac| arrayContainsRange(ac, start, end),
+        .bitset => |bc| bitsetContainsRange(bc, start, end),
+        .run => |rc| runContainsRange(rc, start, end),
+        .reserved => unreachable,
+    };
+}
+
+/// Return whether any value in inclusive low-16 range [start, end] is present.
+pub fn containerIntersectsRange(c: Container, start: u16, end: u16) bool {
+    if (start > end) return false;
+    return switch (c) {
+        .array => |ac| arrayIntersectsRange(ac, start, end),
+        .bitset => |bc| bitsetIntersectsRange(bc, start, end),
+        .run => |rc| runIntersectsRange(rc, start, end),
+        .reserved => unreachable,
+    };
+}
+
 fn arrayRank(ac: *const ArrayContainer, low: u16) u32 {
     var lo: usize = 0;
     var hi: usize = ac.cardinality;
@@ -143,6 +173,83 @@ fn runSelect(rc: *const RunContainer, k: u32) ?u16 {
         remaining -= size;
     }
     return null;
+}
+
+fn arrayContainsRange(ac: *const ArrayContainer, start: u16, end: u16) bool {
+    const range_size = @as(u32, end) - start + 1;
+    const below_start = if (start == 0) 0 else arrayRank(ac, start - 1);
+    return arrayRank(ac, end) - below_start == range_size;
+}
+
+fn bitsetContainsRange(bc: *const BitsetContainer, start: u16, end: u16) bool {
+    const first_word: usize = start >> 6;
+    const last_word: usize = end >> 6;
+    const start_bit: u6 = @truncate(start);
+    const end_bit: u6 = @truncate(end);
+
+    if (first_word == last_word) {
+        const mask = bitRangeMask(start_bit, end_bit);
+        return (bc.words[first_word] & mask) == mask;
+    }
+
+    const first_mask = bitRangeMask(start_bit, 63);
+    if ((bc.words[first_word] & first_mask) != first_mask) return false;
+
+    for (bc.words[first_word + 1 .. last_word]) |word| {
+        if (word != ~@as(u64, 0)) return false;
+    }
+
+    const last_mask = bitRangeMask(0, end_bit);
+    return (bc.words[last_word] & last_mask) == last_mask;
+}
+
+fn runContainsRange(rc: *const RunContainer, start: u16, end: u16) bool {
+    for (rc.runs[0..rc.n_runs]) |run| {
+        if (end < run.start) return false;
+        if (start >= run.start and end <= run.end()) return true;
+    }
+    return false;
+}
+
+fn arrayIntersectsRange(ac: *const ArrayContainer, start: u16, end: u16) bool {
+    const idx = gallopSearch(ac.values[0..ac.cardinality], start, 0);
+    return idx < ac.cardinality and ac.values[idx] <= end;
+}
+
+fn bitsetIntersectsRange(bc: *const BitsetContainer, start: u16, end: u16) bool {
+    const first_word: usize = start >> 6;
+    const last_word: usize = end >> 6;
+    const start_bit: u6 = @truncate(start);
+    const end_bit: u6 = @truncate(end);
+
+    if (first_word == last_word) {
+        return (bc.words[first_word] & bitRangeMask(start_bit, end_bit)) != 0;
+    }
+
+    if ((bc.words[first_word] & bitRangeMask(start_bit, 63)) != 0) return true;
+
+    for (bc.words[first_word + 1 .. last_word]) |word| {
+        if (word != 0) return true;
+    }
+
+    return (bc.words[last_word] & bitRangeMask(0, end_bit)) != 0;
+}
+
+fn runIntersectsRange(rc: *const RunContainer, start: u16, end: u16) bool {
+    for (rc.runs[0..rc.n_runs]) |run| {
+        if (end < run.start) return false;
+        if (start <= run.end()) return true;
+    }
+    return false;
+}
+
+fn bitRangeMask(start_bit: u6, end_bit: u6) u64 {
+    const end_mask = if (end_bit == 63)
+        ~@as(u64, 0)
+    else
+        (@as(u64, 1) << (end_bit + 1)) - 1;
+    const start_mask = (@as(u64, 1) << start_bit) - 1;
+    return end_mask & ~start_mask;
 }
 
 // ============================================================================

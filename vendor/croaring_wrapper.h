@@ -25,6 +25,9 @@ uint64_t roaring_bitmap_get_cardinality(const roaring_bitmap_t *r);
 bool roaring_bitmap_is_empty(const roaring_bitmap_t *r);
 uint32_t roaring_bitmap_minimum(const roaring_bitmap_t *r);
 uint32_t roaring_bitmap_maximum(const roaring_bitmap_t *r);
+void roaring_bitmap_remove_range_closed(roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
+uint64_t roaring_bitmap_range_cardinality_closed(const roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
+bool roaring_bitmap_contains_range_closed(const roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
 
 // Set operations
 roaring_bitmap_t *roaring_bitmap_and(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
@@ -38,6 +41,7 @@ uint64_t roaring_bitmap_xor_cardinality(const roaring_bitmap_t *r1, const roarin
 uint64_t roaring_bitmap_andnot_cardinality(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 double roaring_bitmap_jaccard_index(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 bool roaring_bitmap_intersect(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
+bool roaring_bitmap_intersect_with_range(const roaring_bitmap_t *r, uint64_t x, uint64_t y);
 bool roaring_bitmap_equals(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 bool roaring_bitmap_is_subset(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 bool roaring_bitmap_is_strict_subset(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);

@@ -66,6 +66,8 @@ var rank_queries: [N_VALUES]u32 = undefined;
 var select_queries: [N_VALUES]u32 = undefined;
 var rank_many_probes: [N_RANK_MANY_PROBES]u32 = undefined;
 var rank_many_out: [N_RANK_MANY_PROBES]u64 = undefined;
+var range_query_lo: [N_VALUES]u32 = undefined;
+var range_query_hi: [N_VALUES]u32 = undefined;
 
 fn initTestData() void {
     var prng = std.Random.DefaultPrng.init(12345);
@@ -75,6 +77,9 @@ fn initTestData() void {
         sequential_values[i] = @intCast(i);
         rank_queries[i] = @intCast(prng.random().uintLessThan(u32, 500_000));
         select_queries[i] = @intCast(prng.random().uintLessThan(u32, 500_000));
+        const range_start = prng.random().uintLessThan(u32, 50_000);
+        range_query_lo[i] = range_start;
+        range_query_hi[i] = range_start + prng.random().uintLessThan(u32, 1024);
     }
 
     for (0..N_RANK_MANY_PROBES) |i| {
@@ -213,6 +218,7 @@ fn benchRawrOrSparseArena() void {
 
 var rawr_dense_a: ?RoaringBitmap = null;
 var rawr_dense_b: ?RoaringBitmap = null;
+var rawr_bitset_range_bm: ?RoaringBitmap = null;
 
 fn initRawrDenseBitmaps() void {
     if (rawr_dense_a != null) return;
@@ -225,6 +231,18 @@ fn initRawrDenseBitmaps() void {
 
     rawr_dense_a = a;
     rawr_dense_b = b;
+}
+
+fn initRawrBitsetRangeBm() void {
+    if (rawr_bitset_range_bm != null) return;
+
+    var bm = RoaringBitmap.init(allocator) catch unreachable;
+    var value: u32 = 0;
+    while (value < 60_000) : (value += 3) {
+        _ = bm.add(value) catch unreachable;
+    }
+
+    rawr_bitset_range_bm = bm;
 }
 
 fn benchRawrAndDense() void {
@@ -317,6 +335,15 @@ fn benchRawrFlipWideDense() void {
     var result = bm.flip(allocator, 100_000, 650_000) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
+}
+
+fn benchRawrRangeCardinalityBitset() void {
+    const bm = &rawr_bitset_range_bm.?;
+    var total: u64 = 0;
+    for (range_query_lo, range_query_hi) |lo, hi| {
+        total +%= bm.rangeCardinality(lo, hi);
+    }
+    std.mem.doNotOptimizeAway(total);
 }
 
 // ============================================================================
@@ -416,6 +443,7 @@ fn benchCRoaringOrSparse() void {
 
 var cr_dense_a: ?*c.roaring_bitmap_t = null;
 var cr_dense_b: ?*c.roaring_bitmap_t = null;
+var cr_bitset_range_bm: ?*c.roaring_bitmap_t = null;
 
 fn initCRoaringDenseBitmaps() void {
     if (cr_dense_a != null) return;
@@ -428,6 +456,18 @@ fn initCRoaringDenseBitmaps() void {
 
     cr_dense_a = a;
     cr_dense_b = b_bm;
+}
+
+fn initCRoaringBitsetRangeBm() void {
+    if (cr_bitset_range_bm != null) return;
+
+    const bm = c.roaring_bitmap_create() orelse unreachable;
+    var value: u32 = 0;
+    while (value < 60_000) : (value += 3) {
+        c.roaring_bitmap_add(bm, value);
+    }
+
+    cr_bitset_range_bm = bm;
 }
 
 fn benchCRoaringAndDense() void {
@@ -528,6 +568,15 @@ fn benchCRoaringFlipWideDense() void {
     const result = c.roaring_bitmap_flip_closed(bm, 100_000, 650_000) orelse unreachable;
     defer c.roaring_bitmap_free(result);
     std.mem.doNotOptimizeAway(result);
+}
+
+fn benchCRoaringRangeCardinalityBitset() void {
+    const bm = cr_bitset_range_bm.?;
+    var total: u64 = 0;
+    for (range_query_lo, range_query_hi) |lo, hi| {
+        total +%= c.roaring_bitmap_range_cardinality_closed(bm, lo, hi);
+    }
+    std.mem.doNotOptimizeAway(total);
 }
 
 // ============================================================================
@@ -662,6 +711,12 @@ pub fn main(init: std.process.Init) !void {
 
     // --- Range operations ---
     std.debug.print("\nRANGE OPERATIONS\n", .{});
+    initRawrBitsetRangeBm();
+    initCRoaringBitsetRangeBm();
+
+    r = benchmark(init.io, benchRawrRangeCardinalityBitset, .{});
+    cr = benchmark(init.io, benchCRoaringRangeCardinalityBitset, .{});
+    printResult("rangeCardinality (bitset)", r.median_ns, cr.median_ns);
 
     r = benchmark(init.io, benchRawrFlipWideDense, .{});
     cr = benchmark(init.io, benchCRoaringFlipWideDense, .{});
@@ -673,6 +728,7 @@ pub fn main(init: std.process.Init) !void {
     if (rawr_sparse_b) |*bm| bm.deinit();
     if (rawr_dense_a) |*bm| bm.deinit();
     if (rawr_dense_b) |*bm| bm.deinit();
+    if (rawr_bitset_range_bm) |*bm| bm.deinit();
     if (rawr_serialized) |s| allocator.free(s);
 
     if (cr_contains_bm) |bm| c.roaring_bitmap_free(bm);
@@ -680,6 +736,7 @@ pub fn main(init: std.process.Init) !void {
     if (cr_sparse_b) |bm| c.roaring_bitmap_free(bm);
     if (cr_dense_a) |bm| c.roaring_bitmap_free(bm);
     if (cr_dense_b) |bm| c.roaring_bitmap_free(bm);
+    if (cr_bitset_range_bm) |bm| c.roaring_bitmap_free(bm);
     if (cr_serialized) |s| allocator.free(s);
 
     std.debug.print("\nDone.\n", .{});
