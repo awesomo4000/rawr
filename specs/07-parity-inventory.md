@@ -37,7 +37,7 @@ Legend — **Status:** ✅ have · ◑ partial · ❌ missing · ⛔ skip-by-des
 | `select` | ✅ | M | needs design | rawr `select(k)` → optional; per-container select primitive. |
 | `get_index` | ✅ | S | clean | rawr `getIndex` → optional. |
 | `flip`, `flip_closed`, `flip_inplace(_closed)` | ✅ | M | clean | rawr `flip`/`flipInplace`/`flipOwned` via XOR-with-range identity (inclusive). |
-| `remove_range`, `remove_range_closed` | ❌ | M | clean-ish | Counterpart to `addRange`; rawr can add a range but not remove one. Per-container clear-range + drop emptied containers. |
+| `remove_range`, `remove_range_closed` | ✅ | M | clean-ish | rawr `removeRange` via difference-with-range identity. |
 | `or_cardinality`, `xor_cardinality`, `andnot_cardinality` | ✅ | S | clean | rawr `orCardinality` / `xorCardinality` / `differenceCardinality`. |
 
 **Test:** rank/select/get_index/range-cardinality are scalar results → new
@@ -53,8 +53,8 @@ matrix.
 |---|---|---|---|---|
 | `or_many`, `or_many_heap`, `xor_many`, `xor_many_heap` | ❌ | M | clean | n-way unions. Naive = fold pairwise; heap/lazy variants are the optimization. |
 | `lazy_or(_inplace)`, `lazy_xor(_inplace)`, `repair_after_lazy` | ❌ | L | needs design | Skip cardinality/normalization maintenance during bulk, repair once at end. The handoff's "lazy n-way unions." Real perf win for `or_many`; meaningful internal change (lazy container state). |
-| `range_cardinality`, `range_cardinality_closed` | ❌ | S | clean | count of set bits in [a,b). Per-container masked popcount. |
-| `contains_range`, `contains_range_closed` | ❌ | S | clean | is the whole range present. Per-container all-set check. |
+| `range_cardinality`, `range_cardinality_closed` | ✅ | S | clean | rawr `rangeCardinality`; vectorized windowed popcount (beats CRoaring on large single-chunk ranges). |
+| `contains_range`, `contains_range_closed` | ✅ | S | clean | rawr `containsRange` (early-exit). |
 | `to_uint32_array` | ❌ | S | clean | bulk dump to `[]u32`. Iterator covers it functionally; this is the allocate-and-fill convenience + speed. |
 | `range_uint32_array` | ❌ | S | clean | values in a range to array. |
 | `add_many` | ❌ | S | clean | bulk add into existing bitmap (rawr has `fromSlice` for fresh only). |
@@ -63,7 +63,7 @@ matrix.
 | `contains_bulk` | ◑ | S | clean | contains with a cursor hint; `contains` covers it, this is the cursor optimization. |
 | `jaccard_index` | ✅ | S | clean | rawr `jaccardIndex`. |
 | `is_strict_subset` | ✅ | S | clean | rawr `isStrictSubsetOf`. |
-| `intersect_with_range` | ❌ | S | clean | does the bitmap intersect [a,b). |
+| `intersect_with_range` | ✅ | S | clean | rawr `intersectsRange` (early-exit). |
 
 ---
 
@@ -106,8 +106,9 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
 2. **`07-02` — rank / select / get_index** *(done)* — marquee capability; shared
    machinery. Includes `rankMany` + bench vs CRoaring.
 3. **`07-03` — flip (+inplace, +closed)** *(done)* — XOR-with-range identity.
-4. **`07-04` — range operations** (`remove_range` + `range_cardinality` +
-   `contains_range` + `intersect_with_range`) — related per-container range logic.
+4. **`07-04` — range operations** *(done)* (`remove_range` + `range_cardinality`
+   + `contains_range` + `intersect_with_range`) — related per-container range
+   logic. rangeCardinality uses a vectorized windowed popcount.
 5. **`07-05` — n-way unions** (`or_many`/`xor_many`), then **`07-06` lazy +
    repair** as a follow-on (the lazy machinery is the L-effort design piece —
    keep it separate; may itself sub-split `07-06a/b`).
