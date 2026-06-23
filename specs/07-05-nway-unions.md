@@ -19,8 +19,15 @@ pub fn orMany(allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self
 pub fn xorMany(allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self
 ```
 
-Both produce a fresh bitmap (allocating). Add `orManyOwned` / `xorManyOwned`
-mirroring the `*Owned` surface. **Out of scope here (→ `07-06`):** the
+Both produce a fresh bitmap (allocating). The `*Owned` variants are
+**receiverless** too (unlike the binary `*Owned` ops, which take a receiver) —
+they take the backing allocator and the list, and return an arena-backed
+`OwnedBitmap`:
+
+```zig
+pub fn orManyOwned(backing: std.mem.Allocator, bitmaps: []const *const Self) !OwnedBitmap
+pub fn xorManyOwned(backing: std.mem.Allocator, bitmaps: []const *const Self) !OwnedBitmap
+``` **Out of scope here (→ `07-06`):** the
 `*_many_heap` variants and the lazy/`repair_after_lazy` machinery — they're the
 perf layer, built on top of this chunk's k-way structure.
 
@@ -56,13 +63,23 @@ merge. The per-key fold is exactly where `07-06`'s lazy path will later avoid
 intermediate normalization — keep the per-key union isolated in a small helper so
 lazy can swap it.
 
+**Ownership discipline (in the per-key helper):**
+- A key present in **only one** input → the result must **clone** that container,
+  never append/alias the input's container (inputs are `*const` and the result
+  owns its containers).
+- A multi-input fold allocates an accumulator + intermediates → free them on
+  **every error path** (`errdefer`), and free the loser of each pairwise step so a
+  mid-fold failure doesn't leak.
+
 ## Task 2 — `xorMany`
 
 Same k-way merge skeleton, but **xor-accumulate** the same-key containers: a key
-present in only one input contributes that container as-is; a key in several
-inputs folds `containerXor` across them (associative/commutative, so order within
-a key doesn't matter). Drop a container that folds to empty (cardinality 0) — same
-ghost-container discipline as `bitwiseXor`.
+present in only one input contributes that container (cloned — same ownership
+rule as Task 1, never alias the input); a key in several inputs folds
+`containerXor` across them (associative/commutative, so order within a key
+doesn't matter). Drop a container that folds to empty (cardinality 0) — same
+ghost-container discipline as `bitwiseXor`. Free intermediates on every error
+path.
 
 ## Task 3 — Differential checks (`diff_test.zig`)
 
@@ -71,41 +88,57 @@ n-way results may pick a different *valid* container representation than CRoarin
 **semantic equality** (`assertSameValues`), not byte-identical `assertAgree`. (Try
 byte-identity first if you like; if it diverges, semantic is the contract.)
 
-- Build **N generated bitmaps** for several `N` (e.g. 0, 1, 2, 3, 8, ~32) using
+- Build **N generated bitmaps** for several `N >= 1` (e.g. 1, 2, 3, 8, ~32) using
   the mixed generator across profiles, both `run_optimize` states. `orMany` /
   `xorMany` them in rawr; build the same N oracles and call the CRoaring
   counterpart; assert `assertSameValues`.
-- Mix the inputs so the same key is array in one bitmap, bitset in another, run in
-  a third (the heterogeneous-per-key case the k-way fold must handle).
+- **Hand-built heterogeneous-per-key case (explicit, not generator-based):**
+  construct three inputs where the **same high key** is an **array** in one, a
+  **bitset** in the second, and a **run** in the third (e.g. build each so that
+  chunk lands in the intended container type, run-optimizing the third). `orMany`
+  and `xorMany` over the three and assert against the oracle. This is the fold
+  behavior that matters most; pin it deterministically rather than hoping the
+  generator produces it.
 - **Cross-check vs the 2-way op (pure rawr):** `orMany([a,b])` equals
   `a.bitwiseOr(b)`; `xorMany([a,b])` equals `a.bitwiseXor(b)`. And
   `orMany([a,b,c])` equals `a.bitwiseOr(b).bitwiseOr(c)` — cheap, catches fold
   bugs without the oracle.
-- Edge cases: empty list, single element (result is an independent clone — mutate
-  it and confirm the input is unchanged), inputs containing empties.
+- **Edge cases:** empty list and single element are tested **pure-rawr, without
+  the oracle** — for `bitmaps.len == 0` assert the rawr result `isEmpty()`; for a
+  single element assert it equals a clone and is independent (mutate the result,
+  confirm the input is unchanged). Reserve the CRoaring oracle for `N >= 1`:
+  calling `roaring_bitmap_or_many(0, ptr)` still requires a valid (even if
+  dummy/`undefined`-but-readable) `const roaring_bitmap_t **` argument, so it's
+  simpler to just not route `N == 0` through the oracle. Also test inputs that
+  contain empty bitmaps in the list (`N >= 1`) against the oracle.
 
 ## Task 4 — Benchmark vs CRoaring
 
-Extend `bench_croaring.zig`: `orMany` over a list of many bitmaps (e.g. 16–64
-mixed-profile bitmaps) vs `roaring_bitmap_or_many`. Record the ratio.
+Extend `bench_croaring.zig`: bench **both** `orMany` (vs `roaring_bitmap_or_many`)
+and `xorMany` (vs `roaring_bitmap_xor_many`) over a list of many bitmaps (e.g.
+16–64 mixed-profile bitmaps). Record both ratios.
 
 **Expectation/framing:** the k-way merge with eager per-key normalization will
-likely still trail CRoaring's `or_many` (which is lazy internally). That gap is
-**expected and is exactly what `07-06` closes** — don't treat a >1.0× here as a
-failure; record it as the baseline the lazy work will improve. (Keep the bench so
+likely still trail CRoaring, whose `or_many` is **lazy fold + repair internally**
+(and `or_many_heap` is a separate balanced-merge path). That gap is **expected
+and is exactly what `07-06` closes** — don't treat a >1.0× here as a failure;
+record it as the baseline the lazy work will improve. (Keep both benches so
 `07-06` can show the before/after.)
 
 ## Acceptance criteria
 
-1. `orMany` / `xorMany` (+ `*Owned`) exist with the signatures and edge-case
-   behavior above; inputs never mutated; single-element result is an independent
-   clone.
+1. `orMany` / `xorMany` (+ receiverless `*Owned`) exist with the signatures and
+   edge-case behavior above; inputs never mutated; single-element result is an
+   independent clone.
 2. Implemented as a k-way merge (each output container built once), with the
-   per-key union isolated in a helper for `07-06` to swap.
-3. Match CRoaring `or_many` / `xor_many` by `assertSameValues` across varied `N`,
-   profiles, heterogeneous-per-key containers, and both run-optimized states;
-   plus the pure-rawr 2-way cross-checks.
-4. Benched vs CRoaring with the ratio recorded (gap acceptable; `07-06` closes it).
+   per-key union isolated in a helper for `07-06` to swap; single-input keys
+   cloned (never aliased), intermediates freed on error paths.
+3. Match CRoaring `or_many` / `xor_many` by `assertSameValues` across varied
+   `N >= 1`, profiles, and both run-optimized states — including the **hand-built
+   array/bitset/run same-key** case — plus the pure-rawr 2-way cross-checks; empty
+   list and single-element verified pure-rawr (no oracle).
+4. **Both** `orMany` and `xorMany` benched vs their CRoaring counterparts with the
+   ratios recorded (gap acceptable; `07-06` closes it).
 5. No leaks (intermediate containers freed); `zig build test`, `validate`,
    `difftest` pass.
 
