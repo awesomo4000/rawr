@@ -51,7 +51,7 @@ matrix.
 
 | CRoaring | Status | Effort | Maps cleanly? | Notes |
 |---|---|---|---|---|
-| `or_many`, `xor_many` | ✅ | M | clean | rawr `orMany`/`xorMany` (k-way merge + lazy fold). orMany ~1.25×, xorMany ~0.55× vs CRoaring. |
+| `or_many`, `xor_many` | ✅ | M | clean | rawr `orMany`/`xorMany` (k-way + lazy, forces bitset accumulation). orMany ~1.14× (parity); xorMany ~0.54× — rawr takes the dense bitset fast path that CRoaring's `xor_many` (no bitset-conversion option, unlike `or_many`) skips. Win is xor-specific + dense-input-specific, not allocator/structure. |
 | `or_many_heap` | ✅ | M | clean | rawr `orManyHeap` — **thin alias of `orMany`** (no distinct algorithm). CRoaring's `or_many_heap` is ~2× slower than its `or_many` on uniform-size inputs, so the alias suffices. |
 | `xor_many_heap` | ⛔ | — | — | **not exported in this vendored CRoaring** (TODO comment only). No oracle; rawr-only alias of `xorMany` at most. |
 | `lazy_or(_inplace)`, `lazy_xor(_inplace)`, `repair_after_lazy` | ✅ | L | needs design | rawr `lazyOr`/`lazyXor`/`repairAfterLazy` (+ in-place). Lazy bitset accumulation, single repair. |
