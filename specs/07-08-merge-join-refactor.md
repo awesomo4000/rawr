@@ -31,13 +31,15 @@ Per-op policy is the only thing that varies:
 - **Primary:** unify the **4 allocating** ops under one comptime-op merge, and the
   **4 cardinality** variants under one comptime-op merge. These are the clearest,
   highest-duplication wins (the cardinality four are near-identical, per `07-01`).
-- **Secondary (optional):** unify the **4 in-place** ops among themselves if it
-  comes out clean — they're a mechanically different shape (mutating `self`'s list
-  with insert/shift), so don't force them into the allocating helper if it gets
-  ugly.
-- **Out of scope (do not touch):** the k-way `manyMerge`/`foldManyKey` (different
-  algorithm); the 9-pair `containerX` dispatch in `container_ops.zig` (inherent,
-  clear); the `cached_cardinality` handling (consistent, correct).
+- **Secondary — default to leaving the in-place four alone.** Only unify them if
+  the abstraction comes out *obviously* simpler. Their ownership bookkeeping (the
+  `owned[]` tracking + `errdefer` in OR/XOR differs from AND/DIFF) is different
+  enough that forcing them into the first pass is more risk than payoff. Expect to
+  skip them.
+- **Out of scope (do not touch):** the k-way `manyMerge`/`foldManyKey`; the 2-way
+  lazy `lazyMergeTwo` (another tempting-but-different nearby abstraction — leave
+  it); the 9-pair `containerX` dispatch in `container_ops.zig` (inherent, clear);
+  the `cached_cardinality` handling (consistent, correct).
 
 ## Approach
 
@@ -51,10 +53,11 @@ cleaner.
 
 **Readability is the actual goal** — if a comptime abstraction ends up *harder*
 to read than the duplication, it's not worth it. In particular:
-- `bitwiseDifference` currently uses an asymmetric walk (`while i < size`, advance
-  `j`) rather than the symmetric `while i<size and j<size` + tail-drain the others
-  use. Either adapt it to the common shape or leave it specialized — don't bend
-  the generic into a leaky abstraction to force it in.
+- `bitwiseDifference` is the only *allocating* op still on the asymmetric walk
+  (`while i < size`, advance `j`) instead of the symmetric `while i<size and
+  j<size` + tail-drain. **Convert it to the common A-only/B-only/both walk** —
+  it's probably clearer and lets it share the helper. (`differenceCardinality` is
+  already in the symmetric shape, so the cardinality family needs no such change.)
 - Don't over-generalize: covering the 4 allocating + 4 cardinality cleanly is the
   win; the in-place four can stay as-is if unifying them hurts clarity.
 
@@ -70,15 +73,27 @@ to read than the duplication, it's not worth it. In particular:
    merge *should* be free; **prove it with the bench**, don't assume.
 3. **Allocation profile unchanged** — same allocations as before (no new temporary
    per merge); leak-checked.
+4. **Preserve `bitwiseAnd`'s scratch-buffer / optimization path exactly.** AND has
+   op-specific tuning tied to the sparse-AND perf work; it's easy to flatten into
+   a generic allocating merge and silently lose. Keep its fast path intact (or
+   special-case AND out of the generic if needed) — the `bench-compare` AND rows
+   are the check.
+5. **Leak-safe container production** — in the shared allocating helper, a
+   newly-created result container must be freed (`errdefer`/explicit) if the
+   subsequent `appendContainer` fails, so an alloc failure mid-merge doesn't leak.
+   This is achievable without changing the successful-path allocation profile.
 
 ## Method
 
 Refactor **incrementally**, one family at a time, running `difftest` +
 `bench-compare` after each step, so any regression is attributable to the step
 that caused it:
-1. Cardinality four → shared merge. (Lowest risk: no allocation, pure accumulate.)
-2. Allocating four → shared merge.
-3. In-place four → shared merge (only if clean).
+1. Cardinality four → shared merge. (Lowest risk: no allocation, pure accumulate;
+   `differenceCardinality` already symmetric.)
+2. Allocating four → shared merge — **preserving AND's scratch/fast path** and
+   converting `bitwiseDifference` to the symmetric walk.
+3. In-place four → **expected to stay as-is**; only touch if the pattern comes out
+   obviously cleaner.
 
 ## Acceptance criteria
 
