@@ -1188,6 +1188,16 @@ pub const RoaringBitmap = struct {
         return result;
     }
 
+    /// Return a new bitmap that is the union (OR) of all inputs.
+    pub fn orMany(allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self {
+        return manyMerge(.bor, allocator, bitmaps);
+    }
+
+    /// Return a new bitmap that is the symmetric difference (XOR) of all inputs.
+    pub fn xorMany(allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self {
+        return manyMerge(.xor, allocator, bitmaps);
+    }
+
     /// Return a new bitmap with values in [lo, hi] complemented.
     pub fn flip(self: *const Self, allocator: std.mem.Allocator, lo: u32, hi: u32) !Self {
         var result = try self.clone(allocator);
@@ -1623,6 +1633,90 @@ pub const RoaringBitmap = struct {
         };
     }
 
+    const ManyOp = enum { bor, xor };
+
+    fn manyMerge(comptime op: ManyOp, allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self {
+        if (bitmaps.len == 1) {
+            return bitmaps[0].clone(allocator);
+        }
+
+        var result = try Self.init(allocator);
+        errdefer result.deinit();
+
+        if (bitmaps.len == 0) {
+            return result;
+        }
+
+        const cursors = try allocator.alloc(usize, bitmaps.len);
+        defer allocator.free(cursors);
+        @memset(cursors, 0);
+
+        while (nextManyKey(bitmaps, cursors)) |key| {
+            if (try foldManyKey(op, allocator, bitmaps, cursors, key)) |tp| {
+                result.appendContainer(key, tp) catch |err| {
+                    Container.fromTagged(tp).deinit(allocator);
+                    return err;
+                };
+            }
+        }
+
+        result.cached_cardinality = -1;
+        return result;
+    }
+
+    fn nextManyKey(bitmaps: []const *const Self, cursors: []const usize) ?u16 {
+        var min_key: ?u16 = null;
+        // Linear scan over N cursor heads: O(N * distinct_keys). A heap-based
+        // cursor is deferred to the or_many_heap/lazy follow-up.
+        for (bitmaps, cursors) |bm, cursor| {
+            if (cursor >= bm.size) continue;
+            const key = bm.keys[cursor];
+            if (min_key == null or key < min_key.?) {
+                min_key = key;
+            }
+        }
+        return min_key;
+    }
+
+    fn foldManyKey(
+        comptime op: ManyOp,
+        allocator: std.mem.Allocator,
+        bitmaps: []const *const Self,
+        cursors: []usize,
+        key: u16,
+    ) !?TaggedPtr {
+        var acc: ?Container = null;
+        errdefer if (acc) |c_acc| c_acc.deinit(allocator);
+
+        for (bitmaps, cursors) |bm, *cursor| {
+            if (cursor.* >= bm.size or bm.keys[cursor.*] != key) continue;
+
+            const next = Container.fromTagged(bm.containers[cursor.*]);
+            cursor.* += 1;
+
+            if (acc) |c_acc| {
+                const merged = switch (op) {
+                    .bor => try ops.containerUnion(allocator, c_acc, next),
+                    .xor => try ops.containerXor(allocator, c_acc, next),
+                };
+                c_acc.deinit(allocator);
+                acc = merged;
+            } else {
+                acc = try next.clone(allocator);
+            }
+        }
+
+        var folded = acc.?;
+        if (op == .xor and folded.getCardinality() == 0) {
+            folded.deinit(allocator);
+            acc = null;
+            return null;
+        }
+
+        acc = null;
+        return folded.toTagged();
+    }
+
     // ========================================================================
     // Iterator
     // ========================================================================
@@ -1894,6 +1988,22 @@ pub const RoaringBitmap = struct {
         var arena = std.heap.ArenaAllocator.init(backing);
         errdefer arena.deinit();
         const result = try fromSlice(arena.allocator(), values);
+        return .{ .bitmap = result, .arena = arena };
+    }
+
+    /// Compute n-way union using arena allocation.
+    pub fn orManyOwned(backing: std.mem.Allocator, bitmaps: []const *const Self) !OwnedBitmap {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        errdefer arena.deinit();
+        const result = try orMany(arena.allocator(), bitmaps);
+        return .{ .bitmap = result, .arena = arena };
+    }
+
+    /// Compute n-way symmetric difference using arena allocation.
+    pub fn xorManyOwned(backing: std.mem.Allocator, bitmaps: []const *const Self) !OwnedBitmap {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        errdefer arena.deinit();
+        const result = try xorMany(arena.allocator(), bitmaps);
         return .{ .bitmap = result, .arena = arena };
     }
 

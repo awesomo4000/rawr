@@ -52,6 +52,7 @@ pub fn main() !void {
         try runJaccardEmptyCase(allocator);
         try runFlipCases(allocator);
         try runRangeCases(allocator);
+        try runNwayCases(allocator);
         try runTransitionCases(allocator);
         try runOracleAnchoredIdentities(allocator);
         try runRandomizedLoop(allocator);
@@ -274,6 +275,194 @@ fn runRangeCases(allocator: Allocator) !void {
             try assertRangeOpsAgree(allocator, "range:empty-range", &bm, oracle, 100, 99);
         }
     }
+}
+
+const ManyOp = enum {
+    bor,
+    xor,
+
+    fn name(self: ManyOp) []const u8 {
+        return switch (self) {
+            .bor => "orMany",
+            .xor => "xorMany",
+        };
+    }
+};
+
+fn runNwayCases(allocator: Allocator) !void {
+    try runNwayPureRawrEdges(allocator);
+    try runNwayGeneratedOracleCases(allocator);
+    try runNwayHeterogeneousSameKeyCase(allocator);
+}
+
+fn runNwayPureRawrEdges(allocator: Allocator) !void {
+    var empty_or = try RoaringBitmap.orMany(allocator, &.{});
+    defer empty_or.deinit();
+    try expectRawrEmpty("orMany:empty-list", &empty_or);
+
+    var empty_xor = try RoaringBitmap.xorMany(allocator, &.{});
+    defer empty_xor.deinit();
+    try expectRawrEmpty("xorMany:empty-list", &empty_xor);
+
+    var prng = std.Random.DefaultPrng.init(0x0A11_0A11);
+    const rng = prng.random();
+
+    var a = try test_gen.randomMixed(allocator, rng, 4, true);
+    defer a.deinit();
+    var b = try test_gen.randomMixed(allocator, rng, 4, false);
+    defer b.deinit();
+    var gen_c = try test_gen.randomMixed(allocator, rng, 4, true);
+    defer gen_c.deinit();
+
+    {
+        var result = try RoaringBitmap.orMany(allocator, &.{&a.bm});
+        defer result.deinit();
+        try expectRawrEqual("orMany:single", &result, &a.bm);
+        _ = try result.add(std.math.maxInt(u32));
+        if (a.bm.contains(std.math.maxInt(u32))) return error.NwayAliasedInput;
+    }
+
+    {
+        var result = try RoaringBitmap.xorMany(allocator, &.{&a.bm});
+        defer result.deinit();
+        try expectRawrEqual("xorMany:single", &result, &a.bm);
+        _ = try result.add(std.math.maxInt(u32));
+        if (a.bm.contains(std.math.maxInt(u32))) return error.NwayAliasedInput;
+    }
+
+    {
+        var many = try RoaringBitmap.orMany(allocator, &.{ &a.bm, &b.bm });
+        defer many.deinit();
+        var two_way = try a.bm.bitwiseOr(allocator, &b.bm);
+        defer two_way.deinit();
+        try expectRawrEqual("orMany:two-way-cross-check", &many, &two_way);
+    }
+
+    {
+        var many = try RoaringBitmap.xorMany(allocator, &.{ &a.bm, &b.bm });
+        defer many.deinit();
+        var two_way = try a.bm.bitwiseXor(allocator, &b.bm);
+        defer two_way.deinit();
+        try expectRawrEqual("xorMany:two-way-cross-check", &many, &two_way);
+    }
+
+    {
+        var many = try RoaringBitmap.orMany(allocator, &.{ &a.bm, &b.bm, &gen_c.bm });
+        defer many.deinit();
+        var ab = try a.bm.bitwiseOr(allocator, &b.bm);
+        defer ab.deinit();
+        var folded = try ab.bitwiseOr(allocator, &gen_c.bm);
+        defer folded.deinit();
+        try expectRawrEqual("orMany:three-way-cross-check", &many, &folded);
+    }
+
+    {
+        var owned = try RoaringBitmap.orManyOwned(allocator, &.{ &a.bm, &b.bm });
+        defer owned.deinit();
+        var expected = try a.bm.bitwiseOr(allocator, &b.bm);
+        defer expected.deinit();
+        try expectRawrEqual("orManyOwned:two-way", &owned.bitmap, &expected);
+    }
+
+    {
+        var owned = try RoaringBitmap.xorManyOwned(allocator, &.{ &a.bm, &b.bm });
+        defer owned.deinit();
+        var expected = try a.bm.bitwiseXor(allocator, &b.bm);
+        defer expected.deinit();
+        try expectRawrEqual("xorManyOwned:two-way", &owned.bitmap, &expected);
+    }
+}
+
+fn runNwayGeneratedOracleCases(allocator: Allocator) !void {
+    const ns = [_]usize{ 1, 2, 3, 8, 32 };
+
+    for (&[_]bool{ false, true }) |run_optimize| {
+        var prng = std.Random.DefaultPrng.init(if (run_optimize) 0x0B0A_0001 else 0x0B0A_0000);
+        const rng = prng.random();
+
+        for (ns) |n| {
+            var generated = try allocator.alloc(test_gen.Generated, n);
+            defer allocator.free(generated);
+            var generated_len: usize = 0;
+            defer {
+                for (generated[0..generated_len]) |*gen| gen.deinit();
+            }
+
+            var rawr_inputs = try allocator.alloc(*const RoaringBitmap, n);
+            defer allocator.free(rawr_inputs);
+            var oracle_inputs = try allocator.alloc(*c.roaring_bitmap_t, n);
+            defer allocator.free(oracle_inputs);
+            var oracle_len: usize = 0;
+            defer {
+                for (oracle_inputs[0..oracle_len]) |oracle| {
+                    c.roaring_bitmap_free(oracle);
+                }
+            }
+
+            for (0..n) |i| {
+                generated[i] = try test_gen.randomMixed(allocator, rng, 6, run_optimize);
+                generated_len += 1;
+                rawr_inputs[i] = &generated[i].bm;
+                oracle_inputs[i] = try buildOracle(generated[i].values, run_optimize);
+                oracle_len += 1;
+            }
+
+            try assertManyAgree(allocator, .bor, rawr_inputs, oracle_inputs, run_optimize, n);
+            try assertManyAgree(allocator, .xor, rawr_inputs, oracle_inputs, run_optimize, n);
+        }
+
+        try runNwayWithEmptyInputs(allocator, rng, run_optimize);
+    }
+}
+
+fn runNwayWithEmptyInputs(allocator: Allocator, rng: std.Random, run_optimize: bool) !void {
+    var empty = try RoaringBitmap.init(allocator);
+    defer empty.deinit();
+    const empty_values = [_]u32{};
+
+    var a = try test_gen.randomMixed(allocator, rng, 4, run_optimize);
+    defer a.deinit();
+    var b = try test_gen.randomMixed(allocator, rng, 4, run_optimize);
+    defer b.deinit();
+
+    const rawr_inputs = [_]*const RoaringBitmap{ &empty, &a.bm, &b.bm };
+
+    const oracle_empty = try buildOracle(&empty_values, run_optimize);
+    defer c.roaring_bitmap_free(oracle_empty);
+    const oracle_a = try buildOracle(a.values, run_optimize);
+    defer c.roaring_bitmap_free(oracle_a);
+    const oracle_b = try buildOracle(b.values, run_optimize);
+    defer c.roaring_bitmap_free(oracle_b);
+    const oracle_inputs = [_]*c.roaring_bitmap_t{ oracle_empty, oracle_a, oracle_b };
+
+    try assertManyAgree(allocator, .bor, &rawr_inputs, &oracle_inputs, run_optimize, rawr_inputs.len);
+    try assertManyAgree(allocator, .xor, &rawr_inputs, &oracle_inputs, run_optimize, rawr_inputs.len);
+}
+
+fn runNwayHeterogeneousSameKeyCase(allocator: Allocator) !void {
+    var prng = std.Random.DefaultPrng.init(0x0A_B17E_57);
+    const rng = prng.random();
+    const key: u16 = 123;
+
+    var array_gen = try test_gen.build(allocator, rng, &.{.{ .key = key, .profile = .sparse }}, false);
+    defer array_gen.deinit();
+    var bitset_gen = try test_gen.build(allocator, rng, &.{.{ .key = key, .profile = .dense }}, false);
+    defer bitset_gen.deinit();
+    var run_gen = try test_gen.build(allocator, rng, &.{.{ .key = key, .profile = .runs }}, true);
+    defer run_gen.deinit();
+
+    const rawr_inputs = [_]*const RoaringBitmap{ &array_gen.bm, &bitset_gen.bm, &run_gen.bm };
+
+    const oracle_array = try buildOracle(array_gen.values, false);
+    defer c.roaring_bitmap_free(oracle_array);
+    const oracle_bitset = try buildOracle(bitset_gen.values, false);
+    defer c.roaring_bitmap_free(oracle_bitset);
+    const oracle_run = try buildOracle(run_gen.values, true);
+    defer c.roaring_bitmap_free(oracle_run);
+    const oracle_inputs = [_]*c.roaring_bitmap_t{ oracle_array, oracle_bitset, oracle_run };
+
+    try assertManyAgree(allocator, .bor, &rawr_inputs, &oracle_inputs, true, rawr_inputs.len);
+    try assertManyAgree(allocator, .xor, &rawr_inputs, &oracle_inputs, true, rawr_inputs.len);
 }
 
 fn runTransitionCases(allocator: Allocator) !void {
@@ -1177,6 +1366,50 @@ fn buildOracle(values: []const u32, run_optimize: bool) !*c.roaring_bitmap_t {
     }
 
     return oracle;
+}
+
+fn buildManyOracle(op: ManyOp, inputs: []const *c.roaring_bitmap_t) !*c.roaring_bitmap_t {
+    std.debug.assert(inputs.len > 0);
+    return switch (op) {
+        .bor => c.roaring_bitmap_or_many(inputs.len, @ptrCast(@constCast(inputs.ptr))) orelse error.CRoaringAllocFailed,
+        .xor => c.roaring_bitmap_xor_many(inputs.len, @ptrCast(@constCast(inputs.ptr))) orelse error.CRoaringAllocFailed,
+    };
+}
+
+fn assertManyAgree(
+    allocator: Allocator,
+    op: ManyOp,
+    rawr_inputs: []const *const RoaringBitmap,
+    oracle_inputs: []const *c.roaring_bitmap_t,
+    run_optimize: bool,
+    n: usize,
+) !void {
+    var rawr_result = switch (op) {
+        .bor => try RoaringBitmap.orMany(allocator, rawr_inputs),
+        .xor => try RoaringBitmap.xorMany(allocator, rawr_inputs),
+    };
+    defer rawr_result.deinit();
+
+    const oracle_result = try buildManyOracle(op, oracle_inputs);
+    defer c.roaring_bitmap_free(oracle_result);
+
+    var name_buf: [96]u8 = undefined;
+    const name = try std.fmt.bufPrint(&name_buf, "{s}:n={d}:runopt={}", .{ op.name(), n, run_optimize });
+    try assertSameValues(allocator, name, &rawr_result, oracle_result);
+}
+
+fn expectRawrEqual(name: []const u8, a: *const RoaringBitmap, b: *const RoaringBitmap) !void {
+    if (!a.equals(b)) {
+        std.debug.print("FAIL: {s} - rawr bitmaps differ\n", .{name});
+        return error.RawrMismatch;
+    }
+}
+
+fn expectRawrEmpty(name: []const u8, bm: *const RoaringBitmap) !void {
+    if (!bm.isEmpty()) {
+        std.debug.print("FAIL: {s} - expected empty bitmap\n", .{name});
+        return error.RawrMismatch;
+    }
 }
 
 fn assertAgree(

@@ -9,6 +9,7 @@ const WARMUP_RUNS = 3;
 const BENCH_RUNS = 21;
 const N_VALUES = 1_000_000;
 const N_RANK_MANY_PROBES = 200_000;
+const N_MANY_BITMAPS = 32;
 
 const BenchResult = struct {
     median_ns: u64,
@@ -169,6 +170,8 @@ fn benchRawrContainsMiss() void {
 
 var rawr_sparse_a: ?RoaringBitmap = null;
 var rawr_sparse_b: ?RoaringBitmap = null;
+var rawr_many_bms: [N_MANY_BITMAPS]?RoaringBitmap = [_]?RoaringBitmap{null} ** N_MANY_BITMAPS;
+var rawr_many_inputs: [N_MANY_BITMAPS]*const RoaringBitmap = undefined;
 
 fn initRawrSparseBitmaps() void {
     if (rawr_sparse_a != null) return;
@@ -186,6 +189,50 @@ fn initRawrSparseBitmaps() void {
 
     rawr_sparse_a = a;
     rawr_sparse_b = b;
+}
+
+fn initRawrManyBitmaps() void {
+    if (rawr_many_bms[0] != null) return;
+
+    for (0..N_MANY_BITMAPS) |i| {
+        var bm = RoaringBitmap.init(allocator) catch unreachable;
+        addManyPatternRawr(&bm, i) catch unreachable;
+        if (i % 3 == 0) {
+            _ = bm.runOptimize() catch unreachable;
+        }
+        rawr_many_bms[i] = bm;
+        rawr_many_inputs[i] = &rawr_many_bms[i].?;
+    }
+}
+
+fn addManyPatternRawr(bm: *RoaringBitmap, bitmap_idx: usize) !void {
+    for (0..6) |chunk| {
+        const base: u32 = @as(u32, @intCast(chunk)) << 16;
+        switch ((bitmap_idx + chunk) % 4) {
+            0 => {
+                for (0..128) |j| {
+                    const low: u32 = @intCast((j * 521 + bitmap_idx * 17) & 0xffff);
+                    _ = try bm.add(base | low);
+                }
+            },
+            1 => {
+                for (0..5000) |j| {
+                    const low: u32 = @intCast((j * 13 + bitmap_idx * 29) & 0xffff);
+                    _ = try bm.add(base | low);
+                }
+            },
+            2 => {
+                const start: u32 = @intCast((bitmap_idx * 97) % 20_000);
+                _ = try bm.addRange(base | start, base | (start + 12_000));
+            },
+            else => {
+                _ = try bm.add(base);
+                _ = try bm.add(base | 1);
+                _ = try bm.add(base | 65_534);
+                _ = try bm.add(base | 65_535);
+            },
+        }
+    }
 }
 
 fn benchRawrAndSparse() void {
@@ -220,6 +267,18 @@ fn benchRawrOrSparseArena() void {
     const a = &rawr_sparse_a.?;
     const b = &rawr_sparse_b.?;
     var result = a.bitwiseOr(arena.allocator(), b) catch unreachable;
+    std.mem.doNotOptimizeAway(&result);
+}
+
+fn benchRawrOrMany() void {
+    var result = RoaringBitmap.orMany(allocator, &rawr_many_inputs) catch unreachable;
+    defer result.deinit();
+    std.mem.doNotOptimizeAway(&result);
+}
+
+fn benchRawrXorMany() void {
+    var result = RoaringBitmap.xorMany(allocator, &rawr_many_inputs) catch unreachable;
+    defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
@@ -426,6 +485,8 @@ fn benchCRoaringContainsMiss() void {
 
 var cr_sparse_a: ?*c.roaring_bitmap_t = null;
 var cr_sparse_b: ?*c.roaring_bitmap_t = null;
+var cr_many_bms: [N_MANY_BITMAPS]?*c.roaring_bitmap_t = [_]?*c.roaring_bitmap_t{null} ** N_MANY_BITMAPS;
+var cr_many_inputs: [N_MANY_BITMAPS]*c.roaring_bitmap_t = undefined;
 
 fn initCRoaringSparseBitmaps() void {
     if (cr_sparse_a != null) return;
@@ -445,6 +506,50 @@ fn initCRoaringSparseBitmaps() void {
     cr_sparse_b = b_bm;
 }
 
+fn initCRoaringManyBitmaps() void {
+    if (cr_many_bms[0] != null) return;
+
+    for (0..N_MANY_BITMAPS) |i| {
+        const bm = c.roaring_bitmap_create() orelse unreachable;
+        addManyPatternCRoaring(bm, i);
+        if (i % 3 == 0) {
+            _ = c.roaring_bitmap_run_optimize(bm);
+        }
+        cr_many_bms[i] = bm;
+        cr_many_inputs[i] = bm;
+    }
+}
+
+fn addManyPatternCRoaring(bm: *c.roaring_bitmap_t, bitmap_idx: usize) void {
+    for (0..6) |chunk| {
+        const base: u32 = @as(u32, @intCast(chunk)) << 16;
+        switch ((bitmap_idx + chunk) % 4) {
+            0 => {
+                for (0..128) |j| {
+                    const low: u32 = @intCast((j * 521 + bitmap_idx * 17) & 0xffff);
+                    c.roaring_bitmap_add(bm, base | low);
+                }
+            },
+            1 => {
+                for (0..5000) |j| {
+                    const low: u32 = @intCast((j * 13 + bitmap_idx * 29) & 0xffff);
+                    c.roaring_bitmap_add(bm, base | low);
+                }
+            },
+            2 => {
+                const start: u32 = @intCast((bitmap_idx * 97) % 20_000);
+                c.roaring_bitmap_add_range(bm, base | start, (base | (start + 12_000)) + 1);
+            },
+            else => {
+                c.roaring_bitmap_add(bm, base);
+                c.roaring_bitmap_add(bm, base | 1);
+                c.roaring_bitmap_add(bm, base | 65_534);
+                c.roaring_bitmap_add(bm, base | 65_535);
+            },
+        }
+    }
+}
+
 fn benchCRoaringAndSparse() void {
     const a = cr_sparse_a.?;
     const b_bm = cr_sparse_b.?;
@@ -457,6 +562,18 @@ fn benchCRoaringOrSparse() void {
     const a = cr_sparse_a.?;
     const b_bm = cr_sparse_b.?;
     const result = c.roaring_bitmap_or(a, b_bm) orelse unreachable;
+    defer c.roaring_bitmap_free(result);
+    std.mem.doNotOptimizeAway(result);
+}
+
+fn benchCRoaringOrMany() void {
+    const result = c.roaring_bitmap_or_many(N_MANY_BITMAPS, @ptrCast(&cr_many_inputs)) orelse unreachable;
+    defer c.roaring_bitmap_free(result);
+    std.mem.doNotOptimizeAway(result);
+}
+
+fn benchCRoaringXorMany() void {
+    const result = c.roaring_bitmap_xor_many(N_MANY_BITMAPS, @ptrCast(&cr_many_inputs)) orelse unreachable;
     defer c.roaring_bitmap_free(result);
     std.mem.doNotOptimizeAway(result);
 }
@@ -670,6 +787,8 @@ pub fn main(init: std.process.Init) !void {
     initCRoaringSparseBitmaps();
     initRawrDenseBitmaps();
     initCRoaringDenseBitmaps();
+    initRawrManyBitmaps();
+    initCRoaringManyBitmaps();
 
     r = benchmark(init.io, benchRawrAndSparse, .{});
     cr = benchmark(init.io, benchCRoaringAndSparse, .{});
@@ -692,6 +811,14 @@ pub fn main(init: std.process.Init) !void {
     r = benchmark(init.io, benchRawrOrDense, .{});
     cr = benchmark(init.io, benchCRoaringOrDense, .{});
     printResult("bitwiseOr (dense)", r.median_ns, cr.median_ns);
+
+    r = benchmark(init.io, benchRawrOrMany, .{});
+    cr = benchmark(init.io, benchCRoaringOrMany, .{});
+    printResult("orMany (32 mixed)", r.median_ns, cr.median_ns);
+
+    r = benchmark(init.io, benchRawrXorMany, .{});
+    cr = benchmark(init.io, benchCRoaringXorMany, .{});
+    printResult("xorMany (32 mixed)", r.median_ns, cr.median_ns);
 
     // --- Iteration ---
     std.debug.print("\nITERATION\n", .{});
@@ -762,6 +889,9 @@ pub fn main(init: std.process.Init) !void {
     if (rawr_dense_a) |*bm| bm.deinit();
     if (rawr_dense_b) |*bm| bm.deinit();
     if (rawr_bitset_range_bm) |*bm| bm.deinit();
+    for (&rawr_many_bms) |*maybe_bm| {
+        if (maybe_bm.*) |*bm| bm.deinit();
+    }
     if (rawr_serialized) |s| allocator.free(s);
 
     if (cr_contains_bm) |bm| c.roaring_bitmap_free(bm);
@@ -770,6 +900,9 @@ pub fn main(init: std.process.Init) !void {
     if (cr_dense_a) |bm| c.roaring_bitmap_free(bm);
     if (cr_dense_b) |bm| c.roaring_bitmap_free(bm);
     if (cr_bitset_range_bm) |bm| c.roaring_bitmap_free(bm);
+    for (cr_many_bms) |maybe_bm| {
+        if (maybe_bm) |bm| c.roaring_bitmap_free(bm);
+    }
     if (cr_serialized) |s| allocator.free(s);
 
     std.debug.print("\nDone.\n", .{});
