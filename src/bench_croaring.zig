@@ -68,6 +68,8 @@ var rank_many_probes: [N_RANK_MANY_PROBES]u32 = undefined;
 var rank_many_out: [N_RANK_MANY_PROBES]u64 = undefined;
 var range_query_lo: [N_VALUES]u32 = undefined;
 var range_query_hi: [N_VALUES]u32 = undefined;
+var range_large_query_lo: [N_VALUES]u32 = undefined;
+var range_large_query_hi: [N_VALUES]u32 = undefined;
 
 fn initTestData() void {
     var prng = std.Random.DefaultPrng.init(12345);
@@ -80,6 +82,11 @@ fn initTestData() void {
         const range_start = prng.random().uintLessThan(u32, 50_000);
         range_query_lo[i] = range_start;
         range_query_hi[i] = range_start + prng.random().uintLessThan(u32, 1024);
+
+        const large_start = prng.random().uintLessThan(u32, 20_000);
+        const large_len = 30_000 + prng.random().uintLessThan(u32, 20_000);
+        range_large_query_lo[i] = large_start;
+        range_large_query_hi[i] = @min(59_999, large_start + large_len);
     }
 
     for (0..N_RANK_MANY_PROBES) |i| {
@@ -337,11 +344,24 @@ fn benchRawrFlipWideDense() void {
     std.mem.doNotOptimizeAway(&result);
 }
 
+noinline fn rawrRangeCardinality(bm: *const RoaringBitmap, lo: u32, hi: u32) u64 {
+    return bm.rangeCardinality(lo, hi);
+}
+
 fn benchRawrRangeCardinalityBitset() void {
     const bm = &rawr_bitset_range_bm.?;
     var total: u64 = 0;
     for (range_query_lo, range_query_hi) |lo, hi| {
-        total +%= bm.rangeCardinality(lo, hi);
+        total +%= rawrRangeCardinality(bm, lo, hi);
+    }
+    std.mem.doNotOptimizeAway(total);
+}
+
+fn benchRawrRangeCardinalityBitsetLarge() void {
+    const bm = &rawr_bitset_range_bm.?;
+    var total: u64 = 0;
+    for (range_large_query_lo, range_large_query_hi) |lo, hi| {
+        total +%= rawrRangeCardinality(bm, lo, hi);
     }
     std.mem.doNotOptimizeAway(total);
 }
@@ -579,6 +599,15 @@ fn benchCRoaringRangeCardinalityBitset() void {
     std.mem.doNotOptimizeAway(total);
 }
 
+fn benchCRoaringRangeCardinalityBitsetLarge() void {
+    const bm = cr_bitset_range_bm.?;
+    var total: u64 = 0;
+    for (range_large_query_lo, range_large_query_hi) |lo, hi| {
+        total +%= c.roaring_bitmap_range_cardinality_closed(bm, lo, hi);
+    }
+    std.mem.doNotOptimizeAway(total);
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -716,7 +745,11 @@ pub fn main(init: std.process.Init) !void {
 
     r = benchmark(init.io, benchRawrRangeCardinalityBitset, .{});
     cr = benchmark(init.io, benchCRoaringRangeCardinalityBitset, .{});
-    printResult("rangeCardinality (bitset)", r.median_ns, cr.median_ns);
+    printResult("rangeCardinality small (bitset)", r.median_ns, cr.median_ns);
+
+    r = benchmark(init.io, benchRawrRangeCardinalityBitsetLarge, .{});
+    cr = benchmark(init.io, benchCRoaringRangeCardinalityBitsetLarge, .{});
+    printResult("rangeCardinality large (bitset)", r.median_ns, cr.median_ns);
 
     r = benchmark(init.io, benchRawrFlipWideDense, .{});
     cr = benchmark(init.io, benchCRoaringFlipWideDense, .{});
