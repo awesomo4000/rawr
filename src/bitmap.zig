@@ -1270,15 +1270,19 @@ pub const RoaringBitmap = struct {
                 // Matching key - compute difference
                 const self_container = Container.fromTagged(self.containers[i]);
                 const other_container = Container.fromTagged(other.containers[j]);
-                const diff = try ops.containerDifference(self.allocator, self_container, other_container);
-                self_container.deinit(self.allocator);
+                const diff = try ops.containerDifferenceInPlace(self.allocator, self_container, other_container);
+                const diff_tp = diff.toTagged();
+                const is_same = (@as(u64, @bitCast(diff_tp)) == @as(u64, @bitCast(self.containers[i])));
 
                 if (diff.getCardinality() > 0) {
                     self.keys[write_idx] = key_a;
-                    self.containers[write_idx] = diff.toTagged();
+                    self.containers[write_idx] = diff_tp;
                     write_idx += 1;
                 } else {
                     diff.deinit(self.allocator);
+                }
+                if (!is_same) {
+                    self_container.deinit(self.allocator);
                 }
                 j += 1;
             }
@@ -1339,19 +1343,21 @@ pub const RoaringBitmap = struct {
                 // Key in both - XOR containers
                 const old_container = Container.fromTagged(self.containers[i]);
                 const other_container = Container.fromTagged(other.containers[j]);
-                const result = try ops.containerXor(self.allocator, old_container, other_container);
-
-                // Free old container
-                old_container.deinit(self.allocator);
+                const result = try ops.containerXorInPlace(self.allocator, old_container, other_container);
+                const result_tp = result.toTagged();
+                const is_same = (@as(u64, @bitCast(result_tp)) == @as(u64, @bitCast(self.containers[i])));
 
                 // Only keep non-empty results
                 if (result.getCardinality() > 0) {
                     new_keys[k] = key_a;
-                    new_containers[k] = result.toTagged();
-                    owned[k] = true;
+                    new_containers[k] = result_tp;
+                    owned[k] = !is_same;
                     k += 1;
                 } else {
                     result.deinit(self.allocator);
+                }
+                if (!is_same) {
+                    old_container.deinit(self.allocator);
                 }
                 i += 1;
                 j += 1;

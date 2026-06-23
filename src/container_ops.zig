@@ -375,6 +375,82 @@ fn bitsetUnionRunInPlace(bc: *BitsetContainer, rc: *RunContainer) Container {
     return .{ .bitset = bc };
 }
 
+pub fn containerDifferenceInPlace(allocator: std.mem.Allocator, a: Container, b: Container) !Container {
+    return switch (a) {
+        .array => containerDifference(allocator, a, b),
+        .bitset => |bc| switch (b) {
+            .array => |ac| bitsetDifferenceArrayInPlace(allocator, bc, ac),
+            .bitset => |other_bc| bitsetDifferenceBitsetInPlace(allocator, bc, other_bc),
+            .run => |rc| bitsetDifferenceRunInPlace(allocator, bc, rc),
+            .reserved => unreachable,
+        },
+        .run => containerDifference(allocator, a, b),
+        .reserved => unreachable,
+    };
+}
+
+fn bitsetDifferenceArrayInPlace(allocator: std.mem.Allocator, bc: *BitsetContainer, ac: *ArrayContainer) !Container {
+    for (ac.values[0..ac.cardinality]) |value| {
+        _ = bc.remove(value);
+    }
+    return demoteBitsetIfSmall(allocator, bc);
+}
+
+fn bitsetDifferenceBitsetInPlace(allocator: std.mem.Allocator, a: *BitsetContainer, b: *BitsetContainer) !Container {
+    a.differenceWith(b);
+    return demoteBitsetIfSmall(allocator, a);
+}
+
+fn bitsetDifferenceRunInPlace(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *RunContainer) !Container {
+    for (rc.runs[0..rc.n_runs]) |run| {
+        bc.clearRange(run.start, run.end());
+    }
+    _ = bc.computeCardinality();
+    return demoteBitsetIfSmall(allocator, bc);
+}
+
+pub fn containerXorInPlace(allocator: std.mem.Allocator, a: Container, b: Container) !Container {
+    return switch (a) {
+        .array => containerXor(allocator, a, b),
+        .bitset => |bc| switch (b) {
+            .array => |ac| bitsetXorArrayInPlace(allocator, bc, ac),
+            .bitset => |other_bc| bitsetXorBitsetInPlace(allocator, bc, other_bc),
+            .run => |rc| bitsetXorRunInPlace(allocator, bc, rc),
+            .reserved => unreachable,
+        },
+        .run => containerXor(allocator, a, b),
+        .reserved => unreachable,
+    };
+}
+
+fn bitsetXorArrayInPlace(allocator: std.mem.Allocator, bc: *BitsetContainer, ac: *ArrayContainer) !Container {
+    for (ac.values[0..ac.cardinality]) |value| {
+        bc.lazyToggle(value);
+    }
+    _ = bc.computeCardinality();
+    return demoteBitsetIfSmall(allocator, bc);
+}
+
+fn bitsetXorBitsetInPlace(allocator: std.mem.Allocator, a: *BitsetContainer, b: *BitsetContainer) !Container {
+    a.symmetricDifferenceWith(b);
+    return demoteBitsetIfSmall(allocator, a);
+}
+
+fn bitsetXorRunInPlace(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *RunContainer) !Container {
+    for (rc.runs[0..rc.n_runs]) |run| {
+        bc.toggleRange(run.start, run.end());
+    }
+    _ = bc.computeCardinality();
+    return demoteBitsetIfSmall(allocator, bc);
+}
+
+fn demoteBitsetIfSmall(allocator: std.mem.Allocator, bc: *BitsetContainer) !Container {
+    if (bc.getCardinality() <= ArrayContainer.MAX_CARDINALITY) {
+        return .{ .array = try bitsetToArray(allocator, bc) };
+    }
+    return .{ .bitset = bc };
+}
+
 pub fn containerUnion(allocator: std.mem.Allocator, a: Container, b: Container) !Container {
     return switch (a) {
         .array => |ac| switch (b) {
@@ -1105,19 +1181,44 @@ fn runDifferenceBitset(allocator: std.mem.Allocator, rc: *RunContainer, bc: *Bit
 }
 
 fn runDifferenceRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
-    const result = try BitsetContainer.init(allocator);
+    const result = try RunContainer.init(allocator, @intCast(@min(@as(usize, a.n_runs) + b.n_runs, 65535)));
     errdefer result.deinit(allocator);
 
+    var j: usize = 0;
     for (a.runs[0..a.n_runs]) |run| {
-        result.setRange(run.start, run.end());
-    }
-    for (b.runs[0..b.n_runs]) |run| {
-        result.clearRange(run.start, run.end());
+        const run_end: u32 = run.end();
+        var keep_start: u32 = run.start;
+
+        while (j < b.n_runs and @as(u32, b.runs[j].end()) < keep_start) : (j += 1) {}
+
+        var scan = j;
+        while (scan < b.n_runs and @as(u32, b.runs[scan].start) <= run_end) : (scan += 1) {
+            const blocker = b.runs[scan];
+            const blocker_start: u32 = blocker.start;
+            const blocker_end: u32 = blocker.end();
+
+            if (blocker_start > keep_start) {
+                _ = try result.addRange(allocator, @intCast(keep_start), @intCast(@min(blocker_start - 1, run_end)));
+            }
+            if (blocker_end >= run_end) {
+                keep_start = run_end + 1;
+                break;
+            }
+            keep_start = blocker_end + 1;
+        }
+
+        if (keep_start <= run_end) {
+            _ = try result.addRange(allocator, @intCast(keep_start), run.end());
+        }
     }
 
-    const card = result.computeCardinality();
-    _ = card;
-    return bitsetToArrayOrRun(allocator, result);
+    if (result.n_runs == 0) {
+        const empty = try ArrayContainer.init(allocator, 0);
+        result.deinit(allocator);
+        return .{ .array = empty };
+    }
+    result.cardinality = -1;
+    return .{ .run = result };
 }
 
 // ============================================================================
@@ -1286,20 +1387,50 @@ fn bitsetXorRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *RunCont
 }
 
 fn runXorRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
-    const result = try BitsetContainer.init(allocator);
+    const max_runs = @min(2 * (@as(usize, a.n_runs) + @as(usize, b.n_runs)), 65535);
+    const result = try RunContainer.init(allocator, @intCast(max_runs));
     errdefer result.deinit(allocator);
 
-    for (a.runs[0..a.n_runs]) |run| {
-        result.setRange(run.start, run.end());
+    var a_boundary: usize = 0;
+    var b_boundary: usize = 0;
+    var in_a = false;
+    var in_b = false;
+    var prev: u32 = 0;
+
+    while (a_boundary < @as(usize, a.n_runs) * 2 or b_boundary < @as(usize, b.n_runs) * 2) {
+        const next_a = nextRunBoundary(a, a_boundary);
+        const next_b = nextRunBoundary(b, b_boundary);
+        const boundary = @min(next_a, next_b);
+
+        if (boundary > prev and (in_a != in_b) and prev <= 65535) {
+            _ = try result.addRange(allocator, @intCast(prev), @intCast(@min(boundary - 1, 65535)));
+        }
+
+        while (a_boundary < @as(usize, a.n_runs) * 2 and nextRunBoundary(a, a_boundary) == boundary) : (a_boundary += 1) {
+            in_a = !in_a;
+        }
+        while (b_boundary < @as(usize, b.n_runs) * 2 and nextRunBoundary(b, b_boundary) == boundary) : (b_boundary += 1) {
+            in_b = !in_b;
+        }
+        prev = boundary;
     }
 
-    for (b.runs[0..b.n_runs]) |run| {
-        result.toggleRange(run.start, run.end());
+    if (result.n_runs == 0) {
+        const empty = try ArrayContainer.init(allocator, 0);
+        result.deinit(allocator);
+        return .{ .array = empty };
     }
+    result.cardinality = -1;
+    return .{ .run = result };
+}
 
-    const card = result.computeCardinality();
-    _ = card;
-    return bitsetToArrayOrRun(allocator, result);
+fn nextRunBoundary(rc: *RunContainer, boundary_idx: usize) u32 {
+    if (boundary_idx >= @as(usize, rc.n_runs) * 2) return std.math.maxInt(u32);
+    const run = rc.runs[boundary_idx / 2];
+    if (boundary_idx % 2 == 0) {
+        return run.start;
+    }
+    return @as(u32, run.end()) + 1;
 }
 
 // ============================================================================
