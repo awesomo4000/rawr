@@ -132,18 +132,18 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
 
 ### Known follow-ups (post-umbrella, optional)
 
-- **bitset×run ops** ([`07-09`](07-09-bitset-run-wordwise.md), *done*) — word-wise
-  rewrite landed: `flip wide range` 1.54 ms→0.13 ms, `removeRange wide` 0.08 ms.
-  Residual ~10–26× absolute (130 µs vs CRoaring's ~10 µs; the displayed 396× is a
-  timer-floor artifact) is structural: flip = clone + mask + XOR copies each
-  container twice vs CRoaring's single direct-negation pass. `07-03` Task 1b
-  (direct per-container negation) would close it but is diminishing returns on a
-  sub-ms op — **left as-is unless flip proves hot.**
+- **flip / removeRange wide-range perf** — *closed.*
+  [`07-09`](07-09-bitset-run-wordwise.md) made bitset×run ops word-wise
+  (1.54 ms→0.13 ms); [`07-10`](07-10-inplace-xor-difference.md) made XOR/difference
+  in-place (eliminating the redundant per-container copy), landing both at
+  ~CRoaring (0.00 ms, timer floor). `07-03` Task 1b fully obsoleted.
 - **Tier-3 conveniences** — `clear` (most likely wanted), `add_offset`
   (domain-specific), then the rest as needed.
 - **`08-fuzzing`** (parked in `todo/`) — the next major effort.
-- Minor: `rankMany` 1.55×, `lazyOr+repair` 2-way sparse 1.28× (lazy outside its
-  sweet spot) — low priority.
+- Minor / low-priority: `rankMany` ~1.5× (batched rank vs CRoaring `rank_many` —
+  the last genuine non-timer-floor gap), `lazyOr+repair` 2-way sparse ~1.2× (lazy
+  outside its sweet spot), `add (sequential)` ~1.2× (per-value `findKey`; `addMany`
+  is the bulk path).
 
 Each impl spec follows the established discipline: extend `croaring_wrapper.h`
 with the oracle decl, implement, add a differential check (scalar-compare or
