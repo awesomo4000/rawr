@@ -55,31 +55,61 @@ the **k-way merge** instead — build each output container exactly once:
   linear scan over the N heads is fine (a binary heap is the `or_many_heap`
   optimization — defer to `07-06`); note the O(N·distinct_keys) cost in a comment.
 - For that key, **union all same-key containers** from the inputs that have it
-  into one result container (fold `containerUnion` / `containerUnionInPlace` over
-  them), append it to the result, and advance those cursors.
+  into one result container (fold over them — see the mutating-vs-not decision
+  below), append it to the result, and advance those cursors.
 
 This reuses the existing container union ops; the new code is the k-way key
 merge. The per-key fold is exactly where `07-06`'s lazy path will later avoid
 intermediate normalization — keep the per-key union isolated in a small helper so
 lazy can swap it.
 
+**Use the non-mutating `containerUnion`, not `containerUnionInPlace`.** This is a
+firm decision, not a choice:
+- `containerUnionInPlace` has an inconsistent contract — some branches mutate `a`
+  and return the same pointer, others **allocate a new container and leave the
+  old `a` for the caller to free** (e.g. `arrayUnionBitsetInPlace`,
+  `arrayUnionArrayInPlace` on overflow, and the `run` branches which aren't
+  actually in-place). Threading "free `a` iff the returned pointer ≠ `a`" through
+  the fold is leak/double-free prone.
+- The inputs are `*const`. The genuinely-in-place branches would **corrupt an
+  input** if an input container were ever passed as the mutated `a`.
+- `containerUnion` always returns a **fresh** container and never touches its
+  args, giving uniform ownership.
+
+Per-key fold with the non-mutating op:
+
+```
+acc = clone(first same-key container)   // owned accumulator
+for each subsequent same-key input b (const):
+    const next = try containerUnion(acc, b)   // always fresh
+    acc.deinit(allocator)                     // free previous accumulator
+    acc = next
+append acc
+```
+
+The per-step alloc+free is exactly what `07-06`'s lazy path removes (accumulate
+into the widest form, normalize once) — leaving the in-place optimization to lazy
+keeps this chunk simple and the seam clean.
+
 **Ownership discipline (in the per-key helper):**
 - A key present in **only one** input → the result must **clone** that container,
   never append/alias the input's container (inputs are `*const` and the result
   owns its containers).
-- A multi-input fold allocates an accumulator + intermediates → free them on
-  **every error path** (`errdefer`), and free the loser of each pairwise step so a
-  mid-fold failure doesn't leak.
+- The multi-input fold owns `acc` and each `next`; free the previous `acc` each
+  step (above) and `errdefer acc.deinit(allocator)` so a mid-fold failure doesn't
+  leak.
 
 ## Task 2 — `xorMany`
 
 Same k-way merge skeleton, but **xor-accumulate** the same-key containers: a key
 present in only one input contributes that container (cloned — same ownership
 rule as Task 1, never alias the input); a key in several inputs folds
-`containerXor` across them (associative/commutative, so order within a key
-doesn't matter). Drop a container that folds to empty (cardinality 0) — same
-ghost-container discipline as `bitwiseXor`. Free intermediates on every error
-path.
+`containerXor` across them with the same clone-accumulator / free-previous pattern
+as Task 1 (associative/commutative, so order within a key doesn't matter).
+`containerXor` is already non-mutating (there is no `containerXorInPlace` at the
+container level), so this matches Task 1's model directly. Drop a container that
+folds to empty (cardinality 0) — same ghost-container discipline as `bitwiseXor`.
+Free intermediates on every error path.
 
 ## Task 3 — Differential checks (`diff_test.zig`)
 
@@ -130,9 +160,11 @@ record it as the baseline the lazy work will improve. (Keep both benches so
 1. `orMany` / `xorMany` (+ receiverless `*Owned`) exist with the signatures and
    edge-case behavior above; inputs never mutated; single-element result is an
    independent clone.
-2. Implemented as a k-way merge (each output container built once), with the
-   per-key union isolated in a helper for `07-06` to swap; single-input keys
-   cloned (never aliased), intermediates freed on error paths.
+2. Implemented as a k-way merge (each output container built once) using the
+   **non-mutating** `containerUnion`/`containerXor` over a cloned accumulator (not
+   `containerUnionInPlace`), with the per-key union isolated in a helper for
+   `07-06` to swap; single-input keys cloned (never aliased), the previous
+   accumulator freed each fold step, intermediates freed on error paths.
 3. Match CRoaring `or_many` / `xor_many` by `assertSameValues` across varied
    `N >= 1`, profiles, and both run-optimized states — including the **hand-built
    array/bitset/run same-key** case — plus the pure-rawr 2-way cross-checks; empty
