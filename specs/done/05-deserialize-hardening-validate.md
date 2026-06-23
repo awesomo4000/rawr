@@ -122,7 +122,7 @@ Checks (mirroring CRoaring `internal_validate`, scoped to rawr's representation)
   Match the rest of the codebase and treat it as `unreachable` in the switch — do
   **not** add a `ValidateError` variant for it.
 
-**Run cardinality — firm decision (resolves Morty's points 2 & 3):** `validate`
+**Run cardinality — firm decision:** `validate`
 stays strictly non-mutating (`self: *const Self`). It reads the **field**
 `rc.cardinality` directly (not `getCardinality()`, which may recompute/mutate) and
 compares it to the freshly recomputed `sum(length + 1)`. This is observable only

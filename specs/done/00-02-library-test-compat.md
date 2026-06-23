@@ -5,7 +5,7 @@
 Fix any remaining pure Zig library or unit-test compilation failures after the
 serialization API migration, while keeping exported library behavior stable.
 
-Benoit's chunking note: keep this separate from `00-01` because serialization is
+Chunking note: keep this separate from `00-01` because serialization is
 the known first blocker, and this chunk captures unknown fallout without
 expanding the first change.
 
