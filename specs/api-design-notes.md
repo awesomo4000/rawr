@@ -4,7 +4,7 @@ Scratchpad of topics for the upcoming ergonomics/clarity pass: making rawr's API
 easy to use, clear, and hard to misuse. Not a spec — a place to accumulate ideas
 as they surface, to be shaped into actual spec(s) when the pass starts. Feature
 parity and performance work are complete (see
-[`07-parity-inventory.md`](07-parity-inventory.md)).
+[`07-parity-inventory.md`](done/07-parity-inventory.md)).
 
 ## Topics surfaced so far
 
