@@ -1198,6 +1198,16 @@ pub const RoaringBitmap = struct {
         return manyMerge(.xor, allocator, bitmaps);
     }
 
+    /// Lazy union. Result must be repaired with `repairAfterLazy` before normal use.
+    pub fn lazyOr(self: *const Self, allocator: std.mem.Allocator, other: *const Self, bitset_conversion: bool) !Self {
+        return lazyMergeTwo(.bor, allocator, self, other, bitset_conversion);
+    }
+
+    /// Lazy symmetric difference. Result must be repaired with `repairAfterLazy` before normal use.
+    pub fn lazyXor(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
+        return lazyMergeTwo(.xor, allocator, self, other, true);
+    }
+
     /// Return a new bitmap with values in [lo, hi] complemented.
     pub fn flip(self: *const Self, allocator: std.mem.Allocator, lo: u32, hi: u32) !Self {
         var result = try self.clone(allocator);
@@ -1539,6 +1549,24 @@ pub const RoaringBitmap = struct {
         self.size = @intCast(k);
     }
 
+    /// In-place lazy union. Call `repairAfterLazy` before normal use.
+    pub fn lazyOrInPlace(self: *Self, other: *const Self, bitset_conversion: bool) !void {
+        var result = try self.lazyOr(self.allocator, other, bitset_conversion);
+        errdefer result.deinit();
+        var old = self.*;
+        self.* = result;
+        old.deinit();
+    }
+
+    /// In-place lazy symmetric difference. Call `repairAfterLazy` before normal use.
+    pub fn lazyXorInPlace(self: *Self, other: *const Self) !void {
+        var result = try self.lazyXor(self.allocator, other);
+        errdefer result.deinit();
+        var old = self.*;
+        self.* = result;
+        old.deinit();
+    }
+
     /// Complement values in [lo, hi] in place.
     pub fn flipInplace(self: *Self, lo: u32, hi: u32) !void {
         if (lo > hi) return;
@@ -1559,6 +1587,61 @@ pub const RoaringBitmap = struct {
         // Invalidate cache for safety (though cardinality doesn't actually change)
         self.cached_cardinality = -1;
         return opt.runOptimize(self);
+    }
+
+    /// Restore invariants after lazy operations.
+    pub fn repairAfterLazy(self: *Self) !void {
+        var write_idx: usize = 0;
+        var total: u64 = 0;
+
+        for (self.keys[0..self.size], self.containers[0..self.size]) |key, tp| {
+            const container = Container.fromTagged(tp);
+            switch (container) {
+                .array => |ac| {
+                    if (ac.cardinality == 0) {
+                        ac.deinit(self.allocator);
+                        continue;
+                    }
+                    self.keys[write_idx] = key;
+                    self.containers[write_idx] = tp;
+                    total += ac.cardinality;
+                    write_idx += 1;
+                },
+                .bitset => |bc| {
+                    const card = bc.computeCardinality();
+                    if (card == 0) {
+                        bc.deinit(self.allocator);
+                        continue;
+                    }
+                    if (card <= ArrayContainer.MAX_CARDINALITY) {
+                        const ac = try ops.bitsetToArray(self.allocator, bc);
+                        bc.deinit(self.allocator);
+                        self.keys[write_idx] = key;
+                        self.containers[write_idx] = TaggedPtr.initArray(ac);
+                    } else {
+                        self.keys[write_idx] = key;
+                        self.containers[write_idx] = tp;
+                    }
+                    total += card;
+                    write_idx += 1;
+                },
+                .run => |rc| {
+                    const card = rc.getCardinality();
+                    if (card == 0) {
+                        rc.deinit(self.allocator);
+                        continue;
+                    }
+                    self.keys[write_idx] = key;
+                    self.containers[write_idx] = tp;
+                    total += card;
+                    write_idx += 1;
+                },
+                .reserved => unreachable,
+            }
+        }
+
+        self.size = @intCast(write_idx);
+        self.cached_cardinality = @intCast(total);
     }
 
     /// Insert a tagged container at the given position, shifting existing containers.
@@ -1661,6 +1744,7 @@ pub const RoaringBitmap = struct {
         }
 
         result.cached_cardinality = -1;
+        try result.repairAfterLazy();
         return result;
     }
 
@@ -1685,36 +1769,129 @@ pub const RoaringBitmap = struct {
         cursors: []usize,
         key: u16,
     ) !?TaggedPtr {
-        var acc: ?Container = null;
-        errdefer if (acc) |c_acc| c_acc.deinit(allocator);
-
-        for (bitmaps, cursors) |bm, *cursor| {
-            if (cursor.* >= bm.size or bm.keys[cursor.*] != key) continue;
-
-            const next = Container.fromTagged(bm.containers[cursor.*]);
-            cursor.* += 1;
-
-            if (acc) |c_acc| {
-                const merged = switch (op) {
-                    .bor => try ops.containerUnion(allocator, c_acc, next),
-                    .xor => try ops.containerXor(allocator, c_acc, next),
-                };
-                c_acc.deinit(allocator);
-                acc = merged;
-            } else {
-                acc = try next.clone(allocator);
+        var count: usize = 0;
+        for (bitmaps, cursors) |bm, cursor| {
+            if (cursor < bm.size and bm.keys[cursor] == key) {
+                count += 1;
             }
         }
 
-        var folded = acc.?;
-        if (op == .xor and folded.getCardinality() == 0) {
-            folded.deinit(allocator);
-            acc = null;
-            return null;
+        if (count == 1) {
+            for (bitmaps, cursors) |bm, *cursor| {
+                if (cursor.* >= bm.size or bm.keys[cursor.*] != key) continue;
+                const cloned = try cloneContainer(allocator, bm.containers[cursor.*]);
+                cursor.* += 1;
+                return cloned;
+            }
         }
 
-        acc = null;
-        return folded.toTagged();
+        const acc = try BitsetContainer.init(allocator);
+        errdefer acc.deinit(allocator);
+
+        for (bitmaps, cursors) |bm, *cursor| {
+            if (cursor.* >= bm.size or bm.keys[cursor.*] != key) continue;
+            lazyAccumulateIntoBitset(op, acc, Container.fromTagged(bm.containers[cursor.*]));
+            cursor.* += 1;
+        }
+
+        return TaggedPtr.initBitset(acc);
+    }
+
+    fn lazyMergeTwo(
+        comptime op: ManyOp,
+        allocator: std.mem.Allocator,
+        a: *const Self,
+        b: *const Self,
+        bitset_conversion: bool,
+    ) !Self {
+        var result = try Self.init(allocator);
+        errdefer result.deinit();
+
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < a.size and j < b.size) {
+            const key_a = a.keys[i];
+            const key_b = b.keys[j];
+
+            if (key_a < key_b) {
+                try result.appendContainer(key_a, try cloneContainer(allocator, a.containers[i]));
+                i += 1;
+            } else if (key_a > key_b) {
+                try result.appendContainer(key_b, try cloneContainer(allocator, b.containers[j]));
+                j += 1;
+            } else {
+                const c_a = Container.fromTagged(a.containers[i]);
+                const c_b = Container.fromTagged(b.containers[j]);
+                const use_lazy_bitset = op == .xor or bitset_conversion or isBitsetContainer(c_a) or isBitsetContainer(c_b);
+
+                if (use_lazy_bitset) {
+                    const acc = try BitsetContainer.init(allocator);
+                    errdefer acc.deinit(allocator);
+                    lazyAccumulateIntoBitset(op, acc, c_a);
+                    lazyAccumulateIntoBitset(op, acc, c_b);
+                    try result.appendContainer(key_a, TaggedPtr.initBitset(acc));
+                } else {
+                    const merged = switch (op) {
+                        .bor => try ops.containerUnion(allocator, c_a, c_b),
+                        .xor => try ops.containerXor(allocator, c_a, c_b),
+                    };
+                    if (op == .xor and merged.getCardinality() == 0) {
+                        merged.deinit(allocator);
+                    } else {
+                        try result.appendContainer(key_a, merged.toTagged());
+                    }
+                }
+
+                i += 1;
+                j += 1;
+            }
+        }
+
+        while (i < a.size) : (i += 1) {
+            try result.appendContainer(a.keys[i], try cloneContainer(allocator, a.containers[i]));
+        }
+        while (j < b.size) : (j += 1) {
+            try result.appendContainer(b.keys[j], try cloneContainer(allocator, b.containers[j]));
+        }
+
+        result.cached_cardinality = -1;
+        return result;
+    }
+
+    fn isBitsetContainer(container: Container) bool {
+        return switch (container) {
+            .bitset => true,
+            .array, .run => false,
+            .reserved => unreachable,
+        };
+    }
+
+    fn lazyAccumulateIntoBitset(comptime op: ManyOp, acc: *BitsetContainer, container: Container) void {
+        switch (container) {
+            .array => |ac| {
+                for (ac.values[0..ac.cardinality]) |value| {
+                    switch (op) {
+                        .bor => acc.lazySet(value),
+                        .xor => acc.lazyToggle(value),
+                    }
+                }
+            },
+            .bitset => |bc| switch (op) {
+                .bor => acc.lazyUnionWith(bc),
+                .xor => acc.lazyXorWith(bc),
+            },
+            .run => |rc| {
+                for (rc.runs[0..rc.n_runs]) |run| {
+                    switch (op) {
+                        .bor => acc.setRange(run.start, run.end()),
+                        .xor => acc.lazyToggleRange(run.start, run.end()),
+                    }
+                }
+                acc.cardinality = -1;
+            },
+            .reserved => unreachable,
+        }
     }
 
     // ========================================================================

@@ -251,6 +251,15 @@ fn benchRawrOrSparse() void {
     std.mem.doNotOptimizeAway(&result);
 }
 
+fn benchRawrLazyOrSparseRepair() void {
+    const a = &rawr_sparse_a.?;
+    const b = &rawr_sparse_b.?;
+    var result = a.lazyOr(allocator, b, true) catch unreachable;
+    defer result.deinit();
+    result.repairAfterLazy() catch unreachable;
+    std.mem.doNotOptimizeAway(&result);
+}
+
 fn benchRawrAndSparseArena() void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -566,6 +575,15 @@ fn benchCRoaringOrSparse() void {
     std.mem.doNotOptimizeAway(result);
 }
 
+fn benchCRoaringLazyOrSparseRepair() void {
+    const a = cr_sparse_a.?;
+    const b_bm = cr_sparse_b.?;
+    const result = c.roaring_bitmap_lazy_or(a, b_bm, true) orelse unreachable;
+    defer c.roaring_bitmap_free(result);
+    c.roaring_bitmap_repair_after_lazy(result);
+    std.mem.doNotOptimizeAway(result);
+}
+
 fn benchCRoaringOrMany() void {
     const result = c.roaring_bitmap_or_many(N_MANY_BITMAPS, @ptrCast(&cr_many_inputs)) orelse unreachable;
     defer c.roaring_bitmap_free(result);
@@ -807,6 +825,10 @@ pub fn main(init: std.process.Init) !void {
 
     r = benchmark(init.io, benchRawrOrSparseArena, .{});
     printResult("bitwiseOr (sparse, arena)", r.median_ns, cr.median_ns);
+
+    r = benchmark(init.io, benchRawrLazyOrSparseRepair, .{});
+    cr = benchmark(init.io, benchCRoaringLazyOrSparseRepair, .{});
+    printResult("lazyOr+repair (sparse)", r.median_ns, cr.median_ns);
 
     r = benchmark(init.io, benchRawrOrDense, .{});
     cr = benchmark(init.io, benchCRoaringOrDense, .{});

@@ -169,6 +169,24 @@ pub const BitsetContainer = struct {
         dst.cardinality = @intCast(card);
     }
 
+    fn simdBitsetOpLazy(comptime op: BitwiseOp, dst: *Self, src: *const Self) void {
+        const VEC_SIZE = 8;
+        const vec_count = NUM_WORDS / VEC_SIZE;
+
+        for (0..vec_count) |i| {
+            const base = i * VEC_SIZE;
+            const a: @Vector(VEC_SIZE, u64) = dst.words[base..][0..VEC_SIZE].*;
+            const b: @Vector(VEC_SIZE, u64) = src.words[base..][0..VEC_SIZE].*;
+            const result = switch (op) {
+                .bor => a | b,
+                .xor => a ^ b,
+                .band, .andnot => unreachable,
+            };
+            dst.words[base..][0..VEC_SIZE].* = result;
+        }
+        dst.cardinality = -1;
+    }
+
     pub fn countWords(words: []const u64) u32 {
         const VEC_SIZE = 8;
 
@@ -193,6 +211,11 @@ pub const BitsetContainer = struct {
         simdBitsetOp(.bor, dst, src);
     }
 
+    /// OR without maintaining cardinality. Caller must repair before normal use.
+    pub fn lazyUnionWith(dst: *Self, src: *const Self) void {
+        simdBitsetOpLazy(.bor, dst, src);
+    }
+
     /// SIMD-accelerated AND: dst &= src
     pub fn intersectionWith(dst: *Self, src: *const Self) void {
         simdBitsetOp(.band, dst, src);
@@ -203,9 +226,60 @@ pub const BitsetContainer = struct {
         simdBitsetOp(.xor, dst, src);
     }
 
+    /// XOR without maintaining cardinality. Caller must repair before normal use.
+    pub fn lazyXorWith(dst: *Self, src: *const Self) void {
+        simdBitsetOpLazy(.xor, dst, src);
+    }
+
+    /// Set one bit without maintaining cardinality.
+    pub fn lazySet(self: *Self, value: u16) void {
+        const word_idx = value >> 6;
+        const bit_idx: u6 = @truncate(value);
+        self.words[word_idx] |= @as(u64, 1) << bit_idx;
+        self.cardinality = -1;
+    }
+
+    /// Toggle one bit without maintaining cardinality.
+    pub fn lazyToggle(self: *Self, value: u16) void {
+        const word_idx = value >> 6;
+        const bit_idx: u6 = @truncate(value);
+        self.words[word_idx] ^= @as(u64, 1) << bit_idx;
+        self.cardinality = -1;
+    }
+
+    /// Toggle a range of bits [start, end] inclusive without maintaining cardinality.
+    pub fn lazyToggleRange(self: *Self, start: u16, end: u16) void {
+        if (start > end) return;
+
+        const start_word = start >> 6;
+        const end_word = end >> 6;
+        const start_bit: u6 = @truncate(start);
+        const end_bit: u6 = @truncate(end);
+
+        if (start_word == end_word) {
+            self.words[start_word] ^= bitRangeMask(start_bit, end_bit);
+        } else {
+            self.words[start_word] ^= bitRangeMask(start_bit, 63);
+            for (self.words[start_word + 1 .. end_word]) |*word| {
+                word.* ^= ~@as(u64, 0);
+            }
+            self.words[end_word] ^= bitRangeMask(0, end_bit);
+        }
+        self.cardinality = -1;
+    }
+
     /// SIMD-accelerated AND-NOT: dst &= ~src (difference)
     pub fn differenceWith(dst: *Self, src: *const Self) void {
         simdBitsetOp(.andnot, dst, src);
+    }
+
+    fn bitRangeMask(start_bit: u6, end_bit: u6) u64 {
+        const end_mask = if (end_bit == 63)
+            ~@as(u64, 0)
+        else
+            (@as(u64, 1) << (end_bit + 1)) - 1;
+        const start_mask = (@as(u64, 1) << start_bit) - 1;
+        return end_mask & ~start_mask;
     }
 };
 

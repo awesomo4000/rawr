@@ -53,6 +53,7 @@ pub fn main() !void {
         try runFlipCases(allocator);
         try runRangeCases(allocator);
         try runNwayCases(allocator);
+        try runLazyRepairCases(allocator);
         try runTransitionCases(allocator);
         try runOracleAnchoredIdentities(allocator);
         try runRandomizedLoop(allocator);
@@ -463,6 +464,152 @@ fn runNwayHeterogeneousSameKeyCase(allocator: Allocator) !void {
 
     try assertManyAgree(allocator, .bor, &rawr_inputs, &oracle_inputs, true, rawr_inputs.len);
     try assertManyAgree(allocator, .xor, &rawr_inputs, &oracle_inputs, true, rawr_inputs.len);
+}
+
+fn runLazyRepairCases(allocator: Allocator) !void {
+    try runLazyFootgunCase(allocator);
+    try runLazyRepairEdgeCases(allocator);
+
+    for (&[_]bool{ false, true }) |run_optimize| {
+        var prng = std.Random.DefaultPrng.init(if (run_optimize) 0x1A2E_0001 else 0x1A2E_0000);
+        const rng = prng.random();
+
+        for (0..24) |i| {
+            var a = try test_gen.randomMixed(allocator, rng, 6, run_optimize);
+            defer a.deinit();
+            var b = try test_gen.randomMixed(allocator, rng, 6, run_optimize);
+            defer b.deinit();
+
+            try assertLazyOrCase(allocator, &a.bm, &b.bm, a.values, b.values, run_optimize, (i % 2) == 0);
+            try assertLazyXorCase(allocator, &a.bm, &b.bm, a.values, b.values, run_optimize);
+        }
+    }
+}
+
+fn assertLazyOrCase(
+    allocator: Allocator,
+    a: *const RoaringBitmap,
+    b: *const RoaringBitmap,
+    a_values: []const u32,
+    b_values: []const u32,
+    run_optimize: bool,
+    bitset_conversion: bool,
+) !void {
+    var eager = try a.bitwiseOr(allocator, b);
+    defer eager.deinit();
+
+    var lazy = try a.lazyOr(allocator, b, bitset_conversion);
+    defer lazy.deinit();
+    try lazy.repairAfterLazy();
+    try lazy.validate();
+    const bytes = try lazy.serialize(allocator);
+    defer allocator.free(bytes);
+    try expectRawrEqual("lazyOr:rawr-eager", &lazy, &eager);
+
+    var in_place = try a.clone(allocator);
+    defer in_place.deinit();
+    try in_place.lazyOrInPlace(b, bitset_conversion);
+    try in_place.repairAfterLazy();
+    try in_place.validate();
+    try expectRawrEqual("lazyOrInPlace:rawr-eager", &in_place, &eager);
+
+    const oracle_a = try buildOracle(a_values, run_optimize);
+    defer c.roaring_bitmap_free(oracle_a);
+    const oracle_b = try buildOracle(b_values, run_optimize);
+    defer c.roaring_bitmap_free(oracle_b);
+    const oracle_result = c.roaring_bitmap_lazy_or(oracle_a, oracle_b, bitset_conversion) orelse return error.CRoaringAllocFailed;
+    defer c.roaring_bitmap_free(oracle_result);
+    c.roaring_bitmap_repair_after_lazy(oracle_result);
+    try assertSameValues(allocator, "lazyOr:croaring", &lazy, oracle_result);
+}
+
+fn assertLazyXorCase(
+    allocator: Allocator,
+    a: *const RoaringBitmap,
+    b: *const RoaringBitmap,
+    a_values: []const u32,
+    b_values: []const u32,
+    run_optimize: bool,
+) !void {
+    var eager = try a.bitwiseXor(allocator, b);
+    defer eager.deinit();
+
+    var lazy = try a.lazyXor(allocator, b);
+    defer lazy.deinit();
+    try lazy.repairAfterLazy();
+    try lazy.validate();
+    const bytes = try lazy.serialize(allocator);
+    defer allocator.free(bytes);
+    try expectRawrEqual("lazyXor:rawr-eager", &lazy, &eager);
+
+    var in_place = try a.clone(allocator);
+    defer in_place.deinit();
+    try in_place.lazyXorInPlace(b);
+    try in_place.repairAfterLazy();
+    try in_place.validate();
+    try expectRawrEqual("lazyXorInPlace:rawr-eager", &in_place, &eager);
+
+    const oracle_a = try buildOracle(a_values, run_optimize);
+    defer c.roaring_bitmap_free(oracle_a);
+    const oracle_b = try buildOracle(b_values, run_optimize);
+    defer c.roaring_bitmap_free(oracle_b);
+    const oracle_result = c.roaring_bitmap_lazy_xor(oracle_a, oracle_b) orelse return error.CRoaringAllocFailed;
+    defer c.roaring_bitmap_free(oracle_result);
+    c.roaring_bitmap_repair_after_lazy(oracle_result);
+    try assertSameValues(allocator, "lazyXor:croaring", &lazy, oracle_result);
+}
+
+fn runLazyFootgunCase(allocator: Allocator) !void {
+    var prng = std.Random.DefaultPrng.init(0xFA07_6001);
+    const rng = prng.random();
+    var a = try test_gen.build(allocator, rng, &.{.{ .key = 7, .profile = .dense }}, false);
+    defer a.deinit();
+    var b = try test_gen.build(allocator, rng, &.{.{ .key = 7, .profile = .dense }}, false);
+    defer b.deinit();
+
+    var lazy = try a.bm.lazyOr(allocator, &b.bm, true);
+    defer lazy.deinit();
+    if (lazy.validate()) |_| {
+        std.debug.print("FAIL: lazy footgun - pre-repair validate unexpectedly succeeded\n", .{});
+        return error.LazyPreRepairValidateSucceeded;
+    } else |_| {}
+
+    try lazy.repairAfterLazy();
+    try lazy.validate();
+}
+
+fn runLazyRepairEdgeCases(allocator: Allocator) !void {
+    var prng = std.Random.DefaultPrng.init(0xFA07_6002);
+    const rng = prng.random();
+
+    var clean = try test_gen.randomMixed(allocator, rng, 5, true);
+    defer clean.deinit();
+    var before = try clean.bm.clone(allocator);
+    defer before.deinit();
+    try clean.bm.repairAfterLazy();
+    try clean.bm.repairAfterLazy();
+    try clean.bm.validate();
+    try expectRawrEqual("repair:idempotent-clean", &clean.bm, &before);
+
+    var dense = try test_gen.build(allocator, rng, &.{.{ .key = 9, .profile = .dense }}, false);
+    defer dense.deinit();
+    var empty_xor = try dense.bm.lazyXor(allocator, &dense.bm);
+    defer empty_xor.deinit();
+    try empty_xor.repairAfterLazy();
+    try expectRawrEmpty("repair:drops-empty-xor", &empty_xor);
+
+    var large_a = try test_gen.build(allocator, rng, &.{.{ .key = 11, .profile = .dense }}, false);
+    defer large_a.deinit();
+    var large_b = try test_gen.build(allocator, rng, &.{.{ .key = 11, .profile = .dense }}, false);
+    defer large_b.deinit();
+    var large = try large_a.bm.lazyOr(allocator, &large_b.bm, true);
+    defer large.deinit();
+    try large.repairAfterLazy();
+    try large.validate();
+    if (large.size != 1 or large.containers[0].getType() != .bitset) {
+        std.debug.print("FAIL: repair:large-lazy-bitset - expected one bitset container\n", .{});
+        return error.LazyRepairExpectedBitset;
+    }
 }
 
 fn runTransitionCases(allocator: Allocator) !void {
