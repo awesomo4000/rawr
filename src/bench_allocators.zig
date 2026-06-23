@@ -268,7 +268,8 @@ fn printMatrixRow(input_name: []const u8, values: [4]f64) void {
 // --- Main ---
 
 pub fn main(init: std.process.Init) !void {
-    var args = init.minimal.args.iterate();
+    var args = try init.minimal.args.iterateAllocator(std.heap.smp_allocator);
+    defer args.deinit();
     _ = args.skip(); // program name
 
     var input_choice: AllocChoice = .smp;
