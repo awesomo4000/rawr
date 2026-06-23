@@ -43,6 +43,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     bench_mod.addImport("rawr", bench_lib_mod);
+    bench_mod.link_libc = true;
 
     const bench_exe = b.addExecutable(.{
         .name = "bench",
@@ -134,6 +135,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     bench_alloc_mod.addImport("rawr", bench_lib_mod);
+    bench_alloc_mod.link_libc = true;
 
     const bench_alloc_exe = b.addExecutable(.{
         .name = "bench_alloc",
