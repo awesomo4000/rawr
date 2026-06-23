@@ -121,9 +121,26 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
 7. **`07-07` — bulk + extract** *(done)* (`add_many`/`remove_many`/
    `to_uint32_array`) — cursor reuse + array append fast-path (sequential addMany
    1.37×→1.08×), bulk per-container extract.
-8. Tier 3 as opportunistic one-offs (`07-08+`).
+8. **`07-08` — merge-join refactor** *(done)* — consolidated the two-way merge for
+   the 4 allocating + 4 cardinality ops into comptime-generic helpers
+   (`twoWayAllocatingMerge`/`twoWayCardinality`); AND scratch path preserved
+   (comptime-routed), in-place four left as-is. Bench: set-op/cardinality rows
+   unchanged (no regression). **This closes the parity umbrella.**
+9. Tier 3 as opportunistic one-offs.
 
 (Numbering is a guide, not a contract — reorder as priorities shift.)
+
+### Known follow-ups (post-umbrella, optional)
+
+- **flip wide-range perf** — `flip wide range (dense)` benches at rawr 1.54 ms
+  (the XOR-with-range-mask identity allocates a big mask). The `07-03` **Task 1b**
+  direct per-container negation is the fix; confirm the CRoaring bench comparison
+  is fair first.
+- **Tier-3 conveniences** — `clear` (most likely wanted), `add_offset`
+  (domain-specific), then the rest as needed.
+- **`08-fuzzing`** (parked in `todo/`) — the next major effort.
+- Minor: `rankMany` 1.55×, `lazyOr+repair` 2-way sparse 1.28× (lazy outside its
+  sweet spot) — low priority.
 
 Each impl spec follows the established discipline: extend `croaring_wrapper.h`
 with the oracle decl, implement, add a differential check (scalar-compare or
