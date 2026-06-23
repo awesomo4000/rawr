@@ -274,6 +274,27 @@ fn bitRangeMask(start_bit: u6, end_bit: u6) u64 {
     return end_mask & ~start_mask;
 }
 
+fn copyBitsetRange(dst: *BitsetContainer, src: *const BitsetContainer, start: u16, end: u16) void {
+    if (start > end) return;
+
+    const start_word = start >> 6;
+    const end_word = end >> 6;
+    const start_bit: u6 = @truncate(start);
+    const end_bit: u6 = @truncate(end);
+
+    dst.cardinality = -1;
+
+    if (start_word == end_word) {
+        dst.words[start_word] |= src.words[start_word] & bitRangeMask(start_bit, end_bit);
+    } else {
+        dst.words[start_word] |= src.words[start_word] & bitRangeMask(start_bit, 63);
+        for (dst.words[start_word + 1 .. end_word], src.words[start_word + 1 .. end_word]) |*dst_word, src_word| {
+            dst_word.* |= src_word;
+        }
+        dst.words[end_word] |= src.words[end_word] & bitRangeMask(0, end_bit);
+    }
+}
+
 // ============================================================================
 // Union (OR)
 // ============================================================================
@@ -473,15 +494,13 @@ fn bitsetUnionBitset(allocator: std.mem.Allocator, a: *BitsetContainer, b: *Bits
 
 fn bitsetUnionRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *RunContainer) !Container {
     const result = try BitsetContainer.init(allocator);
+    errdefer result.deinit(allocator);
     @memcpy(result.words, bc.words);
 
-    // Add run elements
     for (rc.runs[0..rc.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            _ = result.add(@intCast(v));
-        }
+        result.setRange(run.start, run.end());
     }
+
     _ = result.computeCardinality();
     return bitsetToArrayOrRun(allocator, result);
 }
@@ -627,13 +646,9 @@ fn bitsetIntersectRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *R
     errdefer result.deinit(allocator);
 
     for (rc.runs[0..rc.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            if (bc.contains(@intCast(v))) {
-                _ = result.add(@intCast(v));
-            }
-        }
+        copyBitsetRange(result, bc, run.start, run.end());
     }
+
     _ = result.computeCardinality();
     if (result.getCardinality() <= ArrayContainer.MAX_CARDINALITY) {
         const arr = try bitsetToArray(allocator, result);
@@ -1019,10 +1034,7 @@ fn bitsetDifferenceRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *
     @memcpy(result.words, bc.words);
 
     for (rc.runs[0..rc.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            _ = result.remove(@intCast(v));
-        }
+        result.clearRange(run.start, run.end());
     }
 
     const card = result.computeCardinality();
@@ -1093,44 +1105,19 @@ fn runDifferenceBitset(allocator: std.mem.Allocator, rc: *RunContainer, bc: *Bit
 }
 
 fn runDifferenceRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
-    const result = try ArrayContainer.init(allocator, @intCast(@min(a.getCardinality(), ArrayContainer.MAX_CARDINALITY)));
+    const result = try BitsetContainer.init(allocator);
     errdefer result.deinit(allocator);
 
-    var k: usize = 0;
-    for (a.runs[0..a.n_runs], 0..) |run, run_idx| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            if (!b.contains(@intCast(v))) {
-                if (k >= ArrayContainer.MAX_CARDINALITY) {
-                    // Convert to bitset and continue
-                    result.cardinality = @intCast(k);
-                    const bs = try arrayToBitset(allocator, result);
-                    result.deinit(allocator);
-                    // Finish current run
-                    while (v <= run.end()) : (v += 1) {
-                        if (!b.contains(@intCast(v))) {
-                            _ = bs.add(@intCast(v));
-                        }
-                    }
-                    // Process remaining runs
-                    for (a.runs[run_idx + 1 .. a.n_runs]) |remaining_run| {
-                        var rv: u32 = remaining_run.start;
-                        while (rv <= remaining_run.end()) : (rv += 1) {
-                            if (!b.contains(@intCast(rv))) {
-                                _ = bs.add(@intCast(rv));
-                            }
-                        }
-                    }
-                    _ = bs.computeCardinality();
-                    return bitsetToArrayOrRun(allocator, bs);
-                }
-                result.values[k] = @intCast(v);
-                k += 1;
-            }
-        }
+    for (a.runs[0..a.n_runs]) |run| {
+        result.setRange(run.start, run.end());
     }
-    result.cardinality = @intCast(k);
-    return arrayToArrayOrRun(allocator, result);
+    for (b.runs[0..b.n_runs]) |run| {
+        result.clearRange(run.start, run.end());
+    }
+
+    const card = result.computeCardinality();
+    _ = card;
+    return bitsetToArrayOrRun(allocator, result);
 }
 
 // ============================================================================
@@ -1290,15 +1277,7 @@ fn bitsetXorRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *RunCont
     @memcpy(result.words, bc.words);
 
     for (rc.runs[0..rc.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            const val: u16 = @intCast(v);
-            if (result.contains(val)) {
-                _ = result.remove(val);
-            } else {
-                _ = result.add(val);
-            }
-        }
+        result.toggleRange(run.start, run.end());
     }
 
     const card = result.computeCardinality();
@@ -1311,22 +1290,11 @@ fn runXorRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !
     errdefer result.deinit(allocator);
 
     for (a.runs[0..a.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            _ = result.add(@intCast(v));
-        }
+        result.setRange(run.start, run.end());
     }
 
     for (b.runs[0..b.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            const val: u16 = @intCast(v);
-            if (result.contains(val)) {
-                _ = result.remove(val);
-            } else {
-                _ = result.add(val);
-            }
-        }
+        result.toggleRange(run.start, run.end());
     }
 
     const card = result.computeCardinality();

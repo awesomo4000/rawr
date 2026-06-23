@@ -473,6 +473,15 @@ fn benchRawrFlipWideDense() void {
     std.mem.doNotOptimizeAway(&result);
 }
 
+fn benchRawrRemoveRangeWideDense() void {
+    const bm = &rawr_dense_a.?;
+    var result = bm.clone(allocator) catch unreachable;
+    defer result.deinit();
+    const removed = result.removeRange(100_000, 650_000) catch unreachable;
+    std.mem.doNotOptimizeAway(removed);
+    std.mem.doNotOptimizeAway(&result);
+}
+
 noinline fn rawrRangeCardinality(bm: *const RoaringBitmap, lo: u32, hi: u32) u64 {
     return bm.rangeCardinality(lo, hi);
 }
@@ -806,6 +815,13 @@ fn benchCRoaringFlipWideDense() void {
     std.mem.doNotOptimizeAway(result);
 }
 
+fn benchCRoaringRemoveRangeWideDense() void {
+    const bm = c.roaring_bitmap_copy(cr_dense_a.?) orelse unreachable;
+    defer c.roaring_bitmap_free(bm);
+    c.roaring_bitmap_remove_range_closed(bm, 100_000, 650_000);
+    std.mem.doNotOptimizeAway(bm);
+}
+
 fn benchCRoaringRangeCardinalityBitset() void {
     const bm = cr_bitset_range_bm.?;
     var total: u64 = 0;
@@ -1005,6 +1021,10 @@ pub fn main(init: std.process.Init) !void {
     r = benchmark(init.io, benchRawrFlipWideDense, .{});
     cr = benchmark(init.io, benchCRoaringFlipWideDense, .{});
     printResult("flip wide range (dense)", r.median_ns, cr.median_ns);
+
+    r = benchmark(init.io, benchRawrRemoveRangeWideDense, .{});
+    cr = benchmark(init.io, benchCRoaringRemoveRangeWideDense, .{});
+    printResult("removeRange wide (dense)", r.median_ns, cr.median_ns);
 
     // Cleanup
     if (rawr_contains_bm) |*bm| bm.deinit();

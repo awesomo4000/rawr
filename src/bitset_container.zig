@@ -124,6 +124,50 @@ pub const BitsetContainer = struct {
         }
     }
 
+    /// Clear a range of bits [start, end] inclusive.
+    pub fn clearRange(self: *Self, start: u16, end: u16) void {
+        if (start > end) return;
+
+        const start_word = start >> 6;
+        const end_word = end >> 6;
+        const start_bit: u6 = @truncate(start);
+        const end_bit: u6 = @truncate(end);
+
+        self.cardinality = -1;
+
+        if (start_word == end_word) {
+            self.words[start_word] &= ~bitRangeMask(start_bit, end_bit);
+        } else {
+            self.words[start_word] &= ~bitRangeMask(start_bit, 63);
+            for (self.words[start_word + 1 .. end_word]) |*word| {
+                word.* = 0;
+            }
+            self.words[end_word] &= ~bitRangeMask(0, end_bit);
+        }
+    }
+
+    /// Toggle a range of bits [start, end] inclusive.
+    pub fn toggleRange(self: *Self, start: u16, end: u16) void {
+        if (start > end) return;
+
+        const start_word = start >> 6;
+        const end_word = end >> 6;
+        const start_bit: u6 = @truncate(start);
+        const end_bit: u6 = @truncate(end);
+
+        self.cardinality = -1;
+
+        if (start_word == end_word) {
+            self.words[start_word] ^= bitRangeMask(start_bit, end_bit);
+        } else {
+            self.words[start_word] ^= bitRangeMask(start_bit, 63);
+            for (self.words[start_word + 1 .. end_word]) |*word| {
+                word.* ^= ~@as(u64, 0);
+            }
+            self.words[end_word] ^= bitRangeMask(0, end_bit);
+        }
+    }
+
     /// Compute cardinality by counting all set bits.
     pub fn computeCardinality(self: *Self) u32 {
         const count = countWords(self.words);
@@ -249,23 +293,7 @@ pub const BitsetContainer = struct {
 
     /// Toggle a range of bits [start, end] inclusive without maintaining cardinality.
     pub fn lazyToggleRange(self: *Self, start: u16, end: u16) void {
-        if (start > end) return;
-
-        const start_word = start >> 6;
-        const end_word = end >> 6;
-        const start_bit: u6 = @truncate(start);
-        const end_bit: u6 = @truncate(end);
-
-        if (start_word == end_word) {
-            self.words[start_word] ^= bitRangeMask(start_bit, end_bit);
-        } else {
-            self.words[start_word] ^= bitRangeMask(start_bit, 63);
-            for (self.words[start_word + 1 .. end_word]) |*word| {
-                word.* ^= ~@as(u64, 0);
-            }
-            self.words[end_word] ^= bitRangeMask(0, end_bit);
-        }
-        self.cardinality = -1;
+        self.toggleRange(start, end);
     }
 
     /// SIMD-accelerated AND-NOT: dst &= ~src (difference)
