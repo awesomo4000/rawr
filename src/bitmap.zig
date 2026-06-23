@@ -871,255 +871,33 @@ pub const RoaringBitmap = struct {
 
     /// Return a new bitmap that is the union (OR) of self and other.
     pub fn bitwiseOr(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
-        var result = try Self.init(allocator);
-        errdefer result.deinit();
-
-        var i: usize = 0;
-        var j: usize = 0;
-
-        while (i < self.size and j < other.size) {
-            const key_a = self.keys[i];
-            const key_b = other.keys[j];
-
-            if (key_a < key_b) {
-                try result.appendContainer(key_a, try cloneContainer(allocator, self.containers[i]));
-                i += 1;
-            } else if (key_a > key_b) {
-                try result.appendContainer(key_b, try cloneContainer(allocator, other.containers[j]));
-                j += 1;
-            } else {
-                const c = try ops.containerUnion(
-                    allocator,
-                    Container.fromTagged(self.containers[i]),
-                    Container.fromTagged(other.containers[j]),
-                );
-                try result.appendContainer(key_a, c.toTagged());
-                i += 1;
-                j += 1;
-            }
-        }
-
-        while (i < self.size) : (i += 1) {
-            try result.appendContainer(self.keys[i], try cloneContainer(allocator, self.containers[i]));
-        }
-        while (j < other.size) : (j += 1) {
-            try result.appendContainer(other.keys[j], try cloneContainer(allocator, other.containers[j]));
-        }
-
-        result.cached_cardinality = -1;
-        return result;
+        return self.twoWayAllocatingMerge(.bor, allocator, other);
     }
 
     /// Return a new bitmap that is the intersection (AND) of self and other.
     pub fn bitwiseAnd(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
-        var result = try Self.init(allocator);
-        errdefer result.deinit();
-
-        // Scratch buffer for temporary array containers (avoids malloc/free churn for empty results)
-        // Most sparse intersections produce empty arrays, so this eliminates ~65K malloc/free cycles.
-        // Size: ArrayContainer struct (~24 bytes) + max values (4096 * 2 = 8192 bytes) + alignment padding
-        var scratch_buf: [8448]u8 = undefined;
-        var scratch = std.heap.FixedBufferAllocator.init(&scratch_buf);
-
-        var i: usize = 0;
-        var j: usize = 0;
-
-        while (i < self.size and j < other.size) {
-            const key_a = self.keys[i];
-            const key_b = other.keys[j];
-
-            if (key_a < key_b) {
-                i += 1;
-            } else if (key_a > key_b) {
-                j += 1;
-            } else {
-                // Try scratch allocator first (works for small array results).
-                // Reset before fallback so failed scratch attempts don't affect ownership.
-                const scratch_alloc = scratch.allocator();
-                const IntersectionResult = struct {
-                    container: Container,
-                    used_scratch: bool,
-                };
-                const intersection: IntersectionResult = blk: {
-                    const scratch_container = ops.containerIntersection(
-                        scratch_alloc,
-                        Container.fromTagged(self.containers[i]),
-                        Container.fromTagged(other.containers[j]),
-                    ) catch {
-                        scratch.reset();
-                        break :blk .{
-                            .container = try ops.containerIntersection(
-                                allocator,
-                                Container.fromTagged(self.containers[i]),
-                                Container.fromTagged(other.containers[j]),
-                            ),
-                            .used_scratch = false,
-                        };
-                    };
-                    break :blk .{
-                        .container = scratch_container,
-                        .used_scratch = true,
-                    };
-                };
-                const c = intersection.container;
-                const used_scratch = intersection.used_scratch;
-
-                if (c.getCardinality() > 0) {
-                    if (used_scratch) {
-                        // Non-empty from scratch: clone into real allocator
-                        const permanent = try c.clone(allocator);
-                        try result.appendContainer(key_a, permanent.toTagged());
-                    } else {
-                        // Already in real allocator
-                        try result.appendContainer(key_a, c.toTagged());
-                    }
-                } else if (!used_scratch) {
-                    // Empty but allocated from real allocator, free it
-                    c.deinit(allocator);
-                }
-
-                // Reset scratch for next iteration
-                scratch.reset();
-
-                i += 1;
-                j += 1;
-            }
-        }
-
-        result.cached_cardinality = -1;
-        return result;
+        return self.twoWayAllocatingMerge(.band, allocator, other);
     }
 
     /// Compute |self ∩ other| without allocating a result bitmap.
     /// Useful for join selectivity estimation in query planning.
     pub fn andCardinality(self: *const Self, other: *const Self) u64 {
-        var total: u64 = 0;
-        var i: usize = 0;
-        var j: usize = 0;
-        while (i < self.size and j < other.size) {
-            if (self.keys[i] < other.keys[j]) {
-                i += 1;
-            } else if (self.keys[i] > other.keys[j]) {
-                j += 1;
-            } else {
-                total += ops.containerIntersectionCardinality(
-                    Container.fromTagged(self.containers[i]),
-                    Container.fromTagged(other.containers[j]),
-                );
-                i += 1;
-                j += 1;
-            }
-        }
-        return total;
+        return self.twoWayCardinality(.band, other);
     }
 
     /// Compute |self ∪ other| without allocating a result bitmap.
     pub fn orCardinality(self: *const Self, other: *const Self) u64 {
-        var total: u64 = 0;
-        var i: usize = 0;
-        var j: usize = 0;
-        while (i < self.size and j < other.size) {
-            const key_a = self.keys[i];
-            const key_b = other.keys[j];
-
-            if (key_a < key_b) {
-                total += Container.fromTagged(self.containers[i]).getCardinality();
-                i += 1;
-            } else if (key_a > key_b) {
-                total += Container.fromTagged(other.containers[j]).getCardinality();
-                j += 1;
-            } else {
-                const card_a = Container.fromTagged(self.containers[i]).getCardinality();
-                const card_b = Container.fromTagged(other.containers[j]).getCardinality();
-                const intersection = ops.containerIntersectionCardinality(
-                    Container.fromTagged(self.containers[i]),
-                    Container.fromTagged(other.containers[j]),
-                );
-                total += card_a + card_b - intersection;
-                i += 1;
-                j += 1;
-            }
-        }
-
-        while (i < self.size) : (i += 1) {
-            total += Container.fromTagged(self.containers[i]).getCardinality();
-        }
-        while (j < other.size) : (j += 1) {
-            total += Container.fromTagged(other.containers[j]).getCardinality();
-        }
-
-        return total;
+        return self.twoWayCardinality(.bor, other);
     }
 
     /// Compute |self △ other| without allocating a result bitmap.
     pub fn xorCardinality(self: *const Self, other: *const Self) u64 {
-        var total: u64 = 0;
-        var i: usize = 0;
-        var j: usize = 0;
-        while (i < self.size and j < other.size) {
-            const key_a = self.keys[i];
-            const key_b = other.keys[j];
-
-            if (key_a < key_b) {
-                total += Container.fromTagged(self.containers[i]).getCardinality();
-                i += 1;
-            } else if (key_a > key_b) {
-                total += Container.fromTagged(other.containers[j]).getCardinality();
-                j += 1;
-            } else {
-                const card_a = Container.fromTagged(self.containers[i]).getCardinality();
-                const card_b = Container.fromTagged(other.containers[j]).getCardinality();
-                const intersection = ops.containerIntersectionCardinality(
-                    Container.fromTagged(self.containers[i]),
-                    Container.fromTagged(other.containers[j]),
-                );
-                total += card_a + card_b - 2 * intersection;
-                i += 1;
-                j += 1;
-            }
-        }
-
-        while (i < self.size) : (i += 1) {
-            total += Container.fromTagged(self.containers[i]).getCardinality();
-        }
-        while (j < other.size) : (j += 1) {
-            total += Container.fromTagged(other.containers[j]).getCardinality();
-        }
-
-        return total;
+        return self.twoWayCardinality(.xor, other);
     }
 
     /// Compute |self \ other| without allocating a result bitmap.
     pub fn differenceCardinality(self: *const Self, other: *const Self) u64 {
-        var total: u64 = 0;
-        var i: usize = 0;
-        var j: usize = 0;
-        while (i < self.size and j < other.size) {
-            const key_a = self.keys[i];
-            const key_b = other.keys[j];
-
-            if (key_a < key_b) {
-                total += Container.fromTagged(self.containers[i]).getCardinality();
-                i += 1;
-            } else if (key_a > key_b) {
-                j += 1;
-            } else {
-                const card_a = Container.fromTagged(self.containers[i]).getCardinality();
-                const intersection = ops.containerIntersectionCardinality(
-                    Container.fromTagged(self.containers[i]),
-                    Container.fromTagged(other.containers[j]),
-                );
-                total += card_a - intersection;
-                i += 1;
-                j += 1;
-            }
-        }
-
-        while (i < self.size) : (i += 1) {
-            total += Container.fromTagged(self.containers[i]).getCardinality();
-        }
-
-        return total;
+        return self.twoWayCardinality(.andnot, other);
     }
 
     /// Compute |self ∩ other| / |self ∪ other|.
@@ -1237,85 +1015,12 @@ pub const RoaringBitmap = struct {
 
     /// Return a new bitmap that is the difference (AND NOT) of self and other.
     pub fn bitwiseDifference(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
-        var result = try Self.init(allocator);
-        errdefer result.deinit();
-
-        var i: usize = 0;
-        var j: usize = 0;
-
-        while (i < self.size) {
-            const key_a = self.keys[i];
-
-            // Advance j to key_a or past it
-            while (j < other.size and other.keys[j] < key_a) : (j += 1) {}
-
-            if (j >= other.size or other.keys[j] > key_a) {
-                // No matching key in other, copy entire container
-                try result.appendContainer(key_a, try cloneContainer(allocator, self.containers[i]));
-            } else {
-                // Matching key, compute difference
-                const c = try ops.containerDifference(
-                    allocator,
-                    Container.fromTagged(self.containers[i]),
-                    Container.fromTagged(other.containers[j]),
-                );
-                if (c.getCardinality() > 0) {
-                    try result.appendContainer(key_a, c.toTagged());
-                } else {
-                    c.deinit(allocator);
-                }
-                j += 1;
-            }
-            i += 1;
-        }
-
-        result.cached_cardinality = -1;
-        return result;
+        return self.twoWayAllocatingMerge(.andnot, allocator, other);
     }
 
     /// Return a new bitmap that is the symmetric difference (XOR) of self and other.
     pub fn bitwiseXor(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
-        var result = try Self.init(allocator);
-        errdefer result.deinit();
-
-        var i: usize = 0;
-        var j: usize = 0;
-
-        while (i < self.size and j < other.size) {
-            const key_a = self.keys[i];
-            const key_b = other.keys[j];
-
-            if (key_a < key_b) {
-                try result.appendContainer(key_a, try cloneContainer(allocator, self.containers[i]));
-                i += 1;
-            } else if (key_a > key_b) {
-                try result.appendContainer(key_b, try cloneContainer(allocator, other.containers[j]));
-                j += 1;
-            } else {
-                const c = try ops.containerXor(
-                    allocator,
-                    Container.fromTagged(self.containers[i]),
-                    Container.fromTagged(other.containers[j]),
-                );
-                if (c.getCardinality() > 0) {
-                    try result.appendContainer(key_a, c.toTagged());
-                } else {
-                    c.deinit(allocator);
-                }
-                i += 1;
-                j += 1;
-            }
-        }
-
-        while (i < self.size) : (i += 1) {
-            try result.appendContainer(self.keys[i], try cloneContainer(allocator, self.containers[i]));
-        }
-        while (j < other.size) : (j += 1) {
-            try result.appendContainer(other.keys[j], try cloneContainer(allocator, other.containers[j]));
-        }
-
-        result.cached_cardinality = -1;
-        return result;
+        return self.twoWayAllocatingMerge(.xor, allocator, other);
     }
 
     /// Return a new bitmap that is the union (OR) of all inputs.
@@ -1818,12 +1523,248 @@ pub const RoaringBitmap = struct {
     // Helper Functions
     // ========================================================================
 
+    const TwoWayOp = enum { bor, band, xor, andnot };
+
+    fn twoWayCardinality(self: *const Self, comptime op: TwoWayOp, other: *const Self) u64 {
+        var total: u64 = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < self.size and j < other.size) {
+            const key_a = self.keys[i];
+            const key_b = other.keys[j];
+
+            if (key_a < key_b) {
+                total += aOnlyCardinality(op, Container.fromTagged(self.containers[i]));
+                i += 1;
+            } else if (key_a > key_b) {
+                total += bOnlyCardinality(op, Container.fromTagged(other.containers[j]));
+                j += 1;
+            } else {
+                total += bothCardinality(
+                    op,
+                    Container.fromTagged(self.containers[i]),
+                    Container.fromTagged(other.containers[j]),
+                );
+                i += 1;
+                j += 1;
+            }
+        }
+
+        while (i < self.size) : (i += 1) {
+            total += aOnlyCardinality(op, Container.fromTagged(self.containers[i]));
+        }
+        while (j < other.size) : (j += 1) {
+            total += bOnlyCardinality(op, Container.fromTagged(other.containers[j]));
+        }
+
+        return total;
+    }
+
+    fn aOnlyCardinality(comptime op: TwoWayOp, container: Container) u64 {
+        return switch (op) {
+            .bor, .xor, .andnot => container.getCardinality(),
+            .band => 0,
+        };
+    }
+
+    fn bOnlyCardinality(comptime op: TwoWayOp, container: Container) u64 {
+        return switch (op) {
+            .bor, .xor => container.getCardinality(),
+            .band, .andnot => 0,
+        };
+    }
+
+    fn bothCardinality(comptime op: TwoWayOp, a: Container, b: Container) u64 {
+        const intersection = ops.containerIntersectionCardinality(a, b);
+        return switch (op) {
+            .band => intersection,
+            .bor => a.getCardinality() + b.getCardinality() - intersection,
+            .xor => a.getCardinality() + b.getCardinality() - 2 * intersection,
+            .andnot => a.getCardinality() - intersection,
+        };
+    }
+
+    fn twoWayAllocatingMerge(self: *const Self, comptime op: TwoWayOp, allocator: std.mem.Allocator, other: *const Self) !Self {
+        if (op == .band) {
+            return self.twoWayAllocatingMergeAnd(allocator, other);
+        }
+
+        var result = try Self.init(allocator);
+        errdefer result.deinit();
+
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < self.size and j < other.size) {
+            const key_a = self.keys[i];
+            const key_b = other.keys[j];
+
+            if (key_a < key_b) {
+                try appendAOnlyAllocating(op, &result, allocator, key_a, self.containers[i]);
+                i += 1;
+            } else if (key_a > key_b) {
+                try appendBOnlyAllocating(op, &result, allocator, key_b, other.containers[j]);
+                j += 1;
+            } else {
+                try appendBothAllocating(
+                    op,
+                    &result,
+                    allocator,
+                    key_a,
+                    Container.fromTagged(self.containers[i]),
+                    Container.fromTagged(other.containers[j]),
+                );
+                i += 1;
+                j += 1;
+            }
+        }
+
+        while (i < self.size) : (i += 1) {
+            try appendAOnlyAllocating(op, &result, allocator, self.keys[i], self.containers[i]);
+        }
+        while (j < other.size) : (j += 1) {
+            try appendBOnlyAllocating(op, &result, allocator, other.keys[j], other.containers[j]);
+        }
+
+        result.cached_cardinality = -1;
+        return result;
+    }
+
+    fn twoWayAllocatingMergeAnd(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
+        var result = try Self.init(allocator);
+        errdefer result.deinit();
+
+        // Scratch buffer for temporary array containers (avoids malloc/free churn for empty results)
+        // Most sparse intersections produce empty arrays, so this eliminates ~65K malloc/free cycles.
+        // Size: ArrayContainer struct (~24 bytes) + max values (4096 * 2 = 8192 bytes) + alignment padding
+        var scratch_buf: [8448]u8 = undefined;
+        var scratch = std.heap.FixedBufferAllocator.init(&scratch_buf);
+
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < self.size and j < other.size) {
+            const key_a = self.keys[i];
+            const key_b = other.keys[j];
+
+            if (key_a < key_b) {
+                i += 1;
+            } else if (key_a > key_b) {
+                j += 1;
+            } else {
+                try appendIntersectionWithScratch(
+                    &result,
+                    allocator,
+                    key_a,
+                    Container.fromTagged(self.containers[i]),
+                    Container.fromTagged(other.containers[j]),
+                    &scratch,
+                );
+                i += 1;
+                j += 1;
+            }
+        }
+
+        result.cached_cardinality = -1;
+        return result;
+    }
+
+    fn appendAOnlyAllocating(comptime op: TwoWayOp, result: *Self, allocator: std.mem.Allocator, key: u16, tp: TaggedPtr) !void {
+        switch (op) {
+            .bor, .xor, .andnot => try result.appendClonedContainer(allocator, key, tp),
+            .band => {},
+        }
+    }
+
+    fn appendBOnlyAllocating(comptime op: TwoWayOp, result: *Self, allocator: std.mem.Allocator, key: u16, tp: TaggedPtr) !void {
+        switch (op) {
+            .bor, .xor => try result.appendClonedContainer(allocator, key, tp),
+            .band, .andnot => {},
+        }
+    }
+
+    fn appendBothAllocating(
+        comptime op: TwoWayOp,
+        result: *Self,
+        allocator: std.mem.Allocator,
+        key: u16,
+        a: Container,
+        b: Container,
+    ) !void {
+        const c = switch (op) {
+            .bor => try ops.containerUnion(allocator, a, b),
+            .xor => try ops.containerXor(allocator, a, b),
+            .andnot => try ops.containerDifference(allocator, a, b),
+            .band => unreachable,
+        };
+
+        if (op == .bor or c.getCardinality() > 0) {
+            try result.appendOwnedContainer(allocator, key, c.toTagged());
+        } else {
+            c.deinit(allocator);
+        }
+    }
+
+    fn appendIntersectionWithScratch(
+        result: *Self,
+        allocator: std.mem.Allocator,
+        key: u16,
+        a: Container,
+        b: Container,
+        scratch: *std.heap.FixedBufferAllocator,
+    ) !void {
+        const scratch_alloc = scratch.allocator();
+        const IntersectionResult = struct {
+            container: Container,
+            used_scratch: bool,
+        };
+        const intersection: IntersectionResult = blk: {
+            const scratch_container = ops.containerIntersection(scratch_alloc, a, b) catch {
+                scratch.reset();
+                break :blk .{
+                    .container = try ops.containerIntersection(allocator, a, b),
+                    .used_scratch = false,
+                };
+            };
+            break :blk .{
+                .container = scratch_container,
+                .used_scratch = true,
+            };
+        };
+
+        const c = intersection.container;
+        const used_scratch = intersection.used_scratch;
+        if (c.getCardinality() > 0) {
+            if (used_scratch) {
+                const permanent = try c.clone(allocator);
+                try result.appendOwnedContainer(allocator, key, permanent.toTagged());
+            } else {
+                try result.appendOwnedContainer(allocator, key, c.toTagged());
+            }
+        } else if (!used_scratch) {
+            c.deinit(allocator);
+        }
+
+        scratch.reset();
+    }
+
     /// Append a container (assumes keys are in sorted order).
     fn appendContainer(self: *Self, key: u16, tp: TaggedPtr) !void {
         try self.ensureCapacity(self.size + 1);
         self.keys[self.size] = key;
         self.containers[self.size] = tp;
         self.size += 1;
+    }
+
+    fn appendOwnedContainer(self: *Self, allocator: std.mem.Allocator, key: u16, tp: TaggedPtr) !void {
+        errdefer Container.fromTagged(tp).deinit(allocator);
+        try self.appendContainer(key, tp);
+    }
+
+    fn appendClonedContainer(self: *Self, allocator: std.mem.Allocator, key: u16, tp: TaggedPtr) !void {
+        const cloned = try cloneContainer(allocator, tp);
+        try self.appendOwnedContainer(allocator, key, cloned);
     }
 
     /// Clone a container.
