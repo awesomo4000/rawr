@@ -52,7 +52,8 @@ matrix.
 | CRoaring | Status | Effort | Maps cleanly? | Notes |
 |---|---|---|---|---|
 | `or_many`, `xor_many` | ✅ | M | clean | rawr `orMany`/`xorMany` (k-way merge + lazy fold). orMany ~1.25×, xorMany ~0.55× vs CRoaring. |
-| `or_many_heap`, `xor_many_heap` | ❌ | M | clean | heap/balanced-merge cursor → `07-06b` (closes orMany's residual linear-scan gap). |
+| `or_many_heap` | ❌ | M | clean | balanced-merge parity API → `07-06b`. |
+| `xor_many_heap` | ⛔ | — | — | **not exported in this vendored CRoaring** (TODO comment only). No oracle; rawr-only alias of `xorMany` at most. |
 | `lazy_or(_inplace)`, `lazy_xor(_inplace)`, `repair_after_lazy` | ✅ | L | needs design | rawr `lazyOr`/`lazyXor`/`repairAfterLazy` (+ in-place). Lazy bitset accumulation, single repair. |
 | `range_cardinality`, `range_cardinality_closed` | ✅ | S | clean | rawr `rangeCardinality`; vectorized windowed popcount (beats CRoaring on large single-chunk ranges). |
 | `contains_range`, `contains_range_closed` | ✅ | S | clean | rawr `containsRange` (early-exit). |

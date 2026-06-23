@@ -53,37 +53,50 @@ elimination is the win regardless.)
 `repairAfterLazy` and the public `lazyOr`/`lazyXor` APIs from `07-06` are
 **unchanged** — this only reworks the internal n-way fold.
 
-## Task 2 — Heap k-way cursor + `*_many_heap` parity APIs
+## Task 2 — Cursor-scan optimization + `orManyHeap` parity (conditional)
 
-Addresses the cursor-scan cost (#2) and lands the remaining parity surface:
+Two **separate** things — don't conflate them:
+
+**(a) rawr internal scan optimization (lever #2).** Replace `nextManyKey`'s linear
+min-scan with a **binary heap of cursors** keyed by current head key, so each step
+yields the min key and its matching cursors in O(log N) without scanning
+non-matching inputs; fuse the count/accumulate passes while there. This is a
+rawr-internal change to the existing `orMany`/`xorMany`, not a new API. Only build
+it if **Task 0** says the cursor scan (not the alloc churn) is the dominant cost.
+
+**(b) `orManyHeap` parity API.** CRoaring's `or_many_heap` is a **different
+algorithm** from (a): a priority queue over *whole bitmaps* by serialized size (a
+balanced pairwise merge tree), not a cursor heap over container keys. So don't
+present (a) as implementing `or_many_heap`. For parity, expose `orManyHeap`; given
+rawr's k-way already handles varying sizes well, it can reasonably be a **thin
+alias of `orMany`** — but verify against `roaring_bitmap_or_many_heap` and bench a
+widely-varying-input-size case before settling on alias vs a real balanced merge.
 
 ```c
 roaring_bitmap_t* roaring_bitmap_or_many_heap(uint32_t number, const roaring_bitmap_t** rs);
-roaring_bitmap_t* roaring_bitmap_xor_many_heap(uint32_t number, const roaring_bitmap_t** rs);
 ```
 
-- Replace `nextManyKey`'s linear min-scan with a **binary heap** of cursors keyed
-  by current head key, so each step yields the min key and its matching cursors in
-  O(log N) without scanning non-matching inputs. Fuse the count/accumulate passes
-  while you're there.
-- Expose `orManyHeap`/`xorManyHeap` (rawr names) for parity. CRoaring's heap
-  variant is a balanced pairwise merge tuned for **widely varying input sizes**;
-  if rawr's k-way + heap already covers that case, `orManyHeap` can be a thin
-  alias of `orMany` — but verify against the oracle and bench the varying-size
-  case before deciding they're equivalent.
-
-Only build Task 2 if Task 0 says the scan matters, **or** purely for the
-`*_many_heap` parity API (in which case a thin alias may suffice).
+**`xorManyHeap`:** `roaring_bitmap_xor_many_heap` is **not exported** in this
+vendored CRoaring (only a TODO comment in `roaring.h`, no impl in `roaring.c`), so
+there's no oracle to differential-test against. Don't add a C wrapper for it.
+Either leave `xorManyHeap` **out of scope**, or provide it as a **rawr-only alias
+of `xorMany`** tested **against `xorMany`** (pure rawr), not CRoaring.
 
 ## Task 3 — Tests
 
 - **Behavior-preserving:** the `07-05`/`07-06` `orMany`/`xorMany` differential
   tests must still pass unchanged — the workspace rewrite changes performance, not
   results.
-- **`*_many_heap` differential:** `orManyHeap`/`xorManyHeap` vs
-  `roaring_bitmap_or_many_heap`/`xor_many_heap` by `assertSameValues`, across
-  varied N and profiles, including a **widely-varying-input-size** case (the
-  scenario the heap variant exists for).
+- **`orManyHeap` differential:** vs `roaring_bitmap_or_many_heap` by
+  `assertSameValues`, across varied N and profiles, including a
+  **widely-varying-input-size** case (the scenario CRoaring's heap variant exists
+  for). **`xorManyHeap`** (if provided) is tested **against rawr's `xorMany`**, not
+  CRoaring — no oracle exists in this vendor snapshot.
+- **Workspace array-output path:** add an n-way case that yields a **small array**
+  output from several **dense/bitset** inputs via **XOR cancellation** (most bits
+  cancel, leaving ≤ MAX_CARDINALITY). This specifically exercises "workspace
+  materializes a direct array after lazy accumulation," not just the bitset-output
+  path.
 - **`validate()` / `serialize`** on workspace-built results (the output is built
   directly now, so confirm the invariants hold without the repair pass).
 - Leak check across the fold (the single workspace is freed once).
@@ -102,13 +115,16 @@ becomes parity-only).
    workspace-built outputs pass `validate()` and `serialize`.
 3. `orMany` bench improved from 1.25× toward ≤ ~1.0×, recorded before/after;
    `xorMany` not regressed.
-4. If built: `orManyHeap`/`xorManyHeap` match `*_many_heap` oracles incl. a
-   varying-size case; the single workspace is leak-free.
+4. If built: `orManyHeap` matches `roaring_bitmap_or_many_heap` incl. a
+   varying-size case; `xorManyHeap` (if provided) matches rawr `xorMany`; the
+   single workspace is leak-free.
 5. `zig build test`, `validate`, `difftest`, `bench-compare` pass.
 
 ## Notes
 
 - `repairAfterLazy` and the public `lazyOr`/`lazyXor` stay as-is.
-- Mark `or_many_heap`/`xor_many_heap` ✅ in the
-  [inventory](07-parity-inventory.md) when done (or note them as thin aliases if
-  that's the conclusion).
+- `roaring_bitmap_xor_many_heap` is **absent from this vendored CRoaring** (TODO
+  comment only) — the inventory should mark `or_many_heap` separately and note
+  `xor_many_heap` is not present in the snapshot (rawr-only alias at best).
+- Mark `or_many_heap` ✅ in the [inventory](07-parity-inventory.md) when done (note
+  if `orManyHeap` is a thin alias of `orMany`).
