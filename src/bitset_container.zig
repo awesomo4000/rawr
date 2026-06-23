@@ -126,10 +126,7 @@ pub const BitsetContainer = struct {
 
     /// Compute cardinality by counting all set bits.
     pub fn computeCardinality(self: *Self) u32 {
-        var count: u32 = 0;
-        for (self.words) |word| {
-            count += @popCount(word);
-        }
+        const count = countWords(self.words);
         self.cardinality = @intCast(count);
         return count;
     }
@@ -154,6 +151,7 @@ pub const BitsetContainer = struct {
         const vec_count = NUM_WORDS / VEC_SIZE;
 
         var card: u64 = 0;
+        var card_vec: @Vector(VEC_SIZE, u64) = @splat(0);
         for (0..vec_count) |i| {
             const base = i * VEC_SIZE;
             const a: @Vector(VEC_SIZE, u64) = dst.words[base..][0..VEC_SIZE].*;
@@ -165,11 +163,29 @@ pub const BitsetContainer = struct {
                 .andnot => a & ~b,
             };
             dst.words[base..][0..VEC_SIZE].* = result;
-            inline for (0..VEC_SIZE) |j| {
-                card += @popCount(result[j]);
-            }
+            card_vec += @popCount(result);
         }
+        card += @reduce(.Add, card_vec);
         dst.cardinality = @intCast(card);
+    }
+
+    pub fn countWords(words: []const u64) u32 {
+        const VEC_SIZE = 8;
+
+        var count: u64 = 0;
+        var count_vec: @Vector(VEC_SIZE, u64) = @splat(0);
+
+        var i: usize = 0;
+        while (i + VEC_SIZE <= words.len) : (i += VEC_SIZE) {
+            const v: @Vector(VEC_SIZE, u64) = words[i..][0..VEC_SIZE].*;
+            count_vec += @popCount(v);
+        }
+        count += @reduce(.Add, count_vec);
+
+        for (words[i..]) |word| {
+            count += @popCount(word);
+        }
+        return @intCast(count);
     }
 
     /// SIMD-accelerated OR: dst |= src

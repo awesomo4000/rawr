@@ -141,9 +141,7 @@ fn bitsetRangeCardinality(bc: *const BitsetContainer, start: u16, end: u16) u32 
     }
 
     var count: u32 = @popCount(bc.words[first_word] & bitRangeMask(start_bit, 63));
-    for (bc.words[first_word + 1 .. last_word]) |word| {
-        count += @popCount(word);
-    }
+    count += BitsetContainer.countWords(bc.words[first_word + 1 .. last_word]);
     count += @popCount(bc.words[last_word] & bitRangeMask(0, end_bit));
     return count;
 }
@@ -775,17 +773,15 @@ fn arrayIntersectRunCard(ac: *ArrayContainer, rc: *RunContainer) u64 {
 fn bitsetIntersectBitsetCard(a: *BitsetContainer, b: *BitsetContainer) u64 {
     const VEC_SIZE = 8;
     const vec_count = 1024 / VEC_SIZE;
-    var card: u64 = 0;
+    var card_vec: @Vector(VEC_SIZE, u64) = @splat(0);
     for (0..vec_count) |i| {
         const base = i * VEC_SIZE;
         const va: @Vector(VEC_SIZE, u64) = a.words[base..][0..VEC_SIZE].*;
         const vb: @Vector(VEC_SIZE, u64) = b.words[base..][0..VEC_SIZE].*;
         const result = va & vb;
-        inline for (0..VEC_SIZE) |j| {
-            card += @popCount(result[j]);
-        }
+        card_vec += @popCount(result);
     }
-    return card;
+    return @reduce(.Add, card_vec);
 }
 
 fn bitsetIntersectRunCard(bc: *BitsetContainer, rc: *RunContainer) u64 {
