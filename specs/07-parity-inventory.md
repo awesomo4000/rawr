@@ -52,7 +52,7 @@ matrix.
 | CRoaring | Status | Effort | Maps cleanly? | Notes |
 |---|---|---|---|---|
 | `or_many`, `xor_many` | ✅ | M | clean | rawr `orMany`/`xorMany` (k-way merge + lazy fold). orMany ~1.25×, xorMany ~0.55× vs CRoaring. |
-| `or_many_heap` | ❌ | M | clean | balanced-merge parity API → `07-06b`. |
+| `or_many_heap` | ✅ | M | clean | rawr `orManyHeap` — **thin alias of `orMany`** (no distinct algorithm). CRoaring's `or_many_heap` is ~2× slower than its `or_many` on uniform-size inputs, so the alias suffices. |
 | `xor_many_heap` | ⛔ | — | — | **not exported in this vendored CRoaring** (TODO comment only). No oracle; rawr-only alias of `xorMany` at most. |
 | `lazy_or(_inplace)`, `lazy_xor(_inplace)`, `repair_after_lazy` | ✅ | L | needs design | rawr `lazyOr`/`lazyXor`/`repairAfterLazy` (+ in-place). Lazy bitset accumulation, single repair. |
 | `range_cardinality`, `range_cardinality_closed` | ✅ | S | clean | rawr `rangeCardinality`; vectorized windowed popcount (beats CRoaring on large single-chunk ranges). |
@@ -113,8 +113,11 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
    logic. rangeCardinality uses a vectorized windowed popcount.
 5. **`07-05` — n-way unions** (`or_many`/`xor_many`) *(done)* — k-way merge.
 6. **`07-06` — lazy + repair** *(done)* — lazy fold + single repair; orMany
-   85.78×→1.25×, xorMany 40.25×→0.55×. **`07-06b` — heap k-way cursor** (pending,
-   optional) closes orMany's residual ~1.25× from the linear `nextManyKey` scan.
+   85.78×→1.25×, xorMany 40.25×→0.55×. **`07-06b`** *(done)* — added `orManyHeap`
+   parity alias; the proposed reusable-workspace fix **regressed** orMany (~1.38×)
+   and was dropped, so the residual orMany gap (~1.14×) is left at parity. Final:
+   orMany ~1.14×, orManyHeap ~0.52× (vs CRoaring's slower `or_many_heap`), xorMany
+   ~0.54×.
 7. **`07-07` — bulk + extract** (`add_many`/`remove_many`/`to_uint32_array`).
 8. Tier 3 as opportunistic one-offs (`07-08+`).
 
