@@ -140,10 +140,16 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
 - **Tier-3 conveniences** — `clear` (most likely wanted), `add_offset`
   (domain-specific), then the rest as needed.
 - **`08-fuzzing`** (parked in `todo/`) — the next major effort.
-- Minor / low-priority: `rankMany` ~1.5× (batched rank vs CRoaring `rank_many` —
-  the last genuine non-timer-floor gap), `lazyOr+repair` 2-way sparse ~1.2× (lazy
-  outside its sweet spot), `add (sequential)` ~1.2× (per-value `findKey`; `addMany`
-  is the bulk path).
+- `rankMany` — *closed* ([`07-11`](07-11-rankmany-batch.md)): batch single-sweep
+  per container, 1.50×→1.03× (parity).
+- **Perf work effectively complete.** Remaining >1.0× rows are all either
+  timer-floor (sub-20 µs ops: `orMany` ~10 µs/1.23×, flip/removeRange both
+  0.00 ms), expected (`lazyOr+repair` 2-way sparse — lazy outside its niche; eager
+  `bitwiseOr` is faster), or run-to-run noise (`contains`, `serialize`,
+  `add`-sequential). rawr is at-or-faster than CRoaring on everything with
+  measurable absolute time.
+- *Optional completionist item:* `orMany` ~2 µs residual — would need a profile
+  pass first (the workspace guess regressed it), but it's chasing microseconds.
 
 Each impl spec follows the established discipline: extend `croaring_wrapper.h`
 with the oracle decl, implement, add a differential check (scalar-compare or
