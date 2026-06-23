@@ -36,6 +36,7 @@ roaring_bitmap_t *roaring_bitmap_xor(const roaring_bitmap_t *r1, const roaring_b
 roaring_bitmap_t *roaring_bitmap_andnot(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);
 roaring_bitmap_t *roaring_bitmap_flip_closed(const roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
 roaring_bitmap_t *roaring_bitmap_or_many(size_t number, const roaring_bitmap_t **rs);
+roaring_bitmap_t *roaring_bitmap_or_many_heap(uint32_t number, const roaring_bitmap_t **rs);
 roaring_bitmap_t *roaring_bitmap_xor_many(size_t number, const roaring_bitmap_t **rs);
 roaring_bitmap_t *roaring_bitmap_lazy_or(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2, bool bitsetconversion);
 void roaring_bitmap_lazy_or_inplace(roaring_bitmap_t *r1, const roaring_bitmap_t *r2, bool bitsetconversion);

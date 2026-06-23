@@ -294,6 +294,7 @@ fn runNwayCases(allocator: Allocator) !void {
     try runNwayPureRawrEdges(allocator);
     try runNwayGeneratedOracleCases(allocator);
     try runNwayHeterogeneousSameKeyCase(allocator);
+    try runOrManyHeapCases(allocator);
 }
 
 fn runNwayPureRawrEdges(allocator: Allocator) !void {
@@ -464,6 +465,79 @@ fn runNwayHeterogeneousSameKeyCase(allocator: Allocator) !void {
 
     try assertManyAgree(allocator, .bor, &rawr_inputs, &oracle_inputs, true, rawr_inputs.len);
     try assertManyAgree(allocator, .xor, &rawr_inputs, &oracle_inputs, true, rawr_inputs.len);
+}
+
+fn runOrManyHeapCases(allocator: Allocator) !void {
+    var prng = std.Random.DefaultPrng.init(0x0BEE_F006);
+    const rng = prng.random();
+    const ns = [_]usize{ 1, 2, 8, 32 };
+
+    for (&[_]bool{ false, true }) |run_optimize| {
+        for (ns) |n| {
+            var generated = try allocator.alloc(test_gen.Generated, n);
+            defer allocator.free(generated);
+            var generated_len: usize = 0;
+            defer {
+                for (generated[0..generated_len]) |*gen| gen.deinit();
+            }
+
+            var rawr_inputs = try allocator.alloc(*const RoaringBitmap, n);
+            defer allocator.free(rawr_inputs);
+            var oracle_inputs = try allocator.alloc(*c.roaring_bitmap_t, n);
+            defer allocator.free(oracle_inputs);
+            var oracle_len: usize = 0;
+            defer {
+                for (oracle_inputs[0..oracle_len]) |oracle| c.roaring_bitmap_free(oracle);
+            }
+
+            for (0..n) |i| {
+                generated[i] = try test_gen.randomMixed(allocator, rng, 8, run_optimize);
+                generated_len += 1;
+                rawr_inputs[i] = &generated[i].bm;
+                oracle_inputs[i] = try buildOracle(generated[i].values, run_optimize);
+                oracle_len += 1;
+            }
+
+            try assertOrManyHeapAgree(allocator, rawr_inputs, oracle_inputs, run_optimize, n);
+        }
+    }
+
+    try runOrManyHeapVaryingSizeCase(allocator);
+}
+
+fn runOrManyHeapVaryingSizeCase(allocator: Allocator) !void {
+    var prng = std.Random.DefaultPrng.init(0x0BEE_F007);
+    const rng = prng.random();
+
+    const chunk_sets = [_][]const test_gen.ChunkProfile{
+        &.{.{ .key = 1, .profile = .single }},
+        &.{ .{ .key = 1, .profile = .sparse }, .{ .key = 50, .profile = .boundary } },
+        &.{ .{ .key = 1, .profile = .dense }, .{ .key = 2, .profile = .dense }, .{ .key = 3, .profile = .runs } },
+        &.{ .{ .key = 10, .profile = .full }, .{ .key = 11, .profile = .full }, .{ .key = 12, .profile = .dense }, .{ .key = 13, .profile = .runs } },
+    };
+
+    var generated: [chunk_sets.len]test_gen.Generated = undefined;
+    var generated_len: usize = 0;
+    defer {
+        for (generated[0..generated_len]) |*gen| gen.deinit();
+    }
+
+    var rawr_inputs: [chunk_sets.len]*const RoaringBitmap = undefined;
+    var oracle_inputs: [chunk_sets.len]*c.roaring_bitmap_t = undefined;
+    var oracle_len: usize = 0;
+    defer {
+        for (oracle_inputs[0..oracle_len]) |oracle| c.roaring_bitmap_free(oracle);
+    }
+
+    for (chunk_sets, 0..) |chunks, i| {
+        generated[i] = try test_gen.build(allocator, rng, chunks, true);
+        generated_len += 1;
+        rawr_inputs[i] = &generated[i].bm;
+        oracle_inputs[i] = try buildOracle(generated[i].values, true);
+        oracle_len += 1;
+    }
+
+    try assertOrManyHeapAgree(allocator, &rawr_inputs, &oracle_inputs, true, rawr_inputs.len);
 }
 
 fn runLazyRepairCases(allocator: Allocator) !void {
@@ -1523,6 +1597,11 @@ fn buildManyOracle(op: ManyOp, inputs: []const *c.roaring_bitmap_t) !*c.roaring_
     };
 }
 
+fn buildOrManyHeapOracle(inputs: []const *c.roaring_bitmap_t) !*c.roaring_bitmap_t {
+    std.debug.assert(inputs.len > 0);
+    return c.roaring_bitmap_or_many_heap(@intCast(inputs.len), @ptrCast(@constCast(inputs.ptr))) orelse error.CRoaringAllocFailed;
+}
+
 fn assertManyAgree(
     allocator: Allocator,
     op: ManyOp,
@@ -1542,6 +1621,27 @@ fn assertManyAgree(
 
     var name_buf: [96]u8 = undefined;
     const name = try std.fmt.bufPrint(&name_buf, "{s}:n={d}:runopt={}", .{ op.name(), n, run_optimize });
+    try assertSameValues(allocator, name, &rawr_result, oracle_result);
+}
+
+fn assertOrManyHeapAgree(
+    allocator: Allocator,
+    rawr_inputs: []const *const RoaringBitmap,
+    oracle_inputs: []const *c.roaring_bitmap_t,
+    run_optimize: bool,
+    n: usize,
+) !void {
+    var rawr_result = try RoaringBitmap.orManyHeap(allocator, rawr_inputs);
+    defer rawr_result.deinit();
+    try rawr_result.validate();
+    const bytes = try rawr_result.serialize(allocator);
+    defer allocator.free(bytes);
+
+    const oracle_result = try buildOrManyHeapOracle(oracle_inputs);
+    defer c.roaring_bitmap_free(oracle_result);
+
+    var name_buf: [96]u8 = undefined;
+    const name = try std.fmt.bufPrint(&name_buf, "orManyHeap:n={d}:runopt={}", .{ n, run_optimize });
     try assertSameValues(allocator, name, &rawr_result, oracle_result);
 }
 

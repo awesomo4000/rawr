@@ -285,6 +285,12 @@ fn benchRawrOrMany() void {
     std.mem.doNotOptimizeAway(&result);
 }
 
+fn benchRawrOrManyHeap() void {
+    var result = RoaringBitmap.orManyHeap(allocator, &rawr_many_inputs) catch unreachable;
+    defer result.deinit();
+    std.mem.doNotOptimizeAway(&result);
+}
+
 fn benchRawrXorMany() void {
     var result = RoaringBitmap.xorMany(allocator, &rawr_many_inputs) catch unreachable;
     defer result.deinit();
@@ -590,6 +596,12 @@ fn benchCRoaringOrMany() void {
     std.mem.doNotOptimizeAway(result);
 }
 
+fn benchCRoaringOrManyHeap() void {
+    const result = c.roaring_bitmap_or_many_heap(N_MANY_BITMAPS, @ptrCast(&cr_many_inputs)) orelse unreachable;
+    defer c.roaring_bitmap_free(result);
+    std.mem.doNotOptimizeAway(result);
+}
+
 fn benchCRoaringXorMany() void {
     const result = c.roaring_bitmap_xor_many(N_MANY_BITMAPS, @ptrCast(&cr_many_inputs)) orelse unreachable;
     defer c.roaring_bitmap_free(result);
@@ -837,6 +849,10 @@ pub fn main(init: std.process.Init) !void {
     r = benchmark(init.io, benchRawrOrMany, .{});
     cr = benchmark(init.io, benchCRoaringOrMany, .{});
     printResult("orMany (32 mixed)", r.median_ns, cr.median_ns);
+
+    r = benchmark(init.io, benchRawrOrManyHeap, .{});
+    cr = benchmark(init.io, benchCRoaringOrManyHeap, .{});
+    printResult("orManyHeap (32 mixed)", r.median_ns, cr.median_ns);
 
     r = benchmark(init.io, benchRawrXorMany, .{});
     cr = benchmark(init.io, benchCRoaringXorMany, .{});

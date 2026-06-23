@@ -1193,6 +1193,13 @@ pub const RoaringBitmap = struct {
         return manyMerge(.bor, allocator, bitmaps);
     }
 
+    /// Return a new bitmap that is the union (OR) of all inputs.
+    /// CRoaring exposes this as a heap-based variant; rawr's k-way lazy merge is
+    /// already independent of input-size ordering, so this is a parity alias.
+    pub fn orManyHeap(allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self {
+        return orMany(allocator, bitmaps);
+    }
+
     /// Return a new bitmap that is the symmetric difference (XOR) of all inputs.
     pub fn xorMany(allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self {
         return manyMerge(.xor, allocator, bitmaps);
