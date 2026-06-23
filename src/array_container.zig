@@ -119,6 +119,13 @@ pub const ArrayContainer = struct {
 
     /// Add a value maintaining sorted order. Returns true if value was new.
     pub fn add(self: *Self, allocator: std.mem.Allocator, value: u16) !bool {
+        if (self.cardinality == 0 or value > self.values[self.cardinality - 1]) {
+            try self.ensureCapacity(allocator, self.cardinality + 1);
+            self.values[self.cardinality] = value;
+            self.cardinality += 1;
+            return true;
+        }
+
         const pos = self.lowerBound(value);
 
         // Check if already present
