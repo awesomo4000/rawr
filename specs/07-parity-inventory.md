@@ -142,12 +142,16 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
 - **`08-fuzzing`** (parked in `todo/`) — the next major effort.
 - `rankMany` — *closed* ([`07-11`](07-11-rankmany-batch.md)): batch single-sweep
   per container, 1.50×→1.03× (parity).
-- **Perf work effectively complete.** Remaining >1.0× rows are all either
-  timer-floor (sub-20 µs ops: `orMany` ~10 µs/1.23×, flip/removeRange both
-  0.00 ms), expected (`lazyOr+repair` 2-way sparse — lazy outside its niche; eager
-  `bitwiseOr` is faster), or run-to-run noise (`contains`, `serialize`,
-  `add`-sequential). rawr is at-or-faster than CRoaring on everything with
-  measurable absolute time.
+- **Perf work effectively complete.** Remaining >1.0× rows are timer-floor
+  (sub-20 µs ops: `orMany` ~10 µs/1.23×, flip/removeRange both 0.00 ms) or
+  run-to-run noise (`contains`, `serialize`, `add`-sequential). rawr is
+  at-or-faster than CRoaring on everything else.
+- `lazyOr+repair (sparse)` ~1.24× is a **real ~3 ms apples-to-apples gap** (rawr's
+  public 2-way `lazyOr`+repair vs CRoaring's), *not* noise — but low-value: the
+  scenario is pathological (forcing bitset conversion on sparse 2-way; plain
+  `bitwiseOr` is 0.96×, rawr faster) and the public `lazyOr` 2-way path is rarely
+  called directly (orMany uses the internal k-way fold, not `lazyOr`). Residual is
+  the per-chunk bitset alloc/zero/free traffic; profile before touching.
 - *Optional completionist item:* `orMany` ~2 µs residual — would need a profile
   pass first (the workspace guess regressed it), but it's chasing microseconds.
 
