@@ -66,9 +66,15 @@ pub fn containerSelect(c: Container, k: u32) ?u16 {
 /// Count values in the inclusive low-16 range [start, end].
 pub fn containerRangeCardinality(c: Container, start: u16, end: u16) u32 {
     if (start > end) return 0;
-    const hi = containerRank(c, end);
-    const lo = if (start == 0) 0 else containerRank(c, start - 1);
-    return hi - lo;
+    return switch (c) {
+        .array, .run => blk: {
+            const hi = containerRank(c, end);
+            const lo = if (start == 0) 0 else containerRank(c, start - 1);
+            break :blk hi - lo;
+        },
+        .bitset => |bc| bitsetRangeCardinality(bc, start, end),
+        .reserved => unreachable,
+    };
 }
 
 /// Return whether every value in inclusive low-16 range [start, end] is present.
@@ -121,6 +127,24 @@ fn bitsetRank(bc: *const BitsetContainer, low: u16) u32 {
     else
         (@as(u64, 1) << (bit + 1)) - 1;
     count += @popCount(bc.words[word_idx] & mask);
+    return count;
+}
+
+fn bitsetRangeCardinality(bc: *const BitsetContainer, start: u16, end: u16) u32 {
+    const first_word: usize = start >> 6;
+    const last_word: usize = end >> 6;
+    const start_bit: u6 = @truncate(start);
+    const end_bit: u6 = @truncate(end);
+
+    if (first_word == last_word) {
+        return @popCount(bc.words[first_word] & bitRangeMask(start_bit, end_bit));
+    }
+
+    var count: u32 = @popCount(bc.words[first_word] & bitRangeMask(start_bit, 63));
+    for (bc.words[first_word + 1 .. last_word]) |word| {
+        count += @popCount(word);
+    }
+    count += @popCount(bc.words[last_word] & bitRangeMask(0, end_bit));
     return count;
 }
 
