@@ -132,10 +132,13 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
 
 ### Known follow-ups (post-umbrella, optional)
 
-- **bitset×run ops are bit-by-bit** (root cause of flip wide-range 1.54 ms) →
-  **see [`07-09`](07-09-bitset-run-wordwise.md)** for the full fix (word-level
-  `clearRange`/`toggleRange` + rewriting the run paths). Speeds flip *and*
-  `removeRange` wide-range and any bitset+run op; obsoletes `07-03` Task 1b.
+- **bitset×run ops** ([`07-09`](07-09-bitset-run-wordwise.md), *done*) — word-wise
+  rewrite landed: `flip wide range` 1.54 ms→0.13 ms, `removeRange wide` 0.08 ms.
+  Residual ~10–26× absolute (130 µs vs CRoaring's ~10 µs; the displayed 396× is a
+  timer-floor artifact) is structural: flip = clone + mask + XOR copies each
+  container twice vs CRoaring's single direct-negation pass. `07-03` Task 1b
+  (direct per-container negation) would close it but is diminishing returns on a
+  sub-ms op — **left as-is unless flip proves hot.**
 - **Tier-3 conveniences** — `clear` (most likely wanted), `add_offset`
   (domain-specific), then the rest as needed.
 - **`08-fuzzing`** (parked in `todo/`) — the next major effort.
