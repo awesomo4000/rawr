@@ -296,11 +296,12 @@ pub const RunContainer = struct {
             run.length -= 1;
         } else {
             // Split the run
-            try self.ensureCapacity(allocator, self.n_runs + 1);
+            const run_start = run.start;
             const original_end = run.end();
+            try self.ensureCapacity(allocator, self.n_runs + 1);
 
             // Shrink current run
-            run.length = value - run.start - 1;
+            self.runs[idx].length = value - run_start - 1;
 
             // Insert new run after
             if (idx + 1 < self.n_runs) {

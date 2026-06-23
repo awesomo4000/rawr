@@ -54,6 +54,7 @@ pub fn main() !void {
         try runRangeCases(allocator);
         try runNwayCases(allocator);
         try runLazyRepairCases(allocator);
+        try runBulkExtractCases(allocator);
         try runTransitionCases(allocator);
         try runOracleAnchoredIdentities(allocator);
         try runRandomizedLoop(allocator);
@@ -684,6 +685,227 @@ fn runLazyRepairEdgeCases(allocator: Allocator) !void {
         std.debug.print("FAIL: repair:large-lazy-bitset - expected one bitset container\n", .{});
         return error.LazyRepairExpectedBitset;
     }
+}
+
+fn runBulkExtractCases(allocator: Allocator) !void {
+    try runBulkExtractEdgeCases(allocator);
+
+    for (&[_]bool{ false, true }) |run_optimize| {
+        var prng = std.Random.DefaultPrng.init(if (run_optimize) 0xB011_0001 else 0xB011_0000);
+        const rng = prng.random();
+
+        const chunks = [_]test_gen.ChunkProfile{
+            .{ .key = 1, .profile = .sparse },
+            .{ .key = 2, .profile = .dense },
+            .{ .key = 3, .profile = .runs },
+            .{ .key = 4, .profile = .full },
+        };
+        var generated = try test_gen.build(allocator, rng, &chunks, run_optimize);
+        defer generated.deinit();
+
+        const add_values = try bulkAddValues(allocator, generated.values);
+        defer allocator.free(add_values);
+        const remove_values = try bulkRemoveValues(allocator, generated.values);
+        defer allocator.free(remove_values);
+
+        var empty = try RoaringBitmap.init(allocator);
+        defer empty.deinit();
+        const empty_values = [_]u32{};
+        try assertAddManyAgree(allocator, "bulk:addMany:empty", &empty, &empty_values, add_values, run_optimize);
+
+        const start_chunks = [_]test_gen.ChunkProfile{
+            .{ .key = 0, .profile = .single },
+            .{ .key = 2, .profile = .sparse },
+            .{ .key = 8, .profile = .dense },
+        };
+        var start = try test_gen.build(allocator, rng, &start_chunks, run_optimize);
+        defer start.deinit();
+        try assertAddManyAgree(allocator, "bulk:addMany:populated", &start.bm, start.values, add_values, run_optimize);
+
+        try assertRemoveManyAgree(allocator, "bulk:removeMany:mixed", &generated.bm, generated.values, remove_values, run_optimize);
+        try assertToArrayAgree(allocator, "bulk:toArray:mixed", &generated.bm);
+    }
+}
+
+fn runBulkExtractEdgeCases(allocator: Allocator) !void {
+    var empty = try RoaringBitmap.init(allocator);
+    defer empty.deinit();
+    const empty_values = [_]u32{};
+    try assertAddManyAgree(allocator, "bulk:addMany:empty-input", &empty, &empty_values, &empty_values, false);
+    try assertRemoveManyAgree(allocator, "bulk:removeMany:empty-input", &empty, &empty_values, &empty_values, false);
+    try assertToArrayAgree(allocator, "bulk:toArray:empty", &empty);
+
+    const duplicates = [_]u32{
+        0x0002_0001,
+        0x0002_0001,
+        0x0002_0001,
+        0x0001_FFFF,
+        0x0001_FFFF,
+        0x0003_0000,
+        0x0003_0000,
+    };
+    try assertAddManyAgree(allocator, "bulk:addMany:duplicates", &empty, &empty_values, &duplicates, false);
+}
+
+fn assertAddManyAgree(
+    allocator: Allocator,
+    name: []const u8,
+    start: *const RoaringBitmap,
+    start_values: []const u32,
+    values: []const u32,
+    run_optimize: bool,
+) !void {
+    var bulk = try start.clone(allocator);
+    defer bulk.deinit();
+    try bulk.addMany(values);
+    try bulk.validate();
+
+    var looped = try start.clone(allocator);
+    defer looped.deinit();
+    for (values) |value| {
+        _ = try looped.add(value);
+    }
+    try looped.validate();
+    try expectRawrEqual(name, &bulk, &looped);
+
+    const oracle = try buildOracle(start_values, run_optimize);
+    defer c.roaring_bitmap_free(oracle);
+    if (values.len > 0) {
+        c.roaring_bitmap_add_many(oracle, values.len, values.ptr);
+    }
+    try assertSameValues(allocator, name, &bulk, oracle);
+}
+
+fn assertRemoveManyAgree(
+    allocator: Allocator,
+    name: []const u8,
+    start: *const RoaringBitmap,
+    start_values: []const u32,
+    values: []const u32,
+    run_optimize: bool,
+) !void {
+    var bulk = try start.clone(allocator);
+    defer bulk.deinit();
+    try bulk.removeMany(values);
+    try bulk.validate();
+
+    var looped = try start.clone(allocator);
+    defer looped.deinit();
+    for (values) |value| {
+        _ = try looped.remove(value);
+    }
+    try looped.validate();
+    try expectRawrEqual(name, &bulk, &looped);
+
+    const oracle = try buildOracle(start_values, run_optimize);
+    defer c.roaring_bitmap_free(oracle);
+    if (values.len > 0) {
+        c.roaring_bitmap_remove_many(oracle, values.len, values.ptr);
+    }
+    try assertSameValues(allocator, name, &bulk, oracle);
+}
+
+fn assertToArrayAgree(allocator: Allocator, name: []const u8, bm: *RoaringBitmap) !void {
+    const card: usize = @intCast(bm.cardinality());
+
+    const rawr_alloc = try bm.toArrayAlloc(allocator);
+    defer allocator.free(rawr_alloc);
+    if (rawr_alloc.len != card) {
+        std.debug.print("FAIL: {s}:toArrayAlloc length differs: got={d} want={d}\n", .{ name, rawr_alloc.len, card });
+        return error.CardinalityMismatch;
+    }
+
+    const rawr_out = try allocator.alloc(u32, card);
+    defer allocator.free(rawr_out);
+    const written = bm.toArray(rawr_out);
+    if (written != card or !std.mem.eql(u32, rawr_out, rawr_alloc)) {
+        std.debug.print("FAIL: {s}:toArray differs from toArrayAlloc\n", .{name});
+        return error.ContentMismatch;
+    }
+
+    var iter_out = try allocator.alloc(u32, card);
+    defer allocator.free(iter_out);
+    var it = bm.iterator();
+    var i: usize = 0;
+    while (it.next()) |value| : (i += 1) {
+        iter_out[i] = value;
+    }
+    if (i != card or !std.mem.eql(u32, iter_out, rawr_alloc)) {
+        std.debug.print("FAIL: {s}:toArray differs from iterator\n", .{name});
+        return error.ContentMismatch;
+    }
+
+    const oracle = try buildOracle(rawr_alloc, false);
+    defer c.roaring_bitmap_free(oracle);
+    const oracle_out = try allocator.alloc(u32, card);
+    defer allocator.free(oracle_out);
+    if (card > 0) {
+        c.roaring_bitmap_to_uint32_array(oracle, oracle_out.ptr);
+    }
+    if (!std.mem.eql(u32, oracle_out, rawr_alloc)) {
+        std.debug.print("FAIL: {s}:toArray differs from CRoaring output\n", .{name});
+        return error.ContentMismatch;
+    }
+}
+
+fn bulkAddValues(allocator: Allocator, base: []const u32) ![]u32 {
+    var values = std.array_list.Managed(u32).init(allocator);
+    defer values.deinit();
+
+    const step = @max(base.len / 256, 1);
+    var i: usize = base.len;
+    while (i > 0) {
+        i -|= step;
+        try values.append(base[i]);
+        if (i % (step * 3) == 0) try values.append(base[i]);
+        if (i < step) break;
+    }
+
+    try values.appendSlice(&.{
+        0,
+        1,
+        0x0001_0000,
+        0x0001_0001,
+        0x0002_FFFE,
+        0x0002_FFFF,
+        0x0005_0101,
+        0x0005_0101,
+        0xFFFF_FFFE,
+        0xFFFF_FFFF,
+    });
+
+    return values.toOwnedSlice();
+}
+
+fn bulkRemoveValues(allocator: Allocator, base: []const u32) ![]u32 {
+    var values = std.array_list.Managed(u32).init(allocator);
+    defer values.deinit();
+
+    for (base) |value| {
+        if (value >> 16 == 1) {
+            try values.append(value);
+        }
+    }
+
+    const step = @max(base.len / 128, 1);
+    var i: usize = base.len;
+    while (i > 0) {
+        i -|= step;
+        try values.append(base[i]);
+        if (i % (step * 4) == 0) try values.append(base[i]);
+        if (i < step) break;
+    }
+
+    try values.appendSlice(&.{
+        0,
+        0x0001_0000,
+        0x0001_0000,
+        0x0007_0007,
+        0x8000_0000,
+        0xFFFF_FFFF,
+    });
+
+    return values.toOwnedSlice();
 }
 
 fn runTransitionCases(allocator: Allocator) !void {

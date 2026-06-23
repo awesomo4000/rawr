@@ -19,12 +19,15 @@ void roaring_bitmap_free(const roaring_bitmap_t *r);
 // Basic operations
 void roaring_bitmap_add(roaring_bitmap_t *r, uint32_t x);
 bool roaring_bitmap_add_checked(roaring_bitmap_t *r, uint32_t x);
+void roaring_bitmap_add_many(roaring_bitmap_t *r, size_t n_args, const uint32_t *vals);
 void roaring_bitmap_add_range(roaring_bitmap_t *r, uint64_t min, uint64_t max);
+void roaring_bitmap_remove_many(roaring_bitmap_t *r, size_t n_args, const uint32_t *vals);
 bool roaring_bitmap_contains(const roaring_bitmap_t *r, uint32_t x);
 uint64_t roaring_bitmap_get_cardinality(const roaring_bitmap_t *r);
 bool roaring_bitmap_is_empty(const roaring_bitmap_t *r);
 uint32_t roaring_bitmap_minimum(const roaring_bitmap_t *r);
 uint32_t roaring_bitmap_maximum(const roaring_bitmap_t *r);
+void roaring_bitmap_to_uint32_array(const roaring_bitmap_t *r, uint32_t *ans);
 void roaring_bitmap_remove_range_closed(roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
 uint64_t roaring_bitmap_range_cardinality_closed(const roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
 bool roaring_bitmap_contains_range_closed(const roaring_bitmap_t *r, uint32_t lo, uint32_t hi);

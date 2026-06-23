@@ -132,6 +132,20 @@ fn benchRawrAddSequential() void {
     std.mem.doNotOptimizeAway(&bm);
 }
 
+fn benchRawrAddManyRandom() void {
+    var bm = RoaringBitmap.init(allocator) catch unreachable;
+    defer bm.deinit();
+    bm.addMany(&random_values) catch unreachable;
+    std.mem.doNotOptimizeAway(&bm);
+}
+
+fn benchRawrAddManySequential() void {
+    var bm = RoaringBitmap.init(allocator) catch unreachable;
+    defer bm.deinit();
+    bm.addMany(&sequential_values) catch unreachable;
+    std.mem.doNotOptimizeAway(&bm);
+}
+
 fn benchRawrAddRange() void {
     var bm = RoaringBitmap.init(allocator) catch unreachable;
     defer bm.deinit();
@@ -352,6 +366,47 @@ fn benchRawrIterate() void {
     std.mem.doNotOptimizeAway(sum);
 }
 
+var rawr_to_array_out: ?[]u32 = null;
+var cr_to_array_out: ?[]u32 = null;
+
+fn initToArrayBuffers() void {
+    if (rawr_to_array_out != null) return;
+
+    const rawr_card: usize = @intCast(rawr_contains_bm.?.cardinality());
+    const cr_card: usize = @intCast(c.roaring_bitmap_get_cardinality(cr_contains_bm.?));
+    rawr_to_array_out = allocator.alloc(u32, rawr_card) catch unreachable;
+    cr_to_array_out = allocator.alloc(u32, cr_card) catch unreachable;
+}
+
+fn benchRawrToArray() void {
+    const bm = &rawr_contains_bm.?;
+    const written = bm.toArray(rawr_to_array_out.?);
+    std.mem.doNotOptimizeAway(written);
+    std.mem.doNotOptimizeAway(rawr_to_array_out.?[rawr_to_array_out.?.len - 1]);
+}
+
+fn benchCRoaringToArray() void {
+    const bm = cr_contains_bm.?;
+    c.roaring_bitmap_to_uint32_array(bm, cr_to_array_out.?.ptr);
+    std.mem.doNotOptimizeAway(cr_to_array_out.?[cr_to_array_out.?.len - 1]);
+}
+
+fn benchRawrToArrayAlloc() void {
+    const bm = &rawr_contains_bm.?;
+    const values = bm.toArrayAlloc(allocator) catch unreachable;
+    defer allocator.free(values);
+    std.mem.doNotOptimizeAway(values.ptr);
+}
+
+fn benchCRoaringToArrayAlloc() void {
+    const bm = cr_contains_bm.?;
+    const card: usize = @intCast(c.roaring_bitmap_get_cardinality(bm));
+    const values = allocator.alloc(u32, card) catch unreachable;
+    defer allocator.free(values);
+    c.roaring_bitmap_to_uint32_array(bm, values.ptr);
+    std.mem.doNotOptimizeAway(values.ptr);
+}
+
 var rawr_serialized: ?[]u8 = null;
 
 fn initRawrSerialized() void {
@@ -459,6 +514,20 @@ fn benchCRoaringAddSequential() void {
     for (sequential_values) |v| {
         c.roaring_bitmap_add(bm, v);
     }
+    std.mem.doNotOptimizeAway(bm);
+}
+
+fn benchCRoaringAddManyRandom() void {
+    const bm = c.roaring_bitmap_create() orelse unreachable;
+    defer c.roaring_bitmap_free(bm);
+    c.roaring_bitmap_add_many(bm, N_VALUES, &random_values);
+    std.mem.doNotOptimizeAway(bm);
+}
+
+fn benchCRoaringAddManySequential() void {
+    const bm = c.roaring_bitmap_create() orelse unreachable;
+    defer c.roaring_bitmap_free(bm);
+    c.roaring_bitmap_add_many(bm, N_VALUES, &sequential_values);
     std.mem.doNotOptimizeAway(bm);
 }
 
@@ -794,6 +863,14 @@ pub fn main(init: std.process.Init) !void {
     cr = benchmark(init.io, benchCRoaringAddSequential, .{});
     printResult("add (sequential 1M)", r.median_ns, cr.median_ns);
 
+    r = benchmark(init.io, benchRawrAddManyRandom, .{});
+    cr = benchmark(init.io, benchCRoaringAddManyRandom, .{});
+    printResult("addMany (random 1M)", r.median_ns, cr.median_ns);
+
+    r = benchmark(init.io, benchRawrAddManySequential, .{});
+    cr = benchmark(init.io, benchCRoaringAddManySequential, .{});
+    printResult("addMany (sequential 1M)", r.median_ns, cr.median_ns);
+
     r = benchmark(init.io, benchRawrAddRange, .{});
     cr = benchmark(init.io, benchCRoaringAddRange, .{});
     printResult("addRange (1M)", r.median_ns, cr.median_ns);
@@ -865,6 +942,15 @@ pub fn main(init: std.process.Init) !void {
     cr = benchmark(init.io, benchCRoaringIterate, .{});
     printResult("iterate (1M values)", r.median_ns, cr.median_ns);
 
+    initToArrayBuffers();
+    r = benchmark(init.io, benchRawrToArray, .{});
+    cr = benchmark(init.io, benchCRoaringToArray, .{});
+    printResult("toArray (1M values)", r.median_ns, cr.median_ns);
+
+    r = benchmark(init.io, benchRawrToArrayAlloc, .{});
+    cr = benchmark(init.io, benchCRoaringToArrayAlloc, .{});
+    printResult("toArrayAlloc (1M values)", r.median_ns, cr.median_ns);
+
     // --- Serialization ---
     std.debug.print("\nSERIALIZATION\n", .{});
     initRawrSerialized();
@@ -930,6 +1016,8 @@ pub fn main(init: std.process.Init) !void {
     for (&rawr_many_bms) |*maybe_bm| {
         if (maybe_bm.*) |*bm| bm.deinit();
     }
+    if (rawr_to_array_out) |s| allocator.free(s);
+    if (cr_to_array_out) |s| allocator.free(s);
     if (rawr_serialized) |s| allocator.free(s);
 
     if (cr_contains_bm) |bm| c.roaring_bitmap_free(bm);

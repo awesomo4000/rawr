@@ -335,6 +335,31 @@ pub const RoaringBitmap = struct {
         return true;
     }
 
+    /// Add all values in the slice. Values need not be sorted.
+    pub fn addMany(self: *Self, values: []const u32) !void {
+        if (values.len == 0) return;
+        self.cached_cardinality = -1;
+
+        var cursor_key: ?u16 = null;
+        var cursor_idx: usize = 0;
+
+        for (values) |value| {
+            const key = highBits(value);
+            const low = lowBits(value);
+
+            if (cursor_key == null or cursor_key.? != key or cursor_idx >= self.size or self.keys[cursor_idx] != key) {
+                cursor_idx = self.lowerBound(key);
+                cursor_key = key;
+            }
+
+            if (cursor_idx < self.size and self.keys[cursor_idx] == key) {
+                _ = try self.addToContainer(cursor_idx, low);
+            } else {
+                try self.insertContainerAt(cursor_idx, key, low);
+            }
+        }
+    }
+
     /// Add a range of values [lo, hi] inclusive. Returns count of newly added values.
     pub fn addRange(self: *Self, lo: u32, hi: u32) !u64 {
         if (lo > hi) return 0;
@@ -632,6 +657,32 @@ pub const RoaringBitmap = struct {
         return removed;
     }
 
+    /// Remove all values in the slice. Values need not be sorted.
+    pub fn removeMany(self: *Self, values: []const u32) !void {
+        if (values.len == 0 or self.size == 0) return;
+        self.cached_cardinality = -1;
+
+        var cursor_key: ?u16 = null;
+        var cursor_idx: usize = 0;
+
+        for (values) |value| {
+            const key = highBits(value);
+            const low = lowBits(value);
+
+            if (cursor_key == null or cursor_key.? != key or cursor_idx >= self.size or self.keys[cursor_idx] != key) {
+                cursor_idx = self.lowerBound(key);
+                cursor_key = key;
+            }
+
+            if (cursor_idx >= self.size or self.keys[cursor_idx] != key) continue;
+
+            _ = try self.removeFromContainer(cursor_idx, low);
+            if (cursor_idx >= self.size or self.keys[cursor_idx] != key) {
+                cursor_key = null;
+            }
+        }
+    }
+
     /// Remove value from container at index.
     fn removeFromContainer(self: *Self, idx: usize, low: u16) !bool {
         const tp = self.containers[idx];
@@ -650,6 +701,11 @@ pub const RoaringBitmap = struct {
         const card = Container.fromTagged(self.containers[idx]).getCardinality();
         if (card == 0) {
             self.removeContainerAt(idx);
+        } else if (self.containers[idx].getType() == .bitset and card <= ArrayContainer.MAX_CARDINALITY) {
+            const bc = self.containers[idx].getBitset();
+            const ac = try ops.bitsetToArray(self.allocator, bc);
+            bc.deinit(self.allocator);
+            self.containers[idx] = TaggedPtr.initArray(ac);
         }
 
         return true;
@@ -675,6 +731,80 @@ pub const RoaringBitmap = struct {
             total += Container.fromTagged(tp).getCardinality();
         }
         self.cached_cardinality = @intCast(total);
+        return total;
+    }
+
+    /// Allocate and return all values in ascending order.
+    pub fn toArrayAlloc(self: *const Self, allocator: std.mem.Allocator) ![]u32 {
+        const total = self.cardinalityConst();
+        const values = try allocator.alloc(u32, @intCast(total));
+        errdefer allocator.free(values);
+        const written = self.toArray(values);
+        std.debug.assert(written == values.len);
+        return values;
+    }
+
+    /// Fill a caller-provided slice with all values in ascending order.
+    pub fn toArray(self: *const Self, out: []u32) usize {
+        std.debug.assert(out.len >= self.cardinalityConst());
+
+        var pos: usize = 0;
+        for (self.keys[0..self.size], self.containers[0..self.size]) |key, tp| {
+            const high = @as(u32, key) << 16;
+            switch (Container.fromTagged(tp)) {
+                .array => |ac| {
+                    for (ac.values[0..ac.cardinality]) |low| {
+                        out[pos] = high | low;
+                        pos += 1;
+                    }
+                },
+                .bitset => |bc| {
+                    for (bc.words, 0..) |word, word_idx| {
+                        var bits = word;
+                        while (bits != 0) {
+                            const bit = @ctz(bits);
+                            bits &= bits - 1;
+                            out[pos] = high | @as(u32, @intCast(word_idx * 64 + bit));
+                            pos += 1;
+                        }
+                    }
+                },
+                .run => |rc| {
+                    for (rc.runs[0..rc.n_runs]) |run| {
+                        const end = @as(u32, run.start) + run.length;
+                        var low: u32 = run.start;
+                        while (low <= end) : (low += 1) {
+                            out[pos] = high | low;
+                            pos += 1;
+                        }
+                    }
+                },
+                .reserved => unreachable,
+            }
+        }
+        return pos;
+    }
+
+    fn cardinalityConst(self: *const Self) u64 {
+        if (self.cached_cardinality >= 0) return @intCast(self.cached_cardinality);
+
+        var total: u64 = 0;
+        for (self.containers[0..self.size]) |tp| {
+            switch (Container.fromTagged(tp)) {
+                .array => |ac| total += ac.cardinality,
+                .bitset => |bc| total += if (bc.cardinality >= 0) @as(u32, @intCast(bc.cardinality)) else BitsetContainer.countWords(bc.words),
+                .run => |rc| {
+                    if (rc.cardinality >= 0) {
+                        total += @as(u32, @intCast(rc.cardinality));
+                    } else {
+                        for (rc.runs[0..rc.n_runs]) |run| {
+                            total += run.size();
+                        }
+                    }
+                },
+                .reserved => unreachable,
+            }
+        }
         return total;
     }
 
