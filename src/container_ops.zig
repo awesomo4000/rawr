@@ -53,6 +53,19 @@ pub fn containerRank(c: Container, low: u16) u32 {
     };
 }
 
+/// Rank sorted probes that all target this container in one forward sweep.
+/// `base` is the rank accumulated from prior containers.
+pub fn containerRankMany(c: Container, base: u64, values: []const u32, out: []u64) usize {
+    std.debug.assert(out.len >= values.len);
+    switch (c) {
+        .array => |ac| arrayRankMany(ac, base, values, out),
+        .bitset => |bc| bitsetRankMany(bc, base, values, out),
+        .run => |rc| runRankMany(rc, base, values, out),
+        .reserved => unreachable,
+    }
+    return values.len;
+}
+
 /// Return the k-th value in a container, 0-based.
 pub fn containerSelect(c: Container, k: u32) ?u16 {
     return switch (c) {
@@ -75,6 +88,56 @@ pub fn containerRangeCardinality(c: Container, start: u16, end: u16) u32 {
         .bitset => |bc| bitsetRangeCardinality(bc, start, end),
         .reserved => unreachable,
     };
+}
+
+fn arrayRankMany(ac: *const ArrayContainer, base: u64, values: []const u32, out: []u64) void {
+    var cursor: usize = 0;
+    const array_values = ac.values[0..ac.cardinality];
+    for (values, out[0..values.len]) |value, *rank_out| {
+        const low: u16 = @truncate(value);
+        while (cursor < array_values.len and array_values[cursor] <= low) : (cursor += 1) {}
+        rank_out.* = base + cursor;
+    }
+}
+
+fn bitsetRankMany(bc: *const BitsetContainer, base: u64, values: []const u32, out: []u64) void {
+    var word_idx: usize = 0;
+    var running: u32 = 0;
+
+    for (values, out[0..values.len]) |value, *rank_out| {
+        const low: u16 = @truncate(value);
+        const target_word: usize = low >> 6;
+        const bit: u6 = @truncate(low);
+
+        while (word_idx < target_word) : (word_idx += 1) {
+            running += @popCount(bc.words[word_idx]);
+        }
+
+        const mask = if (bit == 63)
+            ~@as(u64, 0)
+        else
+            (@as(u64, 1) << (bit + 1)) - 1;
+        rank_out.* = base + running + @popCount(bc.words[target_word] & mask);
+    }
+}
+
+fn runRankMany(rc: *const RunContainer, base: u64, values: []const u32, out: []u64) void {
+    var run_idx: usize = 0;
+    var running: u32 = 0;
+
+    for (values, out[0..values.len]) |value, *rank_out| {
+        const low: u16 = @truncate(value);
+
+        while (run_idx < rc.n_runs and rc.runs[run_idx].end() < low) : (run_idx += 1) {
+            running += rc.runs[run_idx].size();
+        }
+
+        if (run_idx >= rc.n_runs or low < rc.runs[run_idx].start) {
+            rank_out.* = base + running;
+        } else {
+            rank_out.* = base + running + @as(u32, low - rc.runs[run_idx].start) + 1;
+        }
+    }
 }
 
 /// Return whether every value in inclusive low-16 range [start, end] is present.

@@ -973,19 +973,29 @@ pub const RoaringBitmap = struct {
 
         var container_idx: usize = 0;
         var prior: u64 = 0;
+        var value_idx: usize = 0;
 
-        for (values, out) |value, *rank_out| {
-            const target_key = highBits(value);
-            const target_low = lowBits(value);
+        while (value_idx < values.len) {
+            const target_key = highBits(values[value_idx]);
 
             while (container_idx < self.size and self.keys[container_idx] < target_key) : (container_idx += 1) {
                 prior += Container.fromTagged(self.containers[container_idx]).getCardinality();
             }
 
             if (container_idx < self.size and self.keys[container_idx] == target_key) {
-                rank_out.* = prior + ops.containerRank(Container.fromTagged(self.containers[container_idx]), target_low);
+                var run_end = value_idx + 1;
+                while (run_end < values.len and highBits(values[run_end]) == target_key) : (run_end += 1) {}
+
+                const consumed = ops.containerRankMany(
+                    Container.fromTagged(self.containers[container_idx]),
+                    prior,
+                    values[value_idx..run_end],
+                    out[value_idx..run_end],
+                );
+                value_idx += consumed;
             } else {
-                rank_out.* = prior;
+                out[value_idx] = prior;
+                value_idx += 1;
             }
         }
     }
