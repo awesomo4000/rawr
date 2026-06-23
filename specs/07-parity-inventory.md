@@ -51,8 +51,9 @@ matrix.
 
 | CRoaring | Status | Effort | Maps cleanly? | Notes |
 |---|---|---|---|---|
-| `or_many`, `or_many_heap`, `xor_many`, `xor_many_heap` | ❌ | M | clean | n-way unions. Naive = fold pairwise; heap/lazy variants are the optimization. |
-| `lazy_or(_inplace)`, `lazy_xor(_inplace)`, `repair_after_lazy` | ❌ | L | needs design | Skip cardinality/normalization maintenance during bulk, repair once at end. The handoff's "lazy n-way unions." Real perf win for `or_many`; meaningful internal change (lazy container state). |
+| `or_many`, `xor_many` | ✅ | M | clean | rawr `orMany`/`xorMany` (k-way merge + lazy fold). orMany ~1.25×, xorMany ~0.55× vs CRoaring. |
+| `or_many_heap`, `xor_many_heap` | ❌ | M | clean | heap/balanced-merge cursor → `07-06b` (closes orMany's residual linear-scan gap). |
+| `lazy_or(_inplace)`, `lazy_xor(_inplace)`, `repair_after_lazy` | ✅ | L | needs design | rawr `lazyOr`/`lazyXor`/`repairAfterLazy` (+ in-place). Lazy bitset accumulation, single repair. |
 | `range_cardinality`, `range_cardinality_closed` | ✅ | S | clean | rawr `rangeCardinality`; vectorized windowed popcount (beats CRoaring on large single-chunk ranges). |
 | `contains_range`, `contains_range_closed` | ✅ | S | clean | rawr `containsRange` (early-exit). |
 | `to_uint32_array` | ❌ | S | clean | bulk dump to `[]u32`. Iterator covers it functionally; this is the allocate-and-fill convenience + speed. |
@@ -109,11 +110,12 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
 4. **`07-04` — range operations** *(done)* (`remove_range` + `range_cardinality`
    + `contains_range` + `intersect_with_range`) — related per-container range
    logic. rangeCardinality uses a vectorized windowed popcount.
-5. **`07-05` — n-way unions** (`or_many`/`xor_many`), then **`07-06` lazy +
-   repair** as a follow-on (the lazy machinery is the L-effort design piece —
-   keep it separate; may itself sub-split `07-06a/b`).
-6. **`07-07` — bulk + extract** (`add_many`/`remove_many`/`to_uint32_array`).
-7. Tier 3 as opportunistic one-offs (`07-08+`).
+5. **`07-05` — n-way unions** (`or_many`/`xor_many`) *(done)* — k-way merge.
+6. **`07-06` — lazy + repair** *(done)* — lazy fold + single repair; orMany
+   85.78×→1.25×, xorMany 40.25×→0.55×. **`07-06b` — heap k-way cursor** (pending,
+   optional) closes orMany's residual ~1.25× from the linear `nextManyKey` scan.
+7. **`07-07` — bulk + extract** (`add_many`/`remove_many`/`to_uint32_array`).
+8. Tier 3 as opportunistic one-offs (`07-08+`).
 
 (Numbering is a guide, not a contract — reorder as priorities shift.)
 
