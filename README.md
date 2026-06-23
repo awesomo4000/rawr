@@ -3,6 +3,10 @@
 Roaring bitmap library in pure Zig. Wire-compatible with CRoaring (serialized
 bitmaps interoperate across implementations). No C dependencies.
 
+rawr supports mutation, set operations, positional queries (`rank`/`select`),
+inclusive range operations, n-way union/xor, bulk add/remove/extract, and
+zero-copy reads. See [API.md](API.md) for the full reference and footgun notes.
+
 ## Interop
 
 Implements the [RoaringFormatSpec](https://github.com/RoaringBitmap/RoaringFormatSpec)
@@ -56,10 +60,24 @@ try bm.bitwiseOrInPlace(&other);
 const bytes = try bm.serialize(std.heap.smp_allocator);
 defer std.heap.smp_allocator.free(bytes);
 
-// Deserialize
+// Deserialize trusted bytes
 var restored = try RoaringBitmap.deserialize(std.heap.smp_allocator, bytes);
 defer restored.deinit();
+
+// Deserialize untrusted bytes with semantic validation
+var safe = try RoaringBitmap.deserializeSafe(std.heap.smp_allocator, bytes);
+defer safe.deinit();
 ```
+
+Range APIs are inclusive. `addRange(100, 200)` adds 101 values.
+
+### Bitmap types
+
+| Type | Use when |
+|------|----------|
+| `RoaringBitmap` | You need mutation, in-place set operations, or long-lived ownership. |
+| `OwnedBitmap` | You want an arena-backed read-only result that frees in one call. |
+| `FrozenBitmap` | You have serialized bytes and want zero-copy lookup. |
 
 ### OwnedBitmap (recommended for read-heavy patterns)
 
@@ -76,6 +94,7 @@ defer owned.deinit(); // frees everything at once
 
 assert(owned.contains(42));
 const card = owned.cardinality();
+const min = owned.asBitmap().minimum(); // full read-only RoaringBitmap API
 var it = owned.iterator();
 
 // Set operations
@@ -124,7 +143,7 @@ Requires Zig 0.16.0+.
 ```bash
 zig build              # build library
 zig build test         # run tests
-zig build validate     # CRoaring interop validation (18 tests)
+zig build validate     # CRoaring interop validation
 zig build bench        # rawr-only benchmarks
 zig build bench-compare # rawr vs CRoaring comparison
 zig build bench-alloc  # allocator matrix experiment

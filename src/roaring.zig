@@ -3,9 +3,22 @@
 //! Roaring bitmaps partition 32-bit integers into chunks of 2^16 values.
 //! Each chunk uses the optimal container type based on cardinality.
 
+// ============================================================================
+// Public API
+// ============================================================================
+
 pub const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
 pub const OwnedBitmap = @import("bitmap.zig").OwnedBitmap;
 pub const FrozenBitmap = @import("frozen.zig").FrozenBitmap;
+pub const ValidateError = RoaringBitmap.ValidateError;
+
+// ============================================================================
+// Internal exports
+// ============================================================================
+//
+// Exposed for rawr's validation, benchmarks, and differential tooling. These are
+// not part of the stable public API and may change without notice.
+
 pub const ArrayContainer = @import("array_container.zig").ArrayContainer;
 pub const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
 pub const RunContainer = @import("run_container.zig").RunContainer;

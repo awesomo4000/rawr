@@ -1,218 +1,287 @@
 # rawr API Guide
 
+rawr's stable public API is:
+
+- `RoaringBitmap`: mutable, caller-allocated bitmap.
+- `OwnedBitmap`: arena-backed owned result for read-heavy temporary values.
+- `FrozenBitmap`: zero-copy read-only view over serialized bytes.
+- `ValidateError`: structural validation errors from `RoaringBitmap.validate()`.
+
+The module root also exposes container internals for rawr's own benchmarks,
+validation, and differential tooling. Those internal exports are not part of the
+stable API and may change.
+
 ## Bitmap Types
 
-rawr provides three bitmap types for different access patterns.
-
-**`RoaringBitmap`** — Mutable bitmap with caller-managed allocation. Supports add, remove, and in-place set operations. You provide the allocator and call `deinit()` when done.
-
-**`OwnedBitmap`** — Immutable, arena-backed bitmap. Returned by `*Owned` factory methods. Fastest for read-only results you'll query and discard. A single `deinit()` frees all internal memory at once.
-
-**`FrozenBitmap`** — Zero-copy view over serialized bytes. No allocation or deserialization cost. Supports `contains`, `cardinality`, and `iterator`. The backing bytes must outlive the bitmap.
-
-```
-                    ┌─────────────────┐
-   Mutable          │ RoaringBitmap   │  ← add, remove, in-place ops
-                    └────────┬────────┘
-                             │ serialize
-                    ┌────────▼────────┐
-   Immutable        │ OwnedBitmap     │  ← set op results, deserialized
-   (arena-backed)   └────────┬────────┘
-                             │ or skip deserialization entirely
-                    ┌────────▼────────┐
-   Zero-copy        │ FrozenBitmap    │  ← mmap, embedded bytes, lookup-only
-                    └─────────────────┘
-```
-
-| Scenario | Type | Why |
+| Type | Use When | Notes |
 |---|---|---|
-| Building a set incrementally | `RoaringBitmap` | Need add/remove |
-| Accumulating results in a loop | `RoaringBitmap` | Need in-place ops |
-| Set operation result (read then discard) | `OwnedBitmap` via `bitwiseAndOwned` | Fast alloc, bulk free |
-| Lookup against stored/mmap'd data | `FrozenBitmap` | Zero deserialization cost |
-| Estimating overlap between two sets | Neither — use `andCardinality` | No allocation at all |
+| `RoaringBitmap` | You need mutation or in-place operations | Call `deinit()` when done. |
+| `OwnedBitmap` | You need a read-only result and bulk-free lifetime | Returned by `*Owned` helpers. Use `asBitmap()` for the full read-only API. |
+| `FrozenBitmap` | You have serialized bytes and want zero-copy lookup | Backing bytes must outlive the view. |
 
----
+```zig
+var bm = try rawr.RoaringBitmap.init(allocator);
+defer bm.deinit();
+
+var owned = try rawr.RoaringBitmap.deserializeSafeOwned(allocator, bytes);
+defer owned.deinit();
+const min = owned.asBitmap().minimum();
+
+var frozen = try rawr.FrozenBitmap.init(bytes);
+defer frozen.deinit();
+```
+
+## Footguns
+
+### Ranges Are Inclusive
+
+All range APIs use inclusive endpoints:
+
+```zig
+_ = try bm.addRange(0, 100);       // adds 101 values: 0 through 100
+_ = try bm.removeRange(10, 20);    // removes 11 values if all are present
+const n = bm.rangeCardinality(0, 100);
+```
+
+This applies to `addRange`, `removeRange`, `flip`, `flipInplace`,
+`rangeCardinality`, `containsRange`, and `intersectsRange`.
+
+### Use `deserializeSafe` For Untrusted Bytes
+
+`deserialize` is bounds-safe, but it does not semantically validate every
+container invariant. Use `deserializeSafe` for untrusted input, or call
+`validate()` after `deserialize`.
+
+```zig
+var trusted = try RoaringBitmap.deserialize(allocator, bytes);
+var untrusted = try RoaringBitmap.deserializeSafe(allocator, bytes);
+```
+
+### Iterators Are Invalidated By Mutation
+
+Mutating a bitmap while iterating invalidates the iterator. Finish iterating, or
+snapshot the bitmap first.
+
+### Lazy Results Must Be Repaired
+
+`lazyOr`, `lazyXor`, `lazyOrInPlace`, and `lazyXorInPlace` leave the result in an
+invalid intermediate state until `repairAfterLazy()` succeeds. For ordinary
+two-way set operations, prefer eager `bitwiseOr` and `bitwiseXor`.
+
+```zig
+var result = try a.lazyOr(allocator, &b, true);
+defer result.deinit();
+try result.repairAfterLazy();
+```
+
+### `fromSorted` Requires Strictly Sorted Unique Input
+
+`fromSorted` is for data already known to be strictly ascending with no
+duplicates. Debug builds assert this; release builds may silently corrupt the
+bitmap if the precondition is violated. Use `fromSlice` for arbitrary input.
+
+```zig
+var arbitrary = [_]u32{ 10, 3, 3, 7 };
+var bm = try RoaringBitmap.fromSlice(allocator, &arbitrary);
+```
+
+### Querying `OwnedBitmap`
+
+`OwnedBitmap` keeps a few convenience methods, and `asBitmap()` exposes the full
+read-only `RoaringBitmap` surface:
+
+```zig
+const card = owned.cardinality();
+const max = owned.asBitmap().maximum();
+const overlap = owned.asBitmap().andCardinality(&other);
+```
 
 ## Construction
-
-### From individual values
 
 ```zig
 var bm = try RoaringBitmap.init(allocator);
 defer bm.deinit();
 
-_ = try bm.add(42);      // returns true (new value)
-_ = try bm.add(42);      // returns false (already present)
-_ = try bm.add(100);
+_ = try bm.add(42);
+try bm.addMany(&values);
+_ = try bm.addRange(1000, 1999); // inclusive
+
+var sorted = try RoaringBitmap.fromSorted(allocator, sorted_unique_values);
+defer sorted.deinit();
+
+var arbitrary = try RoaringBitmap.fromSlice(allocator, mutable_values);
+defer arbitrary.deinit();
 ```
 
-### Bulk: sorted, unique data — O(n)
+Owned construction helpers:
 
 ```zig
-const values = [_]u32{ 1, 5, 10, 100 };
-var bm = try RoaringBitmap.fromSorted(allocator, &values);
-defer bm.deinit();
-```
+var from_slice = try RoaringBitmap.fromSliceOwned(backing_allocator, mutable_values);
+defer from_slice.deinit();
 
-Input must be strictly ascending with no duplicates. Debug builds assert this. Violation in release builds causes silent corruption. Use when the source is already ordered (database cursor output, pre-processed pipelines).
-
-### Bulk: arbitrary data — O(n log n)
-
-```zig
-var values = [_]u32{ 10, 3, 3, 7, 1, 10 };
-var bm = try RoaringBitmap.fromSlice(allocator, &values);
-defer bm.deinit();
-// bm contains {1, 3, 7, 10}
-```
-
-Sorts and deduplicates in-place. Takes `[]u32` (mutable) — the signature signals that your data gets modified. Use when you don't control input ordering.
-
-### Bulk: ranges
-
-```zig
-_ = try bm.addRange(1000, 1999); // inclusive [1000, 1999]
-```
-
-Returns count of newly added values. O(R) where R is the number of affected run containers.
-
-### From serialized bytes
-
-```zig
-// Standard
-var bm = try RoaringBitmap.deserialize(allocator, bytes);
-defer bm.deinit();
-
-// Arena-backed (faster, recommended for read-mostly use)
-var owned = try RoaringBitmap.deserializeOwned(page_allocator, bytes);
+var owned = try RoaringBitmap.deserializeSafeOwned(backing_allocator, bytes);
 defer owned.deinit();
-
-// Zero-copy (no allocation — bytes must outlive the bitmap)
-var frozen = try FrozenBitmap.init(bytes);
 ```
 
----
-
-## Querying
+## Mutation
 
 ```zig
-bm.contains(42)        // bool — is this value present?
-bm.cardinality()       // u64  — total number of values (O(1), cached)
-bm.isEmpty()           // bool — cardinality == 0?
-bm.minimum()           // ?u32 — smallest value, or null
-bm.maximum()           // ?u32 — largest value, or null
+_ = try bm.add(value);
+try bm.addMany(values);
+_ = try bm.addRange(lo, hi);       // inclusive
+
+_ = try bm.remove(value);
+try bm.removeMany(values);
+_ = try bm.removeRange(lo, hi);    // inclusive
 ```
 
-`cardinality()` is O(1) — the count is cached and maintained incrementally through mutations. The cache is invalidated on bulk operations and recomputed on the next call.
+## Queries
 
----
+```zig
+bm.contains(value)                 // bool
+bm.cardinality()                   // u64, const-safe
+bm.isEmpty()                       // bool
+bm.minimum()                       // ?u32
+bm.maximum()                       // ?u32
+bm.validate()                      // ValidateError!void
+```
 
-## Iteration
+Positional queries:
+
+```zig
+bm.rank(value)                     // count values <= value
+bm.select(index)                   // ?u32, 0-based
+bm.getIndex(value)                 // ?u64, null if absent
+bm.rankMany(sorted_values, out)    // batched ranks; input must be sorted
+```
+
+Range queries:
+
+```zig
+bm.rangeCardinality(lo, hi)        // u64, inclusive
+bm.containsRange(lo, hi)           // bool, inclusive
+bm.intersectsRange(lo, hi)         // bool, inclusive
+```
+
+## Extraction And Iteration
 
 ```zig
 var it = bm.iterator();
 while (it.next()) |value| {
-    // value: u32, always in ascending order
+    // values in ascending order
 }
+
+const values = try bm.toArrayAlloc(allocator);
+defer allocator.free(values);
+
+const written = bm.toArray(out);
 ```
-
-Works on all three bitmap types. O(n) total cost.
-
----
 
 ## Set Operations
 
-Every set operation exists in three forms:
-
-| Form | Signature | Mutates self | Returns | Use for |
-|---|---|---|---|---|
-| Allocating | `bitwiseAnd(allocator, other)` | No | new `RoaringBitmap` | General use |
-| In-place | `bitwiseAndInPlace(other)` | Yes | void | Accumulation loops |
-| Owned | `bitwiseAndOwned(backing, other)` | No | `OwnedBitmap` | Fast temporary results |
-
-Same pattern for **Or**, **Difference**, and **Xor**.
-
-### Allocating — new result
+Allocating two-way operations:
 
 ```zig
-var result = try a.bitwiseAnd(allocator, &b);
+var and_result = try a.bitwiseAnd(allocator, &b);
+var or_result = try a.bitwiseOr(allocator, &b);
+var xor_result = try a.bitwiseXor(allocator, &b);
+var diff_result = try a.bitwiseDifference(allocator, &b); // a \ b
+```
+
+In-place two-way operations:
+
+```zig
+try a.bitwiseAndInPlace(&b);
+try a.bitwiseOrInPlace(&b);
+try a.bitwiseXorInPlace(&b);
+try a.bitwiseDifferenceInPlace(&b);
+```
+
+Owned two-way operations:
+
+```zig
+var result = try a.bitwiseAndOwned(backing_allocator, &b);
 defer result.deinit();
 ```
 
-Both inputs are `*const` — not modified.
-
-### In-place — mutate self
+N-way operations:
 
 ```zig
-try working_set.bitwiseOrInPlace(&additions);         // self |= other
-try candidates.bitwiseAndInPlace(&filter);             // self &= other
-try remaining.bitwiseDifferenceInPlace(&processed);    // self -= other
-try changed.bitwiseXorInPlace(&previous);              // self ^= other
+var union_result = try RoaringBitmap.orMany(allocator, bitmaps);
+var heap_union = try RoaringBitmap.orManyHeap(allocator, bitmaps);
+var xor_result = try RoaringBitmap.xorMany(allocator, bitmaps);
+
+var owned_union = try RoaringBitmap.orManyOwned(backing_allocator, bitmaps);
+var owned_xor = try RoaringBitmap.xorManyOwned(backing_allocator, bitmaps);
 ```
 
-The `other` argument is `*const` — not modified.
-
-### Owned — arena-backed result
+Range-producing operations:
 
 ```zig
-var result = try a.bitwiseAndOwned(page_allocator, &b);
-defer result.deinit();
+var flipped = try bm.flip(allocator, lo, hi); // inclusive
+try bm.flipInplace(lo, hi);                   // inclusive
 ```
 
-Fastest for results you'll read and discard. The backing allocator feeds an internal arena.
-
----
-
-## Analytics (No Allocation)
-
-### andCardinality — |A ∩ B| without materializing
+Lazy operations:
 
 ```zig
-const overlap = a.andCardinality(&b);
+var lazy = try a.lazyOr(allocator, &b, true);
+try lazy.repairAfterLazy();
+
+var lazy_xor = try a.lazyXor(allocator, &b);
+try lazy_xor.repairAfterLazy();
+
+try a.lazyOrInPlace(&b, true);
+try a.repairAfterLazy();
+
+try a.lazyXorInPlace(&b);
+try a.repairAfterLazy();
 ```
 
-Returns the number of values common to both bitmaps. Zero allocation — uses SIMD popcount for bitset containers and galloping merge for arrays. Use for selectivity estimation, overlap analysis, or any case where you need the intersection size but not the intersection itself.
+## Analytics And Comparison
 
-### intersects — boolean overlap check
+No-allocation cardinality variants:
 
 ```zig
-if (a.intersects(&b)) {
-    // at least one shared value
-}
+a.andCardinality(&b)               // |A intersection B|
+a.orCardinality(&b)                // |A union B|
+a.xorCardinality(&b)               // |A symmetric-difference B|
+a.differenceCardinality(&b)        // |A \ B|
+a.jaccardIndex(&b)                 // |A intersection B| / |A union B|
+a.intersects(&b)                   // early-exit overlap check
 ```
 
-Early-exits on first match. Cheaper than `andCardinality` when you only need yes/no.
-
----
-
-## Comparison
+Comparison:
 
 ```zig
-a.equals(&b)       // true if both contain the same values
-a.isSubsetOf(&b)   // true if every value in a is also in b
+a.equals(&b)
+a.isSubsetOf(&b)
+a.isStrictSubsetOf(&b)
 ```
-
-Both are single-pass O(n).
-
----
 
 ## Serialization
 
-Wire-format compatible with CRoaring (RoaringFormatSpec). Bitmaps serialized by CRoaring can be deserialized by rawr and vice versa.
+rawr uses the CRoaring-compatible RoaringFormatSpec wire format.
 
 ```zig
-// Serialize to bytes
 const bytes = try bm.serialize(allocator);
 defer allocator.free(bytes);
 
-// Serialize to any std.Io.Writer-compatible writer
 try bm.serializeToWriter(writer);
-
-// Check size before allocating
 const size = bm.serializedSizeInBytes();
+
+var trusted = try RoaringBitmap.deserialize(allocator, bytes);
+defer trusted.deinit();
+
+var safe = try RoaringBitmap.deserializeSafe(allocator, bytes);
+defer safe.deinit();
+
+var from_reader = try RoaringBitmap.deserializeFromReader(allocator, reader, data_len);
+defer from_reader.deinit();
 ```
 
----
+`OwnedBitmap.serialize(out_allocator)` allocates the output with the provided
+allocator, not the internal arena.
 
 ## Optimization
 
@@ -220,63 +289,89 @@ const size = bm.serializedSizeInBytes();
 const converted = try bm.runOptimize();
 ```
 
-Converts containers to run-length encoding where it saves space. Call after bulk construction (many `add` or `addRange` calls) before serialization. Returns the number of containers converted. Does not change the values in the bitmap.
+`runOptimize` converts containers to run-length encoding where it saves space.
+It does not change the represented values.
 
----
+## `OwnedBitmap`
+
+```zig
+owned.contains(value)
+owned.cardinality()
+owned.iterator()
+owned.serialize(out_allocator)
+owned.asBitmap()                   // *const RoaringBitmap
+owned.deinit()
+```
+
+`OwnedBitmap` is read-only by convention. Use `asBitmap()` for read-only APIs
+such as `minimum`, `maximum`, `rank`, `select`, `equals`, `isSubsetOf`, and the
+cardinality variants.
+
+## `FrozenBitmap`
+
+```zig
+var frozen = try FrozenBitmap.init(bytes);
+defer frozen.deinit();
+
+frozen.contains(value)
+frozen.cardinality()
+frozen.isEmpty()
+frozen.iterator()
+```
+
+The serialized bytes must remain alive for the lifetime of the `FrozenBitmap`.
 
 ## Allocator Guide
 
-| Allocator | Speed | Notes |
-|---|---|---|
-| `std.heap.c_allocator` | **Avoid** | 10-40x slower due to alignment overhead |
-| `std.heap.smp_allocator` | Fast | Best default for long-lived mutable bitmaps |
-| `std.heap.ArenaAllocator` | Faster | Batch operations, scoped lifetimes, bulk free |
-| `OwnedBitmap` (internal arena) | Fastest convenience | Use the `*Owned` methods |
-| `std.heap.FixedBufferAllocator` | Fastest possible | Pre-sized buffers for hot loops |
-
-The `c_allocator` penalty comes from Zig's wrapper enforcing 32-byte alignment and vtable dispatch on every allocation. Rawr creates many small containers — the per-allocation cost adds up. Use `smp_allocator` as a drop-in replacement.
-
-### Scoped arena pattern
-
-```zig
-var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
-defer arena.deinit();
-const alloc = arena.allocator();
-
-var result = try set_a.bitwiseAnd(alloc, &set_b);
-var filtered = try result.bitwiseAnd(alloc, &set_c);
-// use filtered...
-// arena.deinit() frees everything at once
-```
-
----
+| Allocator | Use When |
+|---|---|
+| `OwnedBitmap` helpers | Fast temporary read-only results. |
+| `std.heap.smp_allocator` | Long-lived mutable bitmaps. |
+| `std.heap.ArenaAllocator` | Batch operations with bulk-free lifetime. |
+| `std.heap.FixedBufferAllocator` | Hot paths with known memory bounds. |
+| `std.heap.c_allocator` | Avoid for rawr's many small allocations. |
 
 ## Quick Reference
 
-```
-CONSTRUCT        init → add/addRange    fromSorted(sorted unique)    fromSlice(anything)
-                 deserialize(bytes)     FrozenBitmap.init(bytes)
+```text
+PUBLIC TYPES      RoaringBitmap, OwnedBitmap, FrozenBitmap, ValidateError
 
-QUERY            contains(u32) → bool   cardinality() → u64          isEmpty() → bool
-                 minimum() → ?u32       maximum() → ?u32
+CONSTRUCT         init, fromSorted, fromSlice, fromSliceOwned
+                  deserialize, deserializeSafe, deserializeFromReader
+                  deserializeOwned, deserializeSafeOwned
 
-SET OPS          bitwiseAnd             bitwiseOr                    bitwiseDifference
-(new result)     bitwiseXor
+MUTATE            add, addMany, addRange, remove, removeMany, removeRange
 
-SET OPS          bitwiseAndInPlace      bitwiseOrInPlace             bitwiseDifferenceInPlace
-(mutate self)    bitwiseXorInPlace
+QUERY             contains, cardinality, isEmpty, minimum, maximum, validate
 
-ANALYTICS        andCardinality(other) → u64     intersects(other) → bool
+POSITIONAL        rank, select, getIndex, rankMany
 
-ARENA RESULTS    bitwiseAndOwned        bitwiseOrOwned               bitwiseDifferenceOwned
-                 deserializeOwned       fromSliceOwned
+RANGES            flip, flipInplace, rangeCardinality, containsRange,
+                  intersectsRange
 
-ITERATE          iterator() → Iterator { .next() → ?u32 }
+SET OPS           bitwiseAnd, bitwiseOr, bitwiseXor, bitwiseDifference
+                  bitwiseAndInPlace, bitwiseOrInPlace, bitwiseXorInPlace,
+                  bitwiseDifferenceInPlace
+                  bitwiseAndOwned, bitwiseOrOwned, bitwiseDifferenceOwned,
+                  flipOwned
 
-SERIALIZE        serialize(alloc) → []u8          serializeToWriter(writer)
-                 serializedSizeInBytes() → usize
+N-WAY             orMany, orManyHeap, xorMany, orManyOwned, xorManyOwned
 
-COMPARE          equals(other) → bool             isSubsetOf(other) → bool
+LAZY              lazyOr, lazyXor, lazyOrInPlace, lazyXorInPlace,
+                  repairAfterLazy
 
-OPTIMIZE         runOptimize() → u32
+ANALYTICS         andCardinality, orCardinality, xorCardinality,
+                  differenceCardinality, jaccardIndex, intersects
+
+COMPARE           equals, isSubsetOf, isStrictSubsetOf
+
+EXTRACT           iterator, toArray, toArrayAlloc
+
+SERIALIZE         serialize, serializeToWriter, serializedSizeInBytes
+
+OPTIMIZE          runOptimize
+
+OWNED             asBitmap, contains, cardinality, iterator, serialize, deinit
+
+FROZEN            init, contains, cardinality, isEmpty, iterator, deinit
 ```

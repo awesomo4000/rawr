@@ -724,14 +724,11 @@ pub const RoaringBitmap = struct {
     }
 
     /// Get the total cardinality (number of values).
-    pub fn cardinality(self: *Self) u64 {
-        if (self.cached_cardinality >= 0) return @intCast(self.cached_cardinality);
-        var total: u64 = 0;
-        for (self.containers[0..self.size]) |tp| {
-            total += Container.fromTagged(tp).getCardinality();
-        }
-        self.cached_cardinality = @intCast(total);
-        return total;
+    ///
+    /// If the cached cardinality is invalid, this recomputes without mutating
+    /// the bitmap or container caches so the method remains const-safe.
+    pub fn cardinality(self: *const Self) u64 {
+        return self.cardinalityConst();
     }
 
     /// Allocate and return all values in ascending order.
@@ -2314,8 +2311,16 @@ pub const OwnedBitmap = struct {
         return self.bitmap.contains(value);
     }
 
+    /// Borrow the underlying bitmap for read-only queries.
+    ///
+    /// Use this to access the full `RoaringBitmap` read-only surface, such as
+    /// `minimum`, `maximum`, `equals`, `rank`, `select`, and cardinality variants.
+    pub fn asBitmap(self: *const OwnedBitmap) *const RoaringBitmap {
+        return &self.bitmap;
+    }
+
     /// Return the number of values in the bitmap.
-    pub fn cardinality(self: *OwnedBitmap) u64 {
+    pub fn cardinality(self: *const OwnedBitmap) u64 {
         return self.bitmap.cardinality();
     }
 
