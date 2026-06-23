@@ -57,10 +57,10 @@ matrix.
 | `lazy_or(_inplace)`, `lazy_xor(_inplace)`, `repair_after_lazy` | ✅ | L | needs design | rawr `lazyOr`/`lazyXor`/`repairAfterLazy` (+ in-place). Lazy bitset accumulation, single repair. |
 | `range_cardinality`, `range_cardinality_closed` | ✅ | S | clean | rawr `rangeCardinality`; vectorized windowed popcount (beats CRoaring on large single-chunk ranges). |
 | `contains_range`, `contains_range_closed` | ✅ | S | clean | rawr `containsRange` (early-exit). |
-| `to_uint32_array` | ❌ | S | clean | bulk dump to `[]u32`. Iterator covers it functionally; this is the allocate-and-fill convenience + speed. |
+| `to_uint32_array` | ✅ | S | clean | rawr `toArrayAlloc`/`toArray` (bulk per-container fill). |
 | `range_uint32_array` | ❌ | S | clean | values in a range to array. |
-| `add_many` | ❌ | S | clean | bulk add into existing bitmap (rawr has `fromSlice` for fresh only). |
-| `remove_many` | ❌ | S | clean | bulk remove. |
+| `add_many` | ✅ | S | clean | rawr `addMany` (cursor reuse + array append fast-path). Sequential ~1.08×. |
+| `remove_many` | ✅ | S | clean | rawr `removeMany`. |
 | `add_bulk` | ◑ | M | needs design | uses a reusable "bulk context" cursor for sorted adds. `fromSorted` covers fresh; this is amortized incremental. |
 | `contains_bulk` | ◑ | S | clean | contains with a cursor hint; `contains` covers it, this is the cursor optimization. |
 | `jaccard_index` | ✅ | S | clean | rawr `jaccardIndex`. |
@@ -118,7 +118,9 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
    and was dropped, so the residual orMany gap (~1.14×) is left at parity. Final:
    orMany ~1.14×, orManyHeap ~0.52× (vs CRoaring's slower `or_many_heap`), xorMany
    ~0.54×.
-7. **`07-07` — bulk + extract** (`add_many`/`remove_many`/`to_uint32_array`).
+7. **`07-07` — bulk + extract** *(done)* (`add_many`/`remove_many`/
+   `to_uint32_array`) — cursor reuse + array append fast-path (sequential addMany
+   1.37×→1.08×), bulk per-container extract.
 8. Tier 3 as opportunistic one-offs (`07-08+`).
 
 (Numbering is a guide, not a contract — reorder as priorities shift.)
