@@ -132,13 +132,10 @@ own wrapper/impl/differential-test and pass/fail. Tick them off here as they lan
 
 ### Known follow-ups (post-umbrella, optional)
 
-- **bitset×run ops are bit-by-bit** (root cause of flip wide-range 1.54 ms) —
-  `bitsetXorRun`/`bitsetDifferenceRun`/`bitsetIntersectRun`/`bitsetUnionRun`
-  (allocating) toggle per value over run ranges; `bitsetUnionRunInPlace` already
-  shows the word-wise `setRange` pattern. Fix: add `clearRange`/`toggleRange`
-  word-level helpers and rewrite the run paths word-wise. Speeds flip *and*
-  `removeRange` wide-range and any bitset+run op. **Obsoletes `07-03` Task 1b**
-  (no direct-negation rewrite needed). Bench was confirmed fair.
+- **bitset×run ops are bit-by-bit** (root cause of flip wide-range 1.54 ms) →
+  **see [`07-09`](07-09-bitset-run-wordwise.md)** for the full fix (word-level
+  `clearRange`/`toggleRange` + rewriting the run paths). Speeds flip *and*
+  `removeRange` wide-range and any bitset+run op; obsoletes `07-03` Task 1b.
 - **Tier-3 conveniences** — `clear` (most likely wanted), `add_offset`
   (domain-specific), then the rest as needed.
 - **`08-fuzzing`** (parked in `todo/`) — the next major effort.
