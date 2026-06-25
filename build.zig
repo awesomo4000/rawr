@@ -165,6 +165,11 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
 }) void {
     mod.addIncludePath(b.path(opts.include_dir));
 
+    if (opts.target.result.os.tag == .freebsd) {
+        mod.addCMacro("bswap64", "__builtin_bswap64");
+        mod.addCMacro("CROARING_COMPILER_SUPPORTS_AVX512", "0");
+    }
+
     if (opts.c_source) |c_source| {
         mod.addCSourceFile(.{
             .file = b.path(c_source),
@@ -179,6 +184,10 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
         .optimize = opts.optimize,
     });
     translate_c.addIncludePath(b.path(opts.include_dir));
+    if (opts.target.result.os.tag == .freebsd) {
+        translate_c.defineCMacro("bswap64", "__builtin_bswap64");
+        translate_c.defineCMacro("CROARING_COMPILER_SUPPORTS_AVX512", "0");
+    }
 
     mod.addImport(opts.import_name, translate_c.createModule());
 }
