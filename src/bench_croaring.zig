@@ -2,6 +2,7 @@ const std = @import("std");
 const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
 const c = @import("c");
+const bench_time = @import("bench_time.zig");
 
 const allocator = std.heap.smp_allocator;
 
@@ -17,7 +18,7 @@ const BenchResult = struct {
     p75_ns: u64,
 };
 
-fn benchmark(io: std.Io, comptime func: anytype, args: anytype) BenchResult {
+fn benchmark(comptime func: anytype, args: anytype) BenchResult {
     var times: [BENCH_RUNS]u64 = undefined;
 
     // Warmup
@@ -27,10 +28,9 @@ fn benchmark(io: std.Io, comptime func: anytype, args: anytype) BenchResult {
 
     // Timed runs
     for (0..BENCH_RUNS) |i| {
-        const start = std.Io.Clock.awake.now(io);
+        const start = bench_time.monotonicNanos();
         _ = @call(.auto, func, args);
-        const elapsed = start.durationTo(std.Io.Clock.awake.now(io));
-        times[i] = @intCast(elapsed.toNanoseconds());
+        times[i] = bench_time.monotonicNanos() - start;
     }
 
     // Sort for percentiles
@@ -844,9 +844,9 @@ fn benchCRoaringRangeCardinalityBitsetLarge() void {
 // Main
 // ============================================================================
 
-pub fn main(init: std.process.Init) !void {
+pub fn main() !void {
     // Print header with timestamp
-    const ts = std.Io.Clock.real.now(init.io).toSeconds();
+    const ts = bench_time.realtimeSeconds();
     const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = @intCast(ts) };
     const day_seconds = epoch_seconds.getDaySeconds();
     const year_day = epoch_seconds.getEpochDay().calculateYearDay();
@@ -871,24 +871,24 @@ pub fn main(init: std.process.Init) !void {
     printHeader();
     std.debug.print("ADD OPERATIONS\n", .{});
 
-    var r = benchmark(init.io, benchRawrAddRandom, .{});
-    var cr = benchmark(init.io, benchCRoaringAddRandom, .{});
+    var r = benchmark(benchRawrAddRandom, .{});
+    var cr = benchmark(benchCRoaringAddRandom, .{});
     printResult("add (random 1M)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrAddSequential, .{});
-    cr = benchmark(init.io, benchCRoaringAddSequential, .{});
+    r = benchmark(benchRawrAddSequential, .{});
+    cr = benchmark(benchCRoaringAddSequential, .{});
     printResult("add (sequential 1M)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrAddManyRandom, .{});
-    cr = benchmark(init.io, benchCRoaringAddManyRandom, .{});
+    r = benchmark(benchRawrAddManyRandom, .{});
+    cr = benchmark(benchCRoaringAddManyRandom, .{});
     printResult("addMany (random 1M)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrAddManySequential, .{});
-    cr = benchmark(init.io, benchCRoaringAddManySequential, .{});
+    r = benchmark(benchRawrAddManySequential, .{});
+    cr = benchmark(benchCRoaringAddManySequential, .{});
     printResult("addMany (sequential 1M)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrAddRange, .{});
-    cr = benchmark(init.io, benchCRoaringAddRange, .{});
+    r = benchmark(benchRawrAddRange, .{});
+    cr = benchmark(benchCRoaringAddRange, .{});
     printResult("addRange (1M)", r.median_ns, cr.median_ns);
 
     // --- Contains benchmarks ---
@@ -896,12 +896,12 @@ pub fn main(init: std.process.Init) !void {
     initRawrContainsBm();
     initCRoaringContainsBm();
 
-    r = benchmark(init.io, benchRawrContainsHit, .{});
-    cr = benchmark(init.io, benchCRoaringContainsHit, .{});
+    r = benchmark(benchRawrContainsHit, .{});
+    cr = benchmark(benchCRoaringContainsHit, .{});
     printResult("contains (hit)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrContainsMiss, .{});
-    cr = benchmark(init.io, benchCRoaringContainsMiss, .{});
+    r = benchmark(benchRawrContainsMiss, .{});
+    cr = benchmark(benchCRoaringContainsMiss, .{});
     printResult("contains (miss)", r.median_ns, cr.median_ns);
 
     // --- Set operations ---
@@ -913,58 +913,58 @@ pub fn main(init: std.process.Init) !void {
     initRawrManyBitmaps();
     initCRoaringManyBitmaps();
 
-    r = benchmark(init.io, benchRawrAndSparse, .{});
-    cr = benchmark(init.io, benchCRoaringAndSparse, .{});
+    r = benchmark(benchRawrAndSparse, .{});
+    cr = benchmark(benchCRoaringAndSparse, .{});
     printResult("bitwiseAnd (sparse)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrAndSparseArena, .{});
+    r = benchmark(benchRawrAndSparseArena, .{});
     printResult("bitwiseAnd (sparse, arena)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrAndDense, .{});
-    cr = benchmark(init.io, benchCRoaringAndDense, .{});
+    r = benchmark(benchRawrAndDense, .{});
+    cr = benchmark(benchCRoaringAndDense, .{});
     printResult("bitwiseAnd (dense)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrOrSparse, .{});
-    cr = benchmark(init.io, benchCRoaringOrSparse, .{});
+    r = benchmark(benchRawrOrSparse, .{});
+    cr = benchmark(benchCRoaringOrSparse, .{});
     printResult("bitwiseOr (sparse)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrOrSparseArena, .{});
+    r = benchmark(benchRawrOrSparseArena, .{});
     printResult("bitwiseOr (sparse, arena)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrLazyOrSparseRepair, .{});
-    cr = benchmark(init.io, benchCRoaringLazyOrSparseRepair, .{});
+    r = benchmark(benchRawrLazyOrSparseRepair, .{});
+    cr = benchmark(benchCRoaringLazyOrSparseRepair, .{});
     printResult("lazyOr+repair (sparse)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrOrDense, .{});
-    cr = benchmark(init.io, benchCRoaringOrDense, .{});
+    r = benchmark(benchRawrOrDense, .{});
+    cr = benchmark(benchCRoaringOrDense, .{});
     printResult("bitwiseOr (dense)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrOrMany, .{});
-    cr = benchmark(init.io, benchCRoaringOrMany, .{});
+    r = benchmark(benchRawrOrMany, .{});
+    cr = benchmark(benchCRoaringOrMany, .{});
     printResult("orMany (32 mixed)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrOrManyHeap, .{});
-    cr = benchmark(init.io, benchCRoaringOrManyHeap, .{});
+    r = benchmark(benchRawrOrManyHeap, .{});
+    cr = benchmark(benchCRoaringOrManyHeap, .{});
     printResult("orManyHeap (32 mixed)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrXorMany, .{});
-    cr = benchmark(init.io, benchCRoaringXorMany, .{});
+    r = benchmark(benchRawrXorMany, .{});
+    cr = benchmark(benchCRoaringXorMany, .{});
     printResult("xorMany (32 mixed)", r.median_ns, cr.median_ns);
 
     // --- Iteration ---
     std.debug.print("\nITERATION\n", .{});
 
-    r = benchmark(init.io, benchRawrIterate, .{});
-    cr = benchmark(init.io, benchCRoaringIterate, .{});
+    r = benchmark(benchRawrIterate, .{});
+    cr = benchmark(benchCRoaringIterate, .{});
     printResult("iterate (1M values)", r.median_ns, cr.median_ns);
 
     initToArrayBuffers();
-    r = benchmark(init.io, benchRawrToArray, .{});
-    cr = benchmark(init.io, benchCRoaringToArray, .{});
+    r = benchmark(benchRawrToArray, .{});
+    cr = benchmark(benchCRoaringToArray, .{});
     printResult("toArray (1M values)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrToArrayAlloc, .{});
-    cr = benchmark(init.io, benchCRoaringToArrayAlloc, .{});
+    r = benchmark(benchRawrToArrayAlloc, .{});
+    cr = benchmark(benchCRoaringToArrayAlloc, .{});
     printResult("toArrayAlloc (1M values)", r.median_ns, cr.median_ns);
 
     // --- Serialization ---
@@ -972,37 +972,37 @@ pub fn main(init: std.process.Init) !void {
     initRawrSerialized();
     initCRoaringSerialized();
 
-    r = benchmark(init.io, benchRawrSerialize, .{});
-    cr = benchmark(init.io, benchCRoaringSerialize, .{});
+    r = benchmark(benchRawrSerialize, .{});
+    cr = benchmark(benchCRoaringSerialize, .{});
     printResult("serialize", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrDeserialize, .{});
-    cr = benchmark(init.io, benchCRoaringDeserialize, .{});
+    r = benchmark(benchRawrDeserialize, .{});
+    cr = benchmark(benchCRoaringDeserialize, .{});
     printResult("deserialize", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrDeserializeArena, .{});
+    r = benchmark(benchRawrDeserializeArena, .{});
     printResult("deserialize (arena)", r.median_ns, cr.median_ns);
 
     // --- Cardinality ---
     std.debug.print("\nCARDINALITY\n", .{});
 
-    r = benchmark(init.io, benchRawrCardinality, .{});
-    cr = benchmark(init.io, benchCRoaringCardinality, .{});
+    r = benchmark(benchRawrCardinality, .{});
+    cr = benchmark(benchCRoaringCardinality, .{});
     printResult("cardinality", r.median_ns, cr.median_ns);
 
     // --- Positional queries ---
     std.debug.print("\nPOSITIONAL QUERIES\n", .{});
 
-    r = benchmark(init.io, benchRawrRankDense, .{});
-    cr = benchmark(init.io, benchCRoaringRankDense, .{});
+    r = benchmark(benchRawrRankDense, .{});
+    cr = benchmark(benchCRoaringRankDense, .{});
     printResult("rank (dense)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrSelectDense, .{});
-    cr = benchmark(init.io, benchCRoaringSelectDense, .{});
+    r = benchmark(benchRawrSelectDense, .{});
+    cr = benchmark(benchCRoaringSelectDense, .{});
     printResult("select (dense)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrRankManyDense, .{});
-    cr = benchmark(init.io, benchCRoaringRankManyDense, .{});
+    r = benchmark(benchRawrRankManyDense, .{});
+    cr = benchmark(benchCRoaringRankManyDense, .{});
     printResult("rankMany (dense)", r.median_ns, cr.median_ns);
 
     // --- Range operations ---
@@ -1010,20 +1010,20 @@ pub fn main(init: std.process.Init) !void {
     initRawrBitsetRangeBm();
     initCRoaringBitsetRangeBm();
 
-    r = benchmark(init.io, benchRawrRangeCardinalityBitset, .{});
-    cr = benchmark(init.io, benchCRoaringRangeCardinalityBitset, .{});
+    r = benchmark(benchRawrRangeCardinalityBitset, .{});
+    cr = benchmark(benchCRoaringRangeCardinalityBitset, .{});
     printResult("rangeCardinality small (bitset)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrRangeCardinalityBitsetLarge, .{});
-    cr = benchmark(init.io, benchCRoaringRangeCardinalityBitsetLarge, .{});
+    r = benchmark(benchRawrRangeCardinalityBitsetLarge, .{});
+    cr = benchmark(benchCRoaringRangeCardinalityBitsetLarge, .{});
     printResult("rangeCardinality large (bitset)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrFlipWideDense, .{});
-    cr = benchmark(init.io, benchCRoaringFlipWideDense, .{});
+    r = benchmark(benchRawrFlipWideDense, .{});
+    cr = benchmark(benchCRoaringFlipWideDense, .{});
     printResult("flip wide range (dense)", r.median_ns, cr.median_ns);
 
-    r = benchmark(init.io, benchRawrRemoveRangeWideDense, .{});
-    cr = benchmark(init.io, benchCRoaringRemoveRangeWideDense, .{});
+    r = benchmark(benchRawrRemoveRangeWideDense, .{});
+    cr = benchmark(benchCRoaringRemoveRangeWideDense, .{});
     printResult("removeRange wide (dense)", r.median_ns, cr.median_ns);
 
     // Cleanup

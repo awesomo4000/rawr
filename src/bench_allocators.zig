@@ -1,5 +1,6 @@
 const std = @import("std");
 const RoaringBitmap = @import("rawr").RoaringBitmap;
+const bench_time = @import("bench_time.zig");
 
 const WARMUP_RUNS = 3;
 const BENCH_RUNS = 21;
@@ -119,7 +120,7 @@ const BenchResult = struct {
     median_ns: u64,
 };
 
-fn benchmark(io: std.Io, comptime func: anytype, args: anytype) BenchResult {
+fn benchmark(comptime func: anytype, args: anytype) BenchResult {
     var times: [BENCH_RUNS]u64 = undefined;
 
     // Warmup
@@ -129,10 +130,9 @@ fn benchmark(io: std.Io, comptime func: anytype, args: anytype) BenchResult {
 
     // Timed runs
     for (&times) |*t| {
-        const start = std.Io.Clock.awake.now(io);
+        const start = bench_time.monotonicNanos();
         @call(.auto, func, args);
-        const elapsed = start.durationTo(std.Io.Clock.awake.now(io));
-        t.* = @intCast(elapsed.toNanoseconds());
+        t.* = bench_time.monotonicNanos() - start;
     }
 
     std.mem.sort(u64, &times, {}, std.sort.asc(u64));
@@ -317,13 +317,13 @@ pub fn main(init: std.process.Init) !void {
     initTestData();
 
     if (run_matrix) {
-        runMatrix(init.io, run_and, run_or, run_deser);
+        runMatrix(run_and, run_or, run_deser);
     } else {
-        runSingle(init.io, input_choice, output_choice, run_and, run_or, run_deser);
+        runSingle(input_choice, output_choice, run_and, run_or, run_deser);
     }
 }
 
-fn runSingle(io: std.Io, input_choice: AllocChoice, output_choice: AllocChoice, run_and: bool, run_or: bool, run_deser: bool) void {
+fn runSingle(input_choice: AllocChoice, output_choice: AllocChoice, run_and: bool, run_or: bool, run_deser: bool) void {
     printHeader();
     std.debug.print("input={s}, output={s}\n\n", .{ choiceToName(input_choice), choiceToName(output_choice) });
 
@@ -337,25 +337,25 @@ fn runSingle(io: std.Io, input_choice: AllocChoice, output_choice: AllocChoice, 
     defer b.deinit();
 
     if (run_and) {
-        const r = benchmark(io, benchBitwiseAnd, .{ &a, &b, output_choice });
+        const r = benchmark(benchBitwiseAnd, .{ &a, &b, output_choice });
         const ms = @as(f64, @floatFromInt(r.median_ns)) / 1_000_000.0;
         printSingleResult("bitwiseAnd (sparse)", choiceToName(input_choice), choiceToName(output_choice), ms);
     }
 
     if (run_or) {
-        const r = benchmark(io, benchBitwiseOr, .{ &a, &b, output_choice });
+        const r = benchmark(benchBitwiseOr, .{ &a, &b, output_choice });
         const ms = @as(f64, @floatFromInt(r.median_ns)) / 1_000_000.0;
         printSingleResult("bitwiseOr (sparse)", choiceToName(input_choice), choiceToName(output_choice), ms);
     }
 
     if (run_deser) {
-        const r = benchmark(io, benchDeserialize, .{output_choice});
+        const r = benchmark(benchDeserialize, .{output_choice});
         const ms = @as(f64, @floatFromInt(r.median_ns)) / 1_000_000.0;
         printSingleResult("deserialize", "N/A", choiceToName(output_choice), ms);
     }
 }
 
-fn runMatrix(io: std.Io, run_and: bool, run_or: bool, run_deser: bool) void {
+fn runMatrix(run_and: bool, run_or: bool, run_deser: bool) void {
     printHeader();
 
     const choices = [_]AllocChoice{ .c, .smp, .arena, .fba };
@@ -373,7 +373,7 @@ fn runMatrix(io: std.Io, run_and: bool, run_or: bool, run_deser: bool) void {
 
             var row: [4]f64 = undefined;
             for (choices, 0..) |output_choice, i| {
-                const r = benchmark(io, benchBitwiseAnd, .{ &a, &b, output_choice });
+                const r = benchmark(benchBitwiseAnd, .{ &a, &b, output_choice });
                 row[i] = @as(f64, @floatFromInt(r.median_ns)) / 1_000_000.0;
             }
             printMatrixRow(choiceToName(input_choice), row);
@@ -393,7 +393,7 @@ fn runMatrix(io: std.Io, run_and: bool, run_or: bool, run_deser: bool) void {
 
             var row: [4]f64 = undefined;
             for (choices, 0..) |output_choice, i| {
-                const r = benchmark(io, benchBitwiseOr, .{ &a, &b, output_choice });
+                const r = benchmark(benchBitwiseOr, .{ &a, &b, output_choice });
                 row[i] = @as(f64, @floatFromInt(r.median_ns)) / 1_000_000.0;
             }
             printMatrixRow(choiceToName(input_choice), row);
@@ -404,7 +404,7 @@ fn runMatrix(io: std.Io, run_and: bool, run_or: bool, run_deser: bool) void {
         printMatrixHeader("deserialize (ms)");
         var row: [4]f64 = undefined;
         for (choices, 0..) |output_choice, i| {
-            const r = benchmark(io, benchDeserialize, .{output_choice});
+            const r = benchmark(benchDeserialize, .{output_choice});
             row[i] = @as(f64, @floatFromInt(r.median_ns)) / 1_000_000.0;
         }
         printMatrixRow("(N/A)", row);

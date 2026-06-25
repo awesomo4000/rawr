@@ -2,6 +2,7 @@ const std = @import("std");
 const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
 const FrozenBitmap = rawr.FrozenBitmap;
+const bench_time = @import("bench_time.zig");
 
 const WARMUP_RUNS = 3;
 const BENCH_RUNS = 7;
@@ -18,7 +19,7 @@ const BenchResult = struct {
 };
 
 /// Run a benchmark function, return median timing
-fn benchmark(io: std.Io, name: []const u8, comptime func: anytype, args: anytype, n_ops: u64) BenchResult {
+fn benchmark(name: []const u8, comptime func: anytype, args: anytype, n_ops: u64) BenchResult {
     var times: [BENCH_RUNS]u64 = undefined;
 
     // Warmup
@@ -28,10 +29,9 @@ fn benchmark(io: std.Io, name: []const u8, comptime func: anytype, args: anytype
 
     // Timed runs
     for (0..BENCH_RUNS) |i| {
-        const start = std.Io.Clock.awake.now(io);
+        const start = bench_time.monotonicNanos();
         _ = @call(.auto, func, args);
-        const elapsed = start.durationTo(std.Io.Clock.awake.now(io));
-        times[i] = @intCast(elapsed.toNanoseconds());
+        times[i] = bench_time.monotonicNanos() - start;
     }
 
     // Sort for median
@@ -411,13 +411,13 @@ fn benchRunOptimize(allocator: std.mem.Allocator) void {
 // Main
 // ============================================================================
 
-pub fn main(init: std.process.Init) !void {
+pub fn main() !void {
     // Use c_allocator for benchmarks to measure algorithm performance,
     // not GPA bookkeeping overhead. GPA is better for tests (leak detection).
     const allocator = std.heap.c_allocator;
 
     // Print header with timestamp
-    const ts = std.Io.Clock.real.now(init.io).toSeconds();
+    const ts = bench_time.realtimeSeconds();
     const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = @intCast(ts) };
     const day_seconds = epoch_seconds.getDaySeconds();
     const year_day = epoch_seconds.getEpochDay().calculateYearDay();
@@ -443,84 +443,84 @@ pub fn main(init: std.process.Init) !void {
     printHeader();
     std.debug.print("ADD OPERATIONS\n", .{});
 
-    printResult(benchmark(init.io, "add (sequential)", benchAddSequential, .{allocator}, N_VALUES));
-    printResult(benchmark(init.io, "add (random)", benchAddRandom, .{allocator}, N_VALUES));
-    printResult(benchmark(init.io, "add (clustered)", benchAddClustered, .{allocator}, N_VALUES));
-    printResult(benchmark(init.io, "addRange (1M values)", benchAddRange, .{allocator}, N_VALUES));
-    printResult(benchmark(init.io, "fromSorted (1M values)", benchFromSorted, .{allocator}, N_VALUES));
+    printResult(benchmark("add (sequential)", benchAddSequential, .{allocator}, N_VALUES));
+    printResult(benchmark("add (random)", benchAddRandom, .{allocator}, N_VALUES));
+    printResult(benchmark("add (clustered)", benchAddClustered, .{allocator}, N_VALUES));
+    printResult(benchmark("addRange (1M values)", benchAddRange, .{allocator}, N_VALUES));
+    printResult(benchmark("fromSorted (1M values)", benchFromSorted, .{allocator}, N_VALUES));
 
     // --- Contains benchmarks ---
     std.debug.print("\nCONTAINS OPERATIONS\n", .{});
     setupContainsBitmap(allocator);
 
-    printResult(benchmark(init.io, "contains (hit)", benchContainsHit, .{allocator}, N_VALUES));
-    printResult(benchmark(init.io, "contains (miss)", benchContainsMiss, .{allocator}, N_VALUES));
+    printResult(benchmark("contains (hit)", benchContainsHit, .{allocator}, N_VALUES));
+    printResult(benchmark("contains (miss)", benchContainsMiss, .{allocator}, N_VALUES));
 
     // --- Set operation benchmarks ---
     std.debug.print("\nSET OPERATIONS (new bitmap)\n", .{});
     setupSetOpBitmaps(allocator);
 
-    printResult(benchmark(init.io, "bitwiseAnd (sparse 500K x 500K)", benchAndSparse, .{allocator}, 1));
-    printResult(benchmark(init.io, "bitwiseAnd (dense 500K x 500K)", benchAndDense, .{allocator}, 1));
-    printResult(benchmark(init.io, "bitwiseOr (sparse 500K x 500K)", benchOrSparse, .{allocator}, 1));
-    printResult(benchmark(init.io, "bitwiseOr (dense 500K x 500K)", benchOrDense, .{allocator}, 1));
-    printResult(benchmark(init.io, "bitwiseDifference (sparse)", benchDiffSparse, .{allocator}, 1));
-    printResult(benchmark(init.io, "bitwiseDifference (dense)", benchDiffDense, .{allocator}, 1));
+    printResult(benchmark("bitwiseAnd (sparse 500K x 500K)", benchAndSparse, .{allocator}, 1));
+    printResult(benchmark("bitwiseAnd (dense 500K x 500K)", benchAndDense, .{allocator}, 1));
+    printResult(benchmark("bitwiseOr (sparse 500K x 500K)", benchOrSparse, .{allocator}, 1));
+    printResult(benchmark("bitwiseOr (dense 500K x 500K)", benchOrDense, .{allocator}, 1));
+    printResult(benchmark("bitwiseDifference (sparse)", benchDiffSparse, .{allocator}, 1));
+    printResult(benchmark("bitwiseDifference (dense)", benchDiffDense, .{allocator}, 1));
 
     // --- Clone benchmarks ---
     std.debug.print("\nCLONE\n", .{});
 
-    printResult(benchmark(init.io, "clone (sparse ~65K containers)", benchCloneSparse, .{allocator}, 1));
-    printResult(benchmark(init.io, "clone (dense 8 containers)", benchCloneDense, .{allocator}, 1));
+    printResult(benchmark("clone (sparse ~65K containers)", benchCloneSparse, .{allocator}, 1));
+    printResult(benchmark("clone (dense 8 containers)", benchCloneDense, .{allocator}, 1));
 
     // --- In-place operation benchmarks (op only, clone done in setup) ---
     std.debug.print("\nSET OPERATIONS (in-place, operation time only)\n", .{});
 
     setupPreclonedSparse(allocator);
-    printResult(benchmark(init.io, "bitwiseOrInPlace (sparse)", benchOrInPlaceSparseOpOnly, .{allocator}, 1));
+    printResult(benchmark("bitwiseOrInPlace (sparse)", benchOrInPlaceSparseOpOnly, .{allocator}, 1));
     cleanupPrecloned();
 
     setupPreclonedDense(allocator);
-    printResult(benchmark(init.io, "bitwiseOrInPlace (dense)", benchOrInPlaceDenseOpOnly, .{allocator}, 1));
+    printResult(benchmark("bitwiseOrInPlace (dense)", benchOrInPlaceDenseOpOnly, .{allocator}, 1));
     cleanupPrecloned();
 
     setupPreclonedSparse(allocator);
-    printResult(benchmark(init.io, "bitwiseAndInPlace (sparse)", benchAndInPlaceSparseOpOnly, .{allocator}, 1));
+    printResult(benchmark("bitwiseAndInPlace (sparse)", benchAndInPlaceSparseOpOnly, .{allocator}, 1));
     cleanupPrecloned();
 
     setupPreclonedDense(allocator);
-    printResult(benchmark(init.io, "bitwiseAndInPlace (dense)", benchAndInPlaceDenseOpOnly, .{allocator}, 1));
+    printResult(benchmark("bitwiseAndInPlace (dense)", benchAndInPlaceDenseOpOnly, .{allocator}, 1));
     cleanupPrecloned();
 
     // --- Iterator benchmark ---
     std.debug.print("\nITERATION\n", .{});
 
-    printResult(benchmark(init.io, "iterator (1M values)", benchIterator, .{allocator}, N_VALUES));
+    printResult(benchmark("iterator (1M values)", benchIterator, .{allocator}, N_VALUES));
 
     // --- Serialization benchmarks ---
     std.debug.print("\nSERIALIZATION\n", .{});
     setupSerializedData(allocator);
 
-    printResult(benchmark(init.io, "serialize (1M values)", benchSerialize, .{allocator}, N_VALUES));
-    printResult(benchmark(init.io, "deserialize (1M values)", benchDeserialize, .{allocator}, N_VALUES));
+    printResult(benchmark("serialize (1M values)", benchSerialize, .{allocator}, N_VALUES));
+    printResult(benchmark("deserialize (1M values)", benchDeserialize, .{allocator}, N_VALUES));
 
     // --- FrozenBitmap benchmarks ---
     std.debug.print("\nFROZEN BITMAP (zero-copy)\n", .{});
     setupFrozenBitmap(allocator);
 
-    printResult(benchmark(init.io, "FrozenBitmap.contains (hit)", benchFrozenContainsHit, .{allocator}, N_VALUES));
-    printResult(benchmark(init.io, "FrozenBitmap.contains (miss)", benchFrozenContainsMiss, .{allocator}, N_VALUES));
-    printResult(benchmark(init.io, "FrozenBitmap.iterator (1M values)", benchFrozenIterator, .{allocator}, N_VALUES));
+    printResult(benchmark("FrozenBitmap.contains (hit)", benchFrozenContainsHit, .{allocator}, N_VALUES));
+    printResult(benchmark("FrozenBitmap.contains (miss)", benchFrozenContainsMiss, .{allocator}, N_VALUES));
+    printResult(benchmark("FrozenBitmap.iterator (1M values)", benchFrozenIterator, .{allocator}, N_VALUES));
 
     // --- runOptimize benchmark ---
     std.debug.print("\nOPTIMIZATION\n", .{});
 
-    printResult(benchmark(init.io, "runOptimize (mixed containers)", benchRunOptimize, .{allocator}, 1));
+    printResult(benchmark("runOptimize (mixed containers)", benchRunOptimize, .{allocator}, 1));
 
     // countRunsInBitset microbenchmark
     initBenchBitset(allocator);
     // 1024 words with alternating bits = 32768 runs (32 per word)
-    printResult(benchmark(init.io, "countRunsInBitset (32K runs)", benchCountRunsInBitset, .{}, 32768));
+    printResult(benchmark("countRunsInBitset (32K runs)", benchCountRunsInBitset, .{}, 32768));
 
     // Cleanup
     if (bench_bitset) |bc| bc.deinit(allocator);
