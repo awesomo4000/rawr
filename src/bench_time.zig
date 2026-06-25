@@ -6,7 +6,7 @@ pub fn monotonicNanos() u64 {
         return windowsPerformanceNanos();
     }
     if (builtin.os.tag == .openbsd) {
-        return openbsdWallNanos();
+        return openbsdBenchMonotonicNanos();
     }
     return posixClockNanos(.MONOTONIC);
 }
@@ -16,9 +16,16 @@ pub fn realtimeSeconds() u64 {
         return windowsRealtimeSeconds();
     }
     if (builtin.os.tag == .openbsd) {
-        return openbsdWallNanos() / std.time.ns_per_s;
+        return openbsdBenchRealtimeSeconds();
     }
     return posixClockNanos(.REALTIME) / std.time.ns_per_s;
+}
+
+pub fn cAllocator() std.mem.Allocator {
+    if (builtin.os.tag == .openbsd) {
+        return openbsd_c_allocator;
+    }
+    return std.heap.c_allocator;
 }
 
 fn posixClockNanos(clock: std.c.CLOCK) u64 {
@@ -29,12 +36,57 @@ fn posixClockNanos(clock: std.c.CLOCK) u64 {
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
-fn openbsdWallNanos() u64 {
-    var tv: std.c.timeval = undefined;
-    if (std.c.gettimeofday(&tv, null) != 0) {
-        @panic("gettimeofday failed");
+extern fn rawr_bench_monotonic_ns() callconv(.c) u64;
+extern fn rawr_bench_realtime_seconds() callconv(.c) u64;
+extern fn rawr_bench_malloc(size: usize) callconv(.c) ?*anyopaque;
+extern fn rawr_bench_aligned_alloc(alignment: usize, size: usize) callconv(.c) ?*anyopaque;
+extern fn rawr_bench_free(ptr: ?*anyopaque) callconv(.c) void;
+
+fn openbsdBenchMonotonicNanos() u64 {
+    const ns = rawr_bench_monotonic_ns();
+    if (ns == 0) @panic("OpenBSD benchmark timer failed");
+    return ns;
+}
+
+fn openbsdBenchRealtimeSeconds() u64 {
+    const seconds = rawr_bench_realtime_seconds();
+    if (seconds == 0) @panic("OpenBSD realtime clock failed");
+    return seconds;
+}
+
+pub const openbsd_c_allocator = std.mem.Allocator{
+    .ptr = undefined,
+    .vtable = &.{
+        .alloc = openbsdCAlloc,
+        .resize = openbsdCResize,
+        .remap = openbsdCRemap,
+        .free = openbsdCFree,
+    },
+};
+
+fn openbsdCAlloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, _: usize) ?[*]u8 {
+    std.debug.assert(len > 0);
+    if (alignment.toByteUnits() <= @alignOf(std.c.max_align_t)) {
+        const actual_len = @max(len, @alignOf(std.c.max_align_t));
+        return @ptrCast(rawr_bench_malloc(actual_len) orelse return null);
     }
-    return @as(u64, @intCast(tv.sec)) * std.time.ns_per_s + @as(u64, @intCast(tv.usec)) * std.time.ns_per_us;
+
+    const effective_alignment = @max(alignment.toByteUnits(), @sizeOf(usize));
+    return @ptrCast(rawr_bench_aligned_alloc(effective_alignment, len) orelse return null);
+}
+
+fn openbsdCResize(_: *anyopaque, memory: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
+    std.debug.assert(new_len > 0);
+    return new_len <= memory.len;
+}
+
+fn openbsdCRemap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+    return null;
+}
+
+fn openbsdCFree(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, _: usize) void {
+    _ = alignment;
+    rawr_bench_free(memory.ptr);
 }
 
 fn windowsPerformanceNanos() u64 {

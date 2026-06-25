@@ -37,7 +37,7 @@ const AllocContext = struct {
 
     fn init(choice: AllocChoice) AllocContext {
         switch (choice) {
-            .c => return .{ .allocator = std.heap.c_allocator },
+            .c => return .{ .allocator = bench_time.cAllocator() },
             .smp => return .{ .allocator = std.heap.smp_allocator },
             .arena => {
                 const arena = std.heap.page_allocator.create(std.heap.ArenaAllocator) catch @panic("OOM");
@@ -93,12 +93,12 @@ fn initTestData() void {
     }
 
     // Create serialized data for deserialize benchmark
-    var bm = RoaringBitmap.init(std.heap.c_allocator) catch @panic("OOM");
+    var bm = RoaringBitmap.init(bench_time.cAllocator()) catch @panic("OOM");
     defer bm.deinit();
     for (random_values[0 .. N_VALUES / 2]) |v| {
         _ = bm.add(v) catch @panic("OOM");
     }
-    serialized_data = bm.serialize(std.heap.c_allocator) catch @panic("OOM");
+    serialized_data = bm.serialize(bench_time.cAllocator()) catch @panic("OOM");
 }
 
 fn buildSparseBitmaps(alloc: std.mem.Allocator) struct { a: RoaringBitmap, b: RoaringBitmap } {
@@ -153,7 +153,7 @@ fn ensureFbaOutBuf() void {
 fn benchBitwiseAnd(input_a: *const RoaringBitmap, input_b: *const RoaringBitmap, out_choice: AllocChoice) void {
     switch (out_choice) {
         .c => {
-            var result = input_a.bitwiseAnd(std.heap.c_allocator, input_b) catch unreachable;
+            var result = input_a.bitwiseAnd(bench_time.cAllocator(), input_b) catch unreachable;
             defer result.deinit();
             std.mem.doNotOptimizeAway(&result);
         },
@@ -180,7 +180,7 @@ fn benchBitwiseAnd(input_a: *const RoaringBitmap, input_b: *const RoaringBitmap,
 fn benchBitwiseOr(input_a: *const RoaringBitmap, input_b: *const RoaringBitmap, out_choice: AllocChoice) void {
     switch (out_choice) {
         .c => {
-            var result = input_a.bitwiseOr(std.heap.c_allocator, input_b) catch unreachable;
+            var result = input_a.bitwiseOr(bench_time.cAllocator(), input_b) catch unreachable;
             defer result.deinit();
             std.mem.doNotOptimizeAway(&result);
         },
@@ -208,7 +208,7 @@ fn benchDeserialize(out_choice: AllocChoice) void {
     const data = serialized_data.?;
     switch (out_choice) {
         .c => {
-            var result = RoaringBitmap.deserialize(std.heap.c_allocator, data) catch unreachable;
+            var result = RoaringBitmap.deserialize(bench_time.cAllocator(), data) catch unreachable;
             defer result.deinit();
             std.mem.doNotOptimizeAway(&result);
         },

@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
     });
     bench_mod.addImport("rawr", bench_lib_mod);
     bench_mod.link_libc = true;
+    addBenchmarkPlatformShim(b, bench_mod, target);
 
     const bench_exe = b.addExecutable(.{
         .name = "bench",
@@ -111,6 +112,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     bench_cr_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_cr_mod, target);
     addTranslatedCImport(b, bench_cr_mod, .{
         .header = "vendor/croaring_wrapper.h",
         .include_dir = "vendor/",
@@ -136,6 +138,7 @@ pub fn build(b: *std.Build) void {
     });
     bench_alloc_mod.addImport("rawr", bench_lib_mod);
     bench_alloc_mod.link_libc = true;
+    addBenchmarkPlatformShim(b, bench_alloc_mod, target);
 
     const bench_alloc_exe = b.addExecutable(.{
         .name = "bench_alloc",
@@ -152,6 +155,16 @@ pub fn build(b: *std.Build) void {
         "git", "archive", "--format=tar.gz", "--prefix=rawr/", "HEAD", "-o", "rawr.tar.gz",
     });
     tarball_step.dependOn(&tarball_cmd.step);
+}
+
+fn addBenchmarkPlatformShim(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    if (target.result.os.tag == .openbsd) {
+        mod.addCSourceFile(.{
+            .file = b.path("src/bench_openbsd.c"),
+            .flags = &.{ "-std=c11", "-O2" },
+        });
+        mod.link_libc = true;
+    }
 }
 
 fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {

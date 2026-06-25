@@ -412,9 +412,9 @@ fn benchRunOptimize(allocator: std.mem.Allocator) void {
 // ============================================================================
 
 pub fn main() !void {
-    // Use c_allocator for benchmarks to measure algorithm performance,
-    // not GPA bookkeeping overhead. GPA is better for tests (leak detection).
-    const allocator = std.heap.c_allocator;
+    // Use the C allocator for benchmarks where it is safe; OpenBSD routes
+    // through a C shim to avoid Zig 0.16 direct libc-call crashes.
+    const allocator = bench_time.cAllocator();
 
     // Print header with timestamp
     const ts = bench_time.realtimeSeconds();

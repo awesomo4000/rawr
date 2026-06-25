@@ -1,10 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
 const c = @import("c");
 const bench_time = @import("bench_time.zig");
 
-const allocator = std.heap.smp_allocator;
+const allocator = if (builtin.os.tag == .openbsd) bench_time.openbsd_c_allocator else std.heap.smp_allocator;
 
 const WARMUP_RUNS = 3;
 const BENCH_RUNS = 21;
