@@ -167,6 +167,8 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
 
     if (opts.target.result.os.tag == .freebsd) {
         mod.addCMacro("bswap64", "__builtin_bswap64");
+    }
+    if (isBsdTarget(opts.target.result)) {
         mod.addCMacro("CROARING_COMPILER_SUPPORTS_AVX512", "0");
     }
 
@@ -186,8 +188,17 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
     translate_c.addIncludePath(b.path(opts.include_dir));
     if (opts.target.result.os.tag == .freebsd) {
         translate_c.defineCMacro("bswap64", "__builtin_bswap64");
+    }
+    if (isBsdTarget(opts.target.result)) {
         translate_c.defineCMacro("CROARING_COMPILER_SUPPORTS_AVX512", "0");
     }
 
     mod.addImport(opts.import_name, translate_c.createModule());
+}
+
+fn isBsdTarget(target: std.Target) bool {
+    return switch (target.os.tag) {
+        .dragonfly, .freebsd, .netbsd, .openbsd => true,
+        else => false,
+    };
 }
