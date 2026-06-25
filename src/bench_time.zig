@@ -16,9 +16,31 @@ pub fn realtimeSeconds() u64 {
         return windowsRealtimeSeconds();
     }
     if (builtin.os.tag == .openbsd) {
-        return openbsdBenchRealtimeSeconds();
+        return 0;
     }
     return posixClockNanos(.REALTIME) / std.time.ns_per_s;
+}
+
+pub fn printRunTimestamp() void {
+    const ts = realtimeSeconds();
+    if (ts == 0) {
+        std.debug.print("Run: timestamp unavailable on OpenBSD\n", .{});
+        return;
+    }
+
+    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = @intCast(ts) };
+    const day_seconds = epoch_seconds.getDaySeconds();
+    const year_day = epoch_seconds.getEpochDay().calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+
+    std.debug.print("Run: {d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC\n", .{
+        year_day.year,
+        @intFromEnum(month_day.month),
+        month_day.day_index + 1,
+        day_seconds.getHoursIntoDay(),
+        day_seconds.getMinutesIntoHour(),
+        day_seconds.getSecondsIntoMinute(),
+    });
 }
 
 pub fn cAllocator() std.mem.Allocator {
@@ -37,7 +59,6 @@ fn posixClockNanos(clock: std.c.CLOCK) u64 {
 }
 
 extern fn rawr_bench_monotonic_ns() callconv(.c) u64;
-extern fn rawr_bench_realtime_seconds() callconv(.c) u64;
 extern fn rawr_bench_malloc(size: usize) callconv(.c) ?*anyopaque;
 extern fn rawr_bench_aligned_alloc(alignment: usize, size: usize) callconv(.c) ?*anyopaque;
 extern fn rawr_bench_free(ptr: ?*anyopaque) callconv(.c) void;
@@ -48,20 +69,16 @@ fn openbsdBenchMonotonicNanos() u64 {
     return ns;
 }
 
-fn openbsdBenchRealtimeSeconds() u64 {
-    const seconds = rawr_bench_realtime_seconds();
-    if (seconds == 0) @panic("OpenBSD realtime clock failed");
-    return seconds;
-}
-
+var openbsd_c_allocator_state: u8 = 0;
+const openbsd_c_allocator_vtable = std.mem.Allocator.VTable{
+    .alloc = openbsdCAlloc,
+    .resize = openbsdCResize,
+    .remap = openbsdCRemap,
+    .free = openbsdCFree,
+};
 pub const openbsd_c_allocator = std.mem.Allocator{
-    .ptr = undefined,
-    .vtable = &.{
-        .alloc = openbsdCAlloc,
-        .resize = openbsdCResize,
-        .remap = openbsdCRemap,
-        .free = openbsdCFree,
-    },
+    .ptr = &openbsd_c_allocator_state,
+    .vtable = &openbsd_c_allocator_vtable,
 };
 
 fn openbsdCAlloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, _: usize) ?[*]u8 {

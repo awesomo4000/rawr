@@ -19,16 +19,6 @@ uint64_t rawr_bench_monotonic_ns(void) {
     return 0;
 }
 
-uint64_t rawr_bench_realtime_seconds(void) {
-    struct timeval tv;
-    if (gettimeofday(&tv, NULL) == 0) {
-        return (uint64_t)tv.tv_sec;
-    }
-
-    const time_t t = time(NULL);
-    return t < 0 ? 0 : (uint64_t)t;
-}
-
 void *rawr_bench_malloc(size_t size) {
     return malloc(size);
 }

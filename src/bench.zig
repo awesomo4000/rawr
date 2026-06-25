@@ -416,23 +416,9 @@ pub fn main() !void {
     // through a C shim to avoid Zig 0.16 direct libc-call crashes.
     const allocator = bench_time.cAllocator();
 
-    // Print header with timestamp
-    const ts = bench_time.realtimeSeconds();
-    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = @intCast(ts) };
-    const day_seconds = epoch_seconds.getDaySeconds();
-    const year_day = epoch_seconds.getEpochDay().calculateYearDay();
-    const month_day = year_day.calculateMonthDay();
-
     std.debug.print("Rawr Roaring Bitmap Benchmarks\n", .{});
     std.debug.print("==============================\n", .{});
-    std.debug.print("Run: {d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC\n", .{
-        year_day.year,
-        @intFromEnum(month_day.month),
-        month_day.day_index + 1,
-        day_seconds.getHoursIntoDay(),
-        day_seconds.getMinutesIntoHour(),
-        day_seconds.getSecondsIntoMinute(),
-    });
+    bench_time.printRunTimestamp();
     std.debug.print("N = {d} values, {d} warmup runs, {d} timed runs (median reported)\n", .{ N_VALUES, WARMUP_RUNS, BENCH_RUNS });
 
     // Initialize test data
