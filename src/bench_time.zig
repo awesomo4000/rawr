@@ -5,12 +5,18 @@ pub fn monotonicNanos() u64 {
     if (builtin.os.tag == .windows) {
         return windowsPerformanceNanos();
     }
+    if (builtin.os.tag == .openbsd) {
+        return openbsdWallNanos();
+    }
     return posixClockNanos(.MONOTONIC);
 }
 
 pub fn realtimeSeconds() u64 {
     if (builtin.os.tag == .windows) {
         return windowsRealtimeSeconds();
+    }
+    if (builtin.os.tag == .openbsd) {
+        return openbsdWallNanos() / std.time.ns_per_s;
     }
     return posixClockNanos(.REALTIME) / std.time.ns_per_s;
 }
@@ -21,6 +27,14 @@ fn posixClockNanos(clock: std.c.CLOCK) u64 {
         @panic("clock_gettime failed");
     }
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
+fn openbsdWallNanos() u64 {
+    var tv: std.c.timeval = undefined;
+    if (std.c.gettimeofday(&tv, null) != 0) {
+        @panic("gettimeofday failed");
+    }
+    return @as(u64, @intCast(tv.sec)) * std.time.ns_per_s + @as(u64, @intCast(tv.usec)) * std.time.ns_per_us;
 }
 
 fn windowsPerformanceNanos() u64 {
