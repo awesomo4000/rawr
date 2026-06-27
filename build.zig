@@ -114,6 +114,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     bench_cr_mod.addImport("rawr", bench_lib_mod);
+    addBenchCroaringOptions(b, bench_cr_mod, "full");
     addBenchmarkPlatformShim(b, bench_cr_mod, target);
     addTranslatedCImport(b, bench_cr_mod, .{
         .header = "vendor/croaring_wrapper.h",
@@ -306,6 +307,7 @@ pub fn build(b: *std.Build) void {
         .rawr = true,
         .bench_shim_c = true,
         .croaring = true,
+        .bench_croaring_mode = "full",
     });
     addOpenBsdRepro(b, target, openbsd_repros_step, .{
         .name = "openbsd_repro_27_bench_croaring_exact_root",
@@ -313,6 +315,95 @@ pub fn build(b: *std.Build) void {
         .rawr = true,
         .bench_shim_c = true,
         .croaring = true,
+        .bench_croaring_mode = "full",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_28_call_bench_croaring_main_with_marker",
+        .root = "src/openbsd_repro_28_call_bench_croaring_main_with_marker.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "full",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_29_bench_croaring_stop_header",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "header",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_30_bench_croaring_stop_init_data",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "init_data",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_31_bench_croaring_stop_add",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "add",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_32_bench_croaring_stop_contains",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "contains",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_33_bench_croaring_stop_set",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "set",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_34_bench_croaring_stop_iteration",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "iteration",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_35_bench_croaring_stop_serialization",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "serialization",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_36_bench_croaring_stop_cardinality",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "cardinality",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_37_bench_croaring_stop_positional",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "positional",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_38_bench_croaring_stop_range",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "range",
     });
 
     // Tarball
@@ -332,6 +423,7 @@ const OpenBsdReproOptions = struct {
     bench_shim_c: bool = false,
     croaring: bool = false,
     link_libc: bool = false,
+    bench_croaring_mode: ?[]const u8 = null,
 };
 
 fn addOpenBsdRepro(
@@ -353,6 +445,9 @@ fn addOpenBsdRepro(
 
     if (opts.rawr) {
         mod.addImport("rawr", bench_lib_mod);
+    }
+    if (opts.bench_croaring_mode) |mode| {
+        addBenchCroaringOptions(b, mod, mode);
     }
     if (opts.bench_shim) {
         const bench_time_mod = b.createModule(.{
@@ -393,6 +488,12 @@ fn addOpenBsdRepro(
         .root_module = mod,
     });
     step.dependOn(&b.addInstallArtifact(exe, .{}).step);
+}
+
+fn addBenchCroaringOptions(b: *std.Build, mod: *std.Build.Module, mode: []const u8) void {
+    const options = b.addOptions();
+    options.addOption([]const u8, "openbsd_repro_mode", mode);
+    mod.addOptions("bench_croaring_options", options);
 }
 
 fn addBenchmarkPlatformShim(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
