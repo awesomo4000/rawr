@@ -246,6 +246,48 @@ pub fn build(b: *std.Build) void {
         .root = "src/openbsd_repro/17_process_init.zig",
         .repro_c = true,
     });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_18_bench_time_print_with_croaring",
+        .root = "src/openbsd_repro/18_bench_time_print_with_croaring.zig",
+        .bench_shim = true,
+        .croaring = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_19_bench_time_print_with_rawr_and_croaring",
+        .root = "src/openbsd_repro/19_bench_time_print_with_rawr_and_croaring.zig",
+        .rawr = true,
+        .bench_shim = true,
+        .croaring = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_20_direct_bench_shim_write_with_croaring",
+        .root = "src/openbsd_repro/20_direct_bench_shim_write_with_croaring.zig",
+        .bench_shim = true,
+        .bench_shim_c = true,
+        .croaring = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_21_direct_bench_shim_write_with_rawr_and_croaring",
+        .root = "src/openbsd_repro/21_direct_bench_shim_write_with_rawr_and_croaring.zig",
+        .rawr = true,
+        .bench_shim = true,
+        .bench_shim_c = true,
+        .croaring = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_22_bench_croaring_imports_no_globals",
+        .root = "src/openbsd_repro/22_bench_croaring_imports_no_globals.zig",
+        .rawr = true,
+        .bench_shim = true,
+        .croaring = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_23_bench_croaring_shape_print_only",
+        .root = "src/openbsd_repro/23_bench_croaring_shape_print_only.zig",
+        .rawr = true,
+        .bench_shim = true,
+        .croaring = true,
+    });
 
     // Tarball
     const tarball_step = b.step("tarball", "Create source tarball from git HEAD");
@@ -261,6 +303,7 @@ const OpenBsdReproOptions = struct {
     rawr: bool = false,
     repro_c: bool = false,
     bench_shim: bool = false,
+    bench_shim_c: bool = false,
     croaring: bool = false,
     link_libc: bool = false,
 };
@@ -303,6 +346,9 @@ fn addOpenBsdRepro(
     if (opts.bench_shim) {
         addBenchmarkPlatformShim(b, mod, target);
     }
+    if (opts.bench_shim_c and target.result.os.tag != .openbsd) {
+        addBenchmarkOpenBsdShimC(b, mod);
+    }
     if (opts.link_libc) {
         mod.link_libc = true;
     }
@@ -325,12 +371,16 @@ fn addOpenBsdRepro(
 
 fn addBenchmarkPlatformShim(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
     if (target.result.os.tag == .openbsd) {
-        mod.addCSourceFile(.{
-            .file = b.path("src/bench_openbsd.c"),
-            .flags = &.{ "-std=c11", "-O2" },
-        });
-        mod.link_libc = true;
+        addBenchmarkOpenBsdShimC(b, mod);
     }
+}
+
+fn addBenchmarkOpenBsdShimC(b: *std.Build, mod: *std.Build.Module) void {
+    mod.addCSourceFile(.{
+        .file = b.path("src/bench_openbsd.c"),
+        .flags = &.{ "-std=c11", "-O2" },
+    });
+    mod.link_libc = true;
 }
 
 fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
