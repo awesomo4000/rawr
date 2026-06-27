@@ -468,6 +468,52 @@ pub fn build(b: *std.Build) void {
         .bench_croaring_mode = "full",
         .bench_croaring_call_mode = "never_inline",
     });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_46_bench_croaring_stop_add_noinline_harness",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "add",
+        .bench_croaring_benchmark_mode = "noinline",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_47_bench_croaring_stop_contains_noinline_harness",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "contains",
+        .bench_croaring_benchmark_mode = "noinline",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_48_bench_croaring_stop_set_noinline_harness",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "set",
+        .bench_croaring_benchmark_mode = "noinline",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_49_bench_croaring_full_noinline_harness",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "full",
+        .bench_croaring_benchmark_mode = "noinline",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_50_bench_croaring_full_noinline_harness_never_inline_target",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "full",
+        .bench_croaring_call_mode = "never_inline",
+        .bench_croaring_benchmark_mode = "noinline",
+    });
 
     // Tarball
     const tarball_step = b.step("tarball", "Create source tarball from git HEAD");
@@ -488,6 +534,7 @@ const OpenBsdReproOptions = struct {
     link_libc: bool = false,
     bench_croaring_mode: ?[]const u8 = null,
     bench_croaring_call_mode: []const u8 = "auto",
+    bench_croaring_benchmark_mode: []const u8 = "inline",
     bench_croaring_trace: bool = false,
 };
 
@@ -515,6 +562,7 @@ fn addOpenBsdRepro(
         addBenchCroaringOptionsEx(b, mod, .{
             .mode = mode,
             .call_mode = opts.bench_croaring_call_mode,
+            .benchmark_mode = opts.bench_croaring_benchmark_mode,
             .trace = opts.bench_croaring_trace,
         });
     }
@@ -566,6 +614,7 @@ fn addBenchCroaringOptions(b: *std.Build, mod: *std.Build.Module, mode: []const 
 const BenchCroaringOptions = struct {
     mode: []const u8,
     call_mode: []const u8 = "auto",
+    benchmark_mode: []const u8 = "inline",
     trace: bool = false,
 };
 
@@ -573,6 +622,7 @@ fn addBenchCroaringOptionsEx(b: *std.Build, mod: *std.Build.Module, opts: BenchC
     const options = b.addOptions();
     options.addOption([]const u8, "openbsd_repro_mode", opts.mode);
     options.addOption([]const u8, "openbsd_repro_call_mode", opts.call_mode);
+    options.addOption([]const u8, "openbsd_repro_benchmark_mode", opts.benchmark_mode);
     options.addOption(bool, "openbsd_repro_trace", opts.trace);
     mod.addOptions("bench_croaring_options", options);
 }

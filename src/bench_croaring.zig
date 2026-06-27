@@ -39,6 +39,21 @@ fn callBenchmarkTarget(comptime func: anytype, args: anytype) void {
 }
 
 fn benchmark(comptime func: anytype, args: anytype) BenchResult {
+    if (comptime std.mem.eql(u8, bench_croaring_options.openbsd_repro_benchmark_mode, "noinline")) {
+        return benchmarkNoInline(func, args);
+    }
+    return benchmarkInline(func, args);
+}
+
+fn benchmarkInline(comptime func: anytype, args: anytype) BenchResult {
+    return benchmarkImpl(func, args);
+}
+
+noinline fn benchmarkNoInline(comptime func: anytype, args: anytype) BenchResult {
+    return benchmarkImpl(func, args);
+}
+
+fn benchmarkImpl(comptime func: anytype, args: anytype) BenchResult {
     var times: [BENCH_RUNS]u64 = undefined;
 
     // Warmup
