@@ -300,6 +300,20 @@ pub fn build(b: *std.Build) void {
         .bench_shim_c = true,
         .croaring = true,
     });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_26_call_bench_croaring_main",
+        .root = "src/openbsd_repro_26_call_bench_croaring_main.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_27_bench_croaring_exact_root",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+    });
 
     // Tarball
     const tarball_step = b.step("tarball", "Create source tarball from git HEAD");
