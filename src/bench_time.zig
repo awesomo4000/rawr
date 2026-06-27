@@ -21,10 +21,25 @@ pub fn realtimeSeconds() u64 {
     return posixClockNanos(.REALTIME) / std.time.ns_per_s;
 }
 
+pub fn print(comptime fmt: []const u8, args: anytype) void {
+    if (builtin.os.tag == .openbsd) {
+        var buffer: [4096]u8 = undefined;
+        const output = std.fmt.bufPrint(&buffer, fmt, args) catch {
+            const message = "benchmark output formatting failed\n";
+            rawr_bench_write_stderr(message.ptr, message.len);
+            return;
+        };
+        rawr_bench_write_stderr(output.ptr, output.len);
+        return;
+    }
+
+    std.debug.print(fmt, args);
+}
+
 pub fn printRunTimestamp() void {
     const ts = realtimeSeconds();
     if (ts == 0) {
-        std.debug.print("Run: timestamp unavailable on OpenBSD\n", .{});
+        print("Run: timestamp unavailable on OpenBSD\n", .{});
         return;
     }
 
@@ -33,7 +48,7 @@ pub fn printRunTimestamp() void {
     const year_day = epoch_seconds.getEpochDay().calculateYearDay();
     const month_day = year_day.calculateMonthDay();
 
-    std.debug.print("Run: {d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC\n", .{
+    print("Run: {d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC\n", .{
         year_day.year,
         @intFromEnum(month_day.month),
         month_day.day_index + 1,
@@ -62,6 +77,7 @@ extern fn rawr_bench_monotonic_ns() callconv(.c) u64;
 extern fn rawr_bench_malloc(size: usize) callconv(.c) ?*anyopaque;
 extern fn rawr_bench_aligned_alloc(alignment: usize, size: usize) callconv(.c) ?*anyopaque;
 extern fn rawr_bench_free(ptr: ?*anyopaque) callconv(.c) void;
+extern fn rawr_bench_write_stderr(ptr: [*]const u8, len: usize) callconv(.c) void;
 
 fn openbsdBenchMonotonicNanos() u64 {
     const ns = rawr_bench_monotonic_ns();

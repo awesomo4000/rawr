@@ -55,7 +55,7 @@ fn benchmark(name: []const u8, comptime func: anytype, args: anytype, n_ops: u64
 
 fn printResult(r: BenchResult) void {
     const median_ms = @as(f64, @floatFromInt(r.median_ns)) / 1_000_000.0;
-    std.debug.print("{s:<45} {d:>10.2} ms  {d:>12.0} ops/s  {d:>8.1} ns/op\n", .{
+    bench_time.print("{s:<45} {d:>10.2} ms  {d:>12.0} ops/s  {d:>8.1} ns/op\n", .{
         r.name,
         median_ms,
         r.ops_per_sec,
@@ -64,8 +64,8 @@ fn printResult(r: BenchResult) void {
 }
 
 fn printHeader() void {
-    std.debug.print("\n{s:<45} {s:>10}     {s:>12}     {s:>8}\n", .{ "Benchmark", "Time", "Throughput", "Latency" });
-    std.debug.print("{s:-<45} {s:->10}     {s:->12}     {s:->8}\n", .{ "", "", "", "" });
+    bench_time.print("\n{s:<45} {s:>10}     {s:>12}     {s:>8}\n", .{ "Benchmark", "Time", "Throughput", "Latency" });
+    bench_time.print("{s:-<45} {s:->10}     {s:->12}     {s:->8}\n", .{ "", "", "", "" });
 }
 
 // ============================================================================
@@ -416,18 +416,18 @@ pub fn main() !void {
     // through a C shim to avoid Zig 0.16 direct libc-call crashes.
     const allocator = bench_time.cAllocator();
 
-    std.debug.print("Rawr Roaring Bitmap Benchmarks\n", .{});
-    std.debug.print("==============================\n", .{});
+    bench_time.print("Rawr Roaring Bitmap Benchmarks\n", .{});
+    bench_time.print("==============================\n", .{});
     bench_time.printRunTimestamp();
-    std.debug.print("N = {d} values, {d} warmup runs, {d} timed runs (median reported)\n", .{ N_VALUES, WARMUP_RUNS, BENCH_RUNS });
+    bench_time.print("N = {d} values, {d} warmup runs, {d} timed runs (median reported)\n", .{ N_VALUES, WARMUP_RUNS, BENCH_RUNS });
 
     // Initialize test data
-    std.debug.print("\nInitializing test data...\n", .{});
+    bench_time.print("\nInitializing test data...\n", .{});
     initTestData();
 
     // --- Add benchmarks ---
     printHeader();
-    std.debug.print("ADD OPERATIONS\n", .{});
+    bench_time.print("ADD OPERATIONS\n", .{});
 
     printResult(benchmark("add (sequential)", benchAddSequential, .{allocator}, N_VALUES));
     printResult(benchmark("add (random)", benchAddRandom, .{allocator}, N_VALUES));
@@ -436,14 +436,14 @@ pub fn main() !void {
     printResult(benchmark("fromSorted (1M values)", benchFromSorted, .{allocator}, N_VALUES));
 
     // --- Contains benchmarks ---
-    std.debug.print("\nCONTAINS OPERATIONS\n", .{});
+    bench_time.print("\nCONTAINS OPERATIONS\n", .{});
     setupContainsBitmap(allocator);
 
     printResult(benchmark("contains (hit)", benchContainsHit, .{allocator}, N_VALUES));
     printResult(benchmark("contains (miss)", benchContainsMiss, .{allocator}, N_VALUES));
 
     // --- Set operation benchmarks ---
-    std.debug.print("\nSET OPERATIONS (new bitmap)\n", .{});
+    bench_time.print("\nSET OPERATIONS (new bitmap)\n", .{});
     setupSetOpBitmaps(allocator);
 
     printResult(benchmark("bitwiseAnd (sparse 500K x 500K)", benchAndSparse, .{allocator}, 1));
@@ -454,13 +454,13 @@ pub fn main() !void {
     printResult(benchmark("bitwiseDifference (dense)", benchDiffDense, .{allocator}, 1));
 
     // --- Clone benchmarks ---
-    std.debug.print("\nCLONE\n", .{});
+    bench_time.print("\nCLONE\n", .{});
 
     printResult(benchmark("clone (sparse ~65K containers)", benchCloneSparse, .{allocator}, 1));
     printResult(benchmark("clone (dense 8 containers)", benchCloneDense, .{allocator}, 1));
 
     // --- In-place operation benchmarks (op only, clone done in setup) ---
-    std.debug.print("\nSET OPERATIONS (in-place, operation time only)\n", .{});
+    bench_time.print("\nSET OPERATIONS (in-place, operation time only)\n", .{});
 
     setupPreclonedSparse(allocator);
     printResult(benchmark("bitwiseOrInPlace (sparse)", benchOrInPlaceSparseOpOnly, .{allocator}, 1));
@@ -479,19 +479,19 @@ pub fn main() !void {
     cleanupPrecloned();
 
     // --- Iterator benchmark ---
-    std.debug.print("\nITERATION\n", .{});
+    bench_time.print("\nITERATION\n", .{});
 
     printResult(benchmark("iterator (1M values)", benchIterator, .{allocator}, N_VALUES));
 
     // --- Serialization benchmarks ---
-    std.debug.print("\nSERIALIZATION\n", .{});
+    bench_time.print("\nSERIALIZATION\n", .{});
     setupSerializedData(allocator);
 
     printResult(benchmark("serialize (1M values)", benchSerialize, .{allocator}, N_VALUES));
     printResult(benchmark("deserialize (1M values)", benchDeserialize, .{allocator}, N_VALUES));
 
     // --- FrozenBitmap benchmarks ---
-    std.debug.print("\nFROZEN BITMAP (zero-copy)\n", .{});
+    bench_time.print("\nFROZEN BITMAP (zero-copy)\n", .{});
     setupFrozenBitmap(allocator);
 
     printResult(benchmark("FrozenBitmap.contains (hit)", benchFrozenContainsHit, .{allocator}, N_VALUES));
@@ -499,7 +499,7 @@ pub fn main() !void {
     printResult(benchmark("FrozenBitmap.iterator (1M values)", benchFrozenIterator, .{allocator}, N_VALUES));
 
     // --- runOptimize benchmark ---
-    std.debug.print("\nOPTIMIZATION\n", .{});
+    bench_time.print("\nOPTIMIZATION\n", .{});
 
     printResult(benchmark("runOptimize (mixed containers)", benchRunOptimize, .{allocator}, 1));
 
@@ -517,5 +517,5 @@ pub fn main() !void {
     if (dense_b) |*bm| bm.deinit();
     if (serialized_data) |data| allocator.free(data);
 
-    std.debug.print("\nDone.\n", .{});
+    bench_time.print("\nDone.\n", .{});
 }

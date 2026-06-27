@@ -2,6 +2,7 @@ const std = @import("std");
 const rawr = @import("rawr");
 const c = @import("c");
 const test_gen = rawr.test_gen;
+const bench_time = @import("bench_time.zig");
 
 const Allocator = std.mem.Allocator;
 const RoaringBitmap = rawr.RoaringBitmap;
@@ -645,7 +646,7 @@ fn runLazyFootgunCase(allocator: Allocator) !void {
     var lazy = try a.bm.lazyOr(allocator, &b.bm, true);
     defer lazy.deinit();
     if (lazy.validate()) |_| {
-        std.debug.print("FAIL: lazy footgun - pre-repair validate unexpectedly succeeded\n", .{});
+        bench_time.print("FAIL: lazy footgun - pre-repair validate unexpectedly succeeded\n", .{});
         return error.LazyPreRepairValidateSucceeded;
     } else |_| {}
 
@@ -682,7 +683,7 @@ fn runLazyRepairEdgeCases(allocator: Allocator) !void {
     try large.repairAfterLazy();
     try large.validate();
     if (large.size != 1 or large.containers[0].getType() != .bitset) {
-        std.debug.print("FAIL: repair:large-lazy-bitset - expected one bitset container\n", .{});
+        bench_time.print("FAIL: repair:large-lazy-bitset - expected one bitset container\n", .{});
         return error.LazyRepairExpectedBitset;
     }
 }
@@ -811,7 +812,7 @@ fn assertToArrayAgree(allocator: Allocator, name: []const u8, bm: *RoaringBitmap
     const rawr_alloc = try bm.toArrayAlloc(allocator);
     defer allocator.free(rawr_alloc);
     if (rawr_alloc.len != card) {
-        std.debug.print("FAIL: {s}:toArrayAlloc length differs: got={d} want={d}\n", .{ name, rawr_alloc.len, card });
+        bench_time.print("FAIL: {s}:toArrayAlloc length differs: got={d} want={d}\n", .{ name, rawr_alloc.len, card });
         return error.CardinalityMismatch;
     }
 
@@ -819,7 +820,7 @@ fn assertToArrayAgree(allocator: Allocator, name: []const u8, bm: *RoaringBitmap
     defer allocator.free(rawr_out);
     const written = bm.toArray(rawr_out);
     if (written != card or !std.mem.eql(u32, rawr_out, rawr_alloc)) {
-        std.debug.print("FAIL: {s}:toArray differs from toArrayAlloc\n", .{name});
+        bench_time.print("FAIL: {s}:toArray differs from toArrayAlloc\n", .{name});
         return error.ContentMismatch;
     }
 
@@ -831,7 +832,7 @@ fn assertToArrayAgree(allocator: Allocator, name: []const u8, bm: *RoaringBitmap
         iter_out[i] = value;
     }
     if (i != card or !std.mem.eql(u32, iter_out, rawr_alloc)) {
-        std.debug.print("FAIL: {s}:toArray differs from iterator\n", .{name});
+        bench_time.print("FAIL: {s}:toArray differs from iterator\n", .{name});
         return error.ContentMismatch;
     }
 
@@ -843,7 +844,7 @@ fn assertToArrayAgree(allocator: Allocator, name: []const u8, bm: *RoaringBitmap
         c.roaring_bitmap_to_uint32_array(oracle, oracle_out.ptr);
     }
     if (!std.mem.eql(u32, oracle_out, rawr_alloc)) {
-        std.debug.print("FAIL: {s}:toArray differs from CRoaring output\n", .{name});
+        bench_time.print("FAIL: {s}:toArray differs from CRoaring output\n", .{name});
         return error.ContentMismatch;
     }
 }
@@ -916,7 +917,7 @@ fn runTransitionCases(allocator: Allocator) !void {
 }
 
 fn runRandomizedLoop(allocator: Allocator) !void {
-    std.debug.print("random difftest seed=0x{x}, iters={d}, max_chunks={d}\n", .{
+    bench_time.print("random difftest seed=0x{x}, iters={d}, max_chunks={d}\n", .{
         RANDOM_SEED,
         RANDOM_ITERS,
         RANDOM_MAX_CHUNKS,
@@ -928,10 +929,10 @@ fn runRandomizedLoop(allocator: Allocator) !void {
     for (0..RANDOM_ITERS) |i| {
         const run_optimize = (i % 2) == 1;
         if (PRINT_RANDOM_PROGRESS) {
-            std.debug.print("random iteration {d}, run_optimize={}\n", .{ i, run_optimize });
+            bench_time.print("random iteration {d}, run_optimize={}\n", .{ i, run_optimize });
         }
         runRandomIteration(allocator, rng, i, run_optimize) catch |err| {
-            std.debug.print("FAIL: random iteration {d}, seed=0x{x}, run_optimize={} -> {s}\n", .{
+            bench_time.print("FAIL: random iteration {d}, seed=0x{x}, run_optimize={} -> {s}\n", .{
                 i,
                 RANDOM_SEED,
                 run_optimize,
@@ -1047,16 +1048,16 @@ fn runRandomIteration(allocator: Allocator, rng: std.Random, iteration: usize, r
 
 fn logPass(comptime fmt: []const u8, args: anytype) void {
     if (PRINT_PASSES) {
-        std.debug.print(fmt, args);
+        bench_time.print(fmt, args);
     }
 }
 
 fn printBitmapSummary(label: []const u8, bm: *RoaringBitmap) void {
-    std.debug.print("{s}: containers={d}, cardinality={d}", .{ label, bm.size, bm.cardinality() });
+    bench_time.print("{s}: containers={d}, cardinality={d}", .{ label, bm.size, bm.cardinality() });
     for (bm.keys[0..bm.size], bm.containers[0..bm.size]) |key, container| {
-        std.debug.print(" [{d}:{s}]", .{ key, @tagName(container.getType()) });
+        bench_time.print(" [{d}:{s}]", .{ key, @tagName(container.getType()) });
     }
-    std.debug.print("\n", .{});
+    bench_time.print("\n", .{});
 }
 
 fn runPromotionCase(allocator: Allocator) !void {
@@ -1235,12 +1236,12 @@ fn assertSingleContainerType(
     expected: rawr.TaggedPtr.ContainerType,
 ) !void {
     if (bm.size != 1) {
-        std.debug.print("FAIL: {s} - expected 1 container, got {d}\n", .{ name, bm.size });
+        bench_time.print("FAIL: {s} - expected 1 container, got {d}\n", .{ name, bm.size });
         return error.ContainerShapeMismatch;
     }
     const actual = bm.containers[0].getType();
     if (actual != expected) {
-        std.debug.print("FAIL: {s} - expected container type {s}, got {s}\n", .{
+        bench_time.print("FAIL: {s} - expected container type {s}, got {s}\n", .{
             name,
             @tagName(expected),
             @tagName(actual),
@@ -1251,12 +1252,12 @@ fn assertSingleContainerType(
 
 fn assertKeys(name: []const u8, bm: *const RoaringBitmap, expected: []const u16) !void {
     if (bm.size != expected.len) {
-        std.debug.print("FAIL: {s} - expected {d} containers, got {d}\n", .{ name, expected.len, bm.size });
+        bench_time.print("FAIL: {s} - expected {d} containers, got {d}\n", .{ name, expected.len, bm.size });
         return error.ContainerShapeMismatch;
     }
     for (expected, 0..) |key, i| {
         if (bm.keys[i] != key) {
-            std.debug.print("FAIL: {s} - key[{d}] expected {d}, got {d}\n", .{ name, i, key, bm.keys[i] });
+            bench_time.print("FAIL: {s} - key[{d}] expected {d}, got {d}\n", .{ name, i, key, bm.keys[i] });
             return error.ContainerShapeMismatch;
         }
     }
@@ -1272,18 +1273,18 @@ fn runOrderedChecks(
     oracle_b: *c.roaring_bitmap_t,
 ) !void {
     if (PRINT_RANDOM_PROGRESS and std.mem.startsWith(u8, case_name, "random:")) {
-        std.debug.print("{s}:{s}:predicates\n", .{ case_name, order_name });
+        bench_time.print("{s}:{s}:predicates\n", .{ case_name, order_name });
     }
     try assertPredicatesAgree(case_name, order_name, a, b, oracle_a, oracle_b);
 
     const ops = [_]BinaryOp{ .bitwise_or, .bitwise_and, .bitwise_xor, .bitwise_difference };
     for (ops) |op| {
         if (PRINT_RANDOM_PROGRESS and std.mem.startsWith(u8, case_name, "random:")) {
-            std.debug.print("{s}:{s}:{s}:alloc\n", .{ case_name, order_name, op.name() });
+            bench_time.print("{s}:{s}:{s}:alloc\n", .{ case_name, order_name, op.name() });
         }
         try assertAllocatingOpAgree(allocator, case_name, order_name, op, a, b, oracle_a, oracle_b);
         if (PRINT_RANDOM_PROGRESS and std.mem.startsWith(u8, case_name, "random:")) {
-            std.debug.print("{s}:{s}:{s}:inplace\n", .{ case_name, order_name, op.name() });
+            bench_time.print("{s}:{s}:{s}:inplace\n", .{ case_name, order_name, op.name() });
         }
         try assertInPlaceOpAgree(allocator, case_name, order_name, op, a, b, oracle_a, oracle_b);
     }
@@ -1300,13 +1301,13 @@ fn assertAllocatingOpAgree(
     oracle_b: *c.roaring_bitmap_t,
 ) !void {
     if (PRINT_RANDOM_PROGRESS and std.mem.startsWith(u8, case_name, "random:")) {
-        std.debug.print("{s}:{s}:{s}:alloc:rawr\n", .{ case_name, order_name, op.name() });
+        bench_time.print("{s}:{s}:{s}:alloc:rawr\n", .{ case_name, order_name, op.name() });
     }
     var rawr_result = try rawrAllocatingOp(allocator, op, a, b);
     defer rawr_result.deinit();
 
     if (PRINT_RANDOM_PROGRESS and std.mem.startsWith(u8, case_name, "random:")) {
-        std.debug.print("{s}:{s}:{s}:alloc:oracle\n", .{ case_name, order_name, op.name() });
+        bench_time.print("{s}:{s}:{s}:alloc:oracle\n", .{ case_name, order_name, op.name() });
     }
     const oracle_result = try oracleAllocatingOp(op, oracle_a, oracle_b);
     defer c.roaring_bitmap_free(oracle_result);
@@ -1314,7 +1315,7 @@ fn assertAllocatingOpAgree(
     var name_buf: [128]u8 = undefined;
     const name = try std.fmt.bufPrint(&name_buf, "{s}:{s}:{s}:alloc", .{ case_name, order_name, op.name() });
     if (PRINT_RANDOM_PROGRESS and std.mem.startsWith(u8, case_name, "random:")) {
-        std.debug.print("{s}:{s}:{s}:alloc:assert\n", .{ case_name, order_name, op.name() });
+        bench_time.print("{s}:{s}:{s}:alloc:assert\n", .{ case_name, order_name, op.name() });
     }
     try assertAgree(allocator, name, &rawr_result, oracle_result);
 }
@@ -1337,7 +1338,7 @@ fn assertInPlaceOpAgree(
     try rawrInPlaceOp(op, &rawr_in_place, b);
 
     if (!rawr_in_place.equals(&rawr_allocating)) {
-        std.debug.print("FAIL: {s}:{s}:{s}:inplace - rawr in-place result differs from allocating result\n", .{
+        bench_time.print("FAIL: {s}:{s}:{s}:inplace - rawr in-place result differs from allocating result\n", .{
             case_name,
             order_name,
             op.name(),
@@ -1377,7 +1378,7 @@ fn assertFlipAgree(
     try rawr_in_place.flipInplace(lo, hi);
 
     if (!rawr_in_place.equals(&rawr_result)) {
-        std.debug.print("FAIL: {s}:inplace - rawr in-place result differs from allocating result\n", .{name});
+        bench_time.print("FAIL: {s}:inplace - rawr in-place result differs from allocating result\n", .{name});
         return error.InPlaceMismatch;
     }
 
@@ -1413,7 +1414,7 @@ fn assertRangeOpsAgree(
     if (lo <= hi) {
         const range_size = @as(u64, hi) - lo + 1;
         if (rawr_contains != (rawr_cardinality == range_size)) {
-            std.debug.print("FAIL: {s}:containsRange rawr cross-check failed: contains={} card={d} range={d}\n", .{
+            bench_time.print("FAIL: {s}:containsRange rawr cross-check failed: contains={} card={d} range={d}\n", .{
                 name,
                 rawr_contains,
                 rawr_cardinality,
@@ -1422,7 +1423,7 @@ fn assertRangeOpsAgree(
             return error.PredicateMismatch;
         }
     } else if (!rawr_contains or rawr_cardinality != 0) {
-        std.debug.print("FAIL: {s}:empty range cross-check failed: contains={} card={d}\n", .{
+        bench_time.print("FAIL: {s}:empty range cross-check failed: contains={} card={d}\n", .{
             name,
             rawr_contains,
             rawr_cardinality,
@@ -1431,7 +1432,7 @@ fn assertRangeOpsAgree(
     }
 
     if (rawr_intersects != (rawr_cardinality > 0)) {
-        std.debug.print("FAIL: {s}:intersectsRange rawr cross-check failed: intersects={} card={d}\n", .{
+        bench_time.print("FAIL: {s}:intersectsRange rawr cross-check failed: intersects={} card={d}\n", .{
             name,
             rawr_intersects,
             rawr_cardinality,
@@ -1445,7 +1446,7 @@ fn assertRangeOpsAgree(
     const removed = try rawr_removed.removeRange(lo, hi);
     const after = rawr_removed.cardinality();
     if (removed != before - after) {
-        std.debug.print("FAIL: {s}:removeRange count differs: removed={d} before-after={d}\n", .{
+        bench_time.print("FAIL: {s}:removeRange count differs: removed={d} before-after={d}\n", .{
             name,
             removed,
             before - after,
@@ -1569,7 +1570,7 @@ fn assertPositionalsAgree(
         const oracle_index = c.roaring_bitmap_get_index(oracle, probe);
         if (oracle_index < 0) {
             if (rawr_index != null) {
-                std.debug.print("FAIL: {s}:{s}:getIndex({s},{d}) differs: rawr={?d} croaring=-1\n", .{
+                bench_time.print("FAIL: {s}:{s}:getIndex({s},{d}) differs: rawr={?d} croaring=-1\n", .{
                     case_name,
                     order_name,
                     operand_name,
@@ -1579,7 +1580,7 @@ fn assertPositionalsAgree(
                 return error.PredicateMismatch;
             }
         } else if (rawr_index == null or rawr_index.? != @as(u64, @intCast(oracle_index))) {
-            std.debug.print("FAIL: {s}:{s}:getIndex({s},{d}) differs: rawr={?d} croaring={d}\n", .{
+            bench_time.print("FAIL: {s}:{s}:getIndex({s},{d}) differs: rawr={?d} croaring={d}\n", .{
                 case_name,
                 order_name,
                 operand_name,
@@ -1611,7 +1612,7 @@ fn assertPositionalsAgree(
             const oracle_ok = c.roaring_bitmap_select(oracle, @intCast(rank_probe), &oracle_value);
             if (!oracle_ok) {
                 if (rawr_value != null) {
-                    std.debug.print("FAIL: {s}:{s}:select({s},{d}) differs: rawr={?d} croaring=null\n", .{
+                    bench_time.print("FAIL: {s}:{s}:select({s},{d}) differs: rawr={?d} croaring=null\n", .{
                         case_name,
                         order_name,
                         operand_name,
@@ -1621,7 +1622,7 @@ fn assertPositionalsAgree(
                     return error.PredicateMismatch;
                 }
             } else if (rawr_value == null or rawr_value.? != oracle_value) {
-                std.debug.print("FAIL: {s}:{s}:select({s},{d}) differs: rawr={?d} croaring={d}\n", .{
+                bench_time.print("FAIL: {s}:{s}:select({s},{d}) differs: rawr={?d} croaring={d}\n", .{
                     case_name,
                     order_name,
                     operand_name,
@@ -1632,7 +1633,7 @@ fn assertPositionalsAgree(
                 return error.PredicateMismatch;
             }
         } else if (rawr_value != null) {
-            std.debug.print("FAIL: {s}:{s}:select({s},{d}) expected null for oversized rank, got {?d}\n", .{
+            bench_time.print("FAIL: {s}:{s}:select({s},{d}) expected null for oversized rank, got {?d}\n", .{
                 case_name,
                 order_name,
                 operand_name,
@@ -1646,7 +1647,7 @@ fn assertPositionalsAgree(
             try expectEqualScalar(case_name, order_name, "rank(select(k))", bm.rank(value), rank_probe + 1);
             const selected_again = bm.select(bm.rank(value) - 1);
             if (selected_again == null or selected_again.? != value) {
-                std.debug.print("FAIL: {s}:{s}:select(rank(v)-1)({s},{d}) got {?d}\n", .{
+                bench_time.print("FAIL: {s}:{s}:select(rank(v)-1)({s},{d}) got {?d}\n", .{
                     case_name,
                     order_name,
                     operand_name,
@@ -1695,7 +1696,7 @@ fn assertMinMaxAgree(
 ) !void {
     if (c.roaring_bitmap_is_empty(oracle)) {
         if (bm.minimum() != null or bm.maximum() != null) {
-            std.debug.print("FAIL: {s}:{s}:minmax({s}) - rawr non-null min/max for empty bitmap\n", .{
+            bench_time.print("FAIL: {s}:{s}:minmax({s}) - rawr non-null min/max for empty bitmap\n", .{
                 case_name,
                 order_name,
                 operand_name,
@@ -1717,7 +1718,7 @@ fn expectEqualBool(
     oracle_value: bool,
 ) !void {
     if (rawr_value != oracle_value) {
-        std.debug.print("FAIL: {s}:{s}:{s} differs: rawr={} croaring={}\n", .{
+        bench_time.print("FAIL: {s}:{s}:{s} differs: rawr={} croaring={}\n", .{
             case_name,
             order_name,
             predicate_name,
@@ -1741,7 +1742,7 @@ fn expectEqualFloat(
     const diff = @abs(rawr_value - oracle_value);
     if (diff <= 1e-12) return;
 
-    std.debug.print("FAIL: {s}:{s}:{s} differs: rawr={d} croaring={d}\n", .{
+    bench_time.print("FAIL: {s}:{s}:{s} differs: rawr={d} croaring={d}\n", .{
         case_name,
         order_name,
         predicate_name,
@@ -1759,7 +1760,7 @@ fn expectEqualScalar(
     oracle_value: u64,
 ) !void {
     if (rawr_value != oracle_value) {
-        std.debug.print("FAIL: {s}:{s}:{s} differs: rawr={d} croaring={d}\n", .{
+        bench_time.print("FAIL: {s}:{s}:{s} differs: rawr={d} croaring={d}\n", .{
             case_name,
             order_name,
             predicate_name,
@@ -1778,7 +1779,7 @@ fn expectEqualOptionalScalar(
     oracle_value: u32,
 ) !void {
     if (rawr_value == null or rawr_value.? != oracle_value) {
-        std.debug.print("FAIL: {s}:{s}:{s} differs: rawr={?d} croaring={d}\n", .{
+        bench_time.print("FAIL: {s}:{s}:{s} differs: rawr={?d} croaring={d}\n", .{
             case_name,
             order_name,
             predicate_name,
@@ -1869,14 +1870,14 @@ fn assertOrManyHeapAgree(
 
 fn expectRawrEqual(name: []const u8, a: *const RoaringBitmap, b: *const RoaringBitmap) !void {
     if (!a.equals(b)) {
-        std.debug.print("FAIL: {s} - rawr bitmaps differ\n", .{name});
+        bench_time.print("FAIL: {s} - rawr bitmaps differ\n", .{name});
         return error.RawrMismatch;
     }
 }
 
 fn expectRawrEmpty(name: []const u8, bm: *const RoaringBitmap) !void {
     if (!bm.isEmpty()) {
-        std.debug.print("FAIL: {s} - expected empty bitmap\n", .{name});
+        bench_time.print("FAIL: {s} - expected empty bitmap\n", .{name});
         return error.RawrMismatch;
     }
 }
@@ -1897,7 +1898,7 @@ fn assertAgree(
     const rawr_cardinality = rawr_bm.cardinality();
     const oracle_cardinality = c.roaring_bitmap_get_cardinality(comparable_oracle);
     if (rawr_cardinality != oracle_cardinality) {
-        std.debug.print("FAIL: {s} - cardinality differs: rawr={d} croaring={d}\n", .{
+        bench_time.print("FAIL: {s} - cardinality differs: rawr={d} croaring={d}\n", .{
             name,
             rawr_cardinality,
             oracle_cardinality,
@@ -1921,7 +1922,7 @@ fn assertAgree(
     var iter = rawr_bm.iterator();
     while (iter.next()) |value| {
         if (!c.roaring_bitmap_contains(comparable_oracle, value)) {
-            std.debug.print("FAIL: {s} - CRoaring missing rawr value {d}\n", .{ name, value });
+            bench_time.print("FAIL: {s} - CRoaring missing rawr value {d}\n", .{ name, value });
             return error.MissingValue;
         }
     }
@@ -1945,7 +1946,7 @@ fn assertSameValues(
     const rawr_cardinality = rawr_bm.cardinality();
     const oracle_cardinality = c.roaring_bitmap_get_cardinality(oracle);
     if (rawr_cardinality != oracle_cardinality) {
-        std.debug.print("FAIL: {s} - cardinality differs: rawr={d} croaring={d}\n", .{
+        bench_time.print("FAIL: {s} - cardinality differs: rawr={d} croaring={d}\n", .{
             name,
             rawr_cardinality,
             oracle_cardinality,
@@ -1956,7 +1957,7 @@ fn assertSameValues(
     var iter = rawr_bm.iterator();
     while (iter.next()) |value| {
         if (!c.roaring_bitmap_contains(oracle, value)) {
-            std.debug.print("FAIL: {s} - CRoaring missing rawr value {d}\n", .{ name, value });
+            bench_time.print("FAIL: {s} - CRoaring missing rawr value {d}\n", .{ name, value });
             return error.MissingValue;
         }
     }
@@ -1998,7 +1999,7 @@ fn assertAbsentSamplesAgree(name: []const u8, rawr_bm: *const RoaringBitmap, ora
         const rawr_contains = rawr_bm.contains(value);
         const oracle_contains = c.roaring_bitmap_contains(oracle, value);
         if (rawr_contains != oracle_contains) {
-            std.debug.print("FAIL: {s} - contains({d}) differs: rawr={} croaring={}\n", .{
+            bench_time.print("FAIL: {s} - contains({d}) differs: rawr={} croaring={}\n", .{
                 name,
                 value,
                 rawr_contains,
@@ -2018,38 +2019,38 @@ fn assertCrossDeserializeAgree(
     oracle_bytes: []const u8,
 ) !void {
     const cr_from_rawr = c.roaring_bitmap_portable_deserialize_safe(@ptrCast(rawr_bytes.ptr), rawr_bytes.len) orelse {
-        std.debug.print("FAIL: {s} - CRoaring failed to deserialize rawr bytes\n", .{name});
+        bench_time.print("FAIL: {s} - CRoaring failed to deserialize rawr bytes\n", .{name});
         return error.CRoaringDeserializeFailed;
     };
     defer c.roaring_bitmap_free(cr_from_rawr);
 
     if (c.roaring_bitmap_get_cardinality(cr_from_rawr) != rawr_bm.cardinality()) {
-        std.debug.print("FAIL: {s} - CRoaring cardinality changed after rawr-byte deserialize\n", .{name});
+        bench_time.print("FAIL: {s} - CRoaring cardinality changed after rawr-byte deserialize\n", .{name});
         return error.CardinalityMismatch;
     }
     if (!c.roaring_bitmap_equals(cr_from_rawr, oracle)) {
-        std.debug.print("FAIL: {s} - CRoaring content changed after rawr-byte deserialize\n", .{name});
+        bench_time.print("FAIL: {s} - CRoaring content changed after rawr-byte deserialize\n", .{name});
         return error.ContentMismatch;
     }
 
     var rawr_from_cr = RoaringBitmap.deserialize(allocator, oracle_bytes) catch |err| {
-        std.debug.print("FAIL: {s} - rawr failed to deserialize CRoaring bytes: {s}\n", .{ name, @errorName(err) });
+        bench_time.print("FAIL: {s} - rawr failed to deserialize CRoaring bytes: {s}\n", .{ name, @errorName(err) });
         return error.RawrDeserializeFailed;
     };
     defer rawr_from_cr.deinit();
 
     if (rawr_from_cr.cardinality() != c.roaring_bitmap_get_cardinality(oracle)) {
-        std.debug.print("FAIL: {s} - rawr cardinality changed after CRoaring-byte deserialize\n", .{name});
+        bench_time.print("FAIL: {s} - rawr cardinality changed after CRoaring-byte deserialize\n", .{name});
         return error.CardinalityMismatch;
     }
     if (!rawr_from_cr.equals(rawr_bm)) {
-        std.debug.print("FAIL: {s} - rawr content changed after CRoaring-byte deserialize\n", .{name});
+        bench_time.print("FAIL: {s} - rawr content changed after CRoaring-byte deserialize\n", .{name});
         return error.ContentMismatch;
     }
 }
 
 fn printByteMismatch(name: []const u8, rawr_bytes: []const u8, oracle_bytes: []const u8) void {
-    std.debug.print("FAIL: {s} - bytes differ! rawr={d} bytes, croaring={d} bytes\n", .{
+    bench_time.print("FAIL: {s} - bytes differ! rawr={d} bytes, croaring={d} bytes\n", .{
         name,
         rawr_bytes.len,
         oracle_bytes.len,
@@ -2058,7 +2059,7 @@ fn printByteMismatch(name: []const u8, rawr_bytes: []const u8, oracle_bytes: []c
     const min_len = @min(rawr_bytes.len, oracle_bytes.len);
     for (0..min_len) |i| {
         if (rawr_bytes[i] != oracle_bytes[i]) {
-            std.debug.print("  First difference at byte {d}: rawr=0x{x:0>2} cr=0x{x:0>2}\n", .{
+            bench_time.print("  First difference at byte {d}: rawr=0x{x:0>2} cr=0x{x:0>2}\n", .{
                 i,
                 rawr_bytes[i],
                 oracle_bytes[i],

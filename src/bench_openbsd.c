@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #include <sys/time.h>
@@ -33,4 +34,11 @@ void *rawr_bench_aligned_alloc(size_t alignment, size_t size) {
 
 void rawr_bench_free(void *ptr) {
     free(ptr);
+}
+
+void rawr_bench_write_stderr(const char *ptr, size_t len) {
+    if (len == 0) {
+        return;
+    }
+    (void)fwrite(ptr, 1, len, stderr);
 }

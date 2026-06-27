@@ -62,6 +62,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     validate_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, validate_mod, target);
     addTranslatedCImport(b, validate_mod, .{
         .header = "vendor/croaring_wrapper.h",
         .include_dir = "vendor/",
@@ -87,6 +88,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     });
     difftest_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, difftest_mod, target);
     addTranslatedCImport(b, difftest_mod, .{
         .header = "vendor/croaring_wrapper.h",
         .include_dir = "vendor/",

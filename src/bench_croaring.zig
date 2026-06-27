@@ -45,15 +45,15 @@ fn benchmark(comptime func: anytype, args: anytype) BenchResult {
 }
 
 fn printHeader() void {
-    std.debug.print("\n{s:<40} {s:>12} {s:>12} {s:>8}\n", .{ "Operation", "rawr (ms)", "CRoaring", "ratio" });
-    std.debug.print("{s:-<40} {s:->12} {s:->12} {s:->8}\n", .{ "", "", "", "" });
+    bench_time.print("\n{s:<40} {s:>12} {s:>12} {s:>8}\n", .{ "Operation", "rawr (ms)", "CRoaring", "ratio" });
+    bench_time.print("{s:-<40} {s:->12} {s:->12} {s:->8}\n", .{ "", "", "", "" });
 }
 
 fn printResult(name: []const u8, rawr_ns: u64, cr_ns: u64) void {
     const rawr_ms = @as(f64, @floatFromInt(rawr_ns)) / 1_000_000.0;
     const cr_ms = @as(f64, @floatFromInt(cr_ns)) / 1_000_000.0;
     const ratio = if (cr_ns > 0) rawr_ms / cr_ms else 0;
-    std.debug.print("{s:<40} {d:>12.2} {d:>12.2} {d:>8.2}x\n", .{ name, rawr_ms, cr_ms, ratio });
+    bench_time.print("{s:<40} {d:>12.2} {d:>12.2} {d:>8.2}x\n", .{ name, rawr_ms, cr_ms, ratio });
 }
 
 // ============================================================================
@@ -846,17 +846,17 @@ fn benchCRoaringRangeCardinalityBitsetLarge() void {
 // ============================================================================
 
 pub fn main() !void {
-    std.debug.print("Rawr vs CRoaring Benchmark Comparison\n", .{});
-    std.debug.print("======================================\n", .{});
+    bench_time.print("Rawr vs CRoaring Benchmark Comparison\n", .{});
+    bench_time.print("======================================\n", .{});
     bench_time.printRunTimestamp();
-    std.debug.print("N = {d} values, {d} warmup, {d} timed runs (median)\n", .{ N_VALUES, WARMUP_RUNS, BENCH_RUNS });
+    bench_time.print("N = {d} values, {d} warmup, {d} timed runs (median)\n", .{ N_VALUES, WARMUP_RUNS, BENCH_RUNS });
 
-    std.debug.print("\nInitializing test data...\n", .{});
+    bench_time.print("\nInitializing test data...\n", .{});
     initTestData();
 
     // --- Add benchmarks ---
     printHeader();
-    std.debug.print("ADD OPERATIONS\n", .{});
+    bench_time.print("ADD OPERATIONS\n", .{});
 
     var r = benchmark(benchRawrAddRandom, .{});
     var cr = benchmark(benchCRoaringAddRandom, .{});
@@ -879,7 +879,7 @@ pub fn main() !void {
     printResult("addRange (1M)", r.median_ns, cr.median_ns);
 
     // --- Contains benchmarks ---
-    std.debug.print("\nCONTAINS OPERATIONS\n", .{});
+    bench_time.print("\nCONTAINS OPERATIONS\n", .{});
     initRawrContainsBm();
     initCRoaringContainsBm();
 
@@ -892,7 +892,7 @@ pub fn main() !void {
     printResult("contains (miss)", r.median_ns, cr.median_ns);
 
     // --- Set operations ---
-    std.debug.print("\nSET OPERATIONS (new bitmap)\n", .{});
+    bench_time.print("\nSET OPERATIONS (new bitmap)\n", .{});
     initRawrSparseBitmaps();
     initCRoaringSparseBitmaps();
     initRawrDenseBitmaps();
@@ -939,7 +939,7 @@ pub fn main() !void {
     printResult("xorMany (32 mixed)", r.median_ns, cr.median_ns);
 
     // --- Iteration ---
-    std.debug.print("\nITERATION\n", .{});
+    bench_time.print("\nITERATION\n", .{});
 
     r = benchmark(benchRawrIterate, .{});
     cr = benchmark(benchCRoaringIterate, .{});
@@ -955,7 +955,7 @@ pub fn main() !void {
     printResult("toArrayAlloc (1M values)", r.median_ns, cr.median_ns);
 
     // --- Serialization ---
-    std.debug.print("\nSERIALIZATION\n", .{});
+    bench_time.print("\nSERIALIZATION\n", .{});
     initRawrSerialized();
     initCRoaringSerialized();
 
@@ -971,14 +971,14 @@ pub fn main() !void {
     printResult("deserialize (arena)", r.median_ns, cr.median_ns);
 
     // --- Cardinality ---
-    std.debug.print("\nCARDINALITY\n", .{});
+    bench_time.print("\nCARDINALITY\n", .{});
 
     r = benchmark(benchRawrCardinality, .{});
     cr = benchmark(benchCRoaringCardinality, .{});
     printResult("cardinality", r.median_ns, cr.median_ns);
 
     // --- Positional queries ---
-    std.debug.print("\nPOSITIONAL QUERIES\n", .{});
+    bench_time.print("\nPOSITIONAL QUERIES\n", .{});
 
     r = benchmark(benchRawrRankDense, .{});
     cr = benchmark(benchCRoaringRankDense, .{});
@@ -993,7 +993,7 @@ pub fn main() !void {
     printResult("rankMany (dense)", r.median_ns, cr.median_ns);
 
     // --- Range operations ---
-    std.debug.print("\nRANGE OPERATIONS\n", .{});
+    bench_time.print("\nRANGE OPERATIONS\n", .{});
     initRawrBitsetRangeBm();
     initCRoaringBitsetRangeBm();
 
@@ -1038,6 +1038,6 @@ pub fn main() !void {
     }
     if (cr_serialized) |s| allocator.free(s);
 
-    std.debug.print("\nDone.\n", .{});
-    std.debug.print("\nNote: ratio < 1.0 = rawr faster, > 1.0 = CRoaring faster\n", .{});
+    bench_time.print("\nDone.\n", .{});
+    bench_time.print("\nNote: ratio < 1.0 = rawr faster, > 1.0 = CRoaring faster\n", .{});
 }

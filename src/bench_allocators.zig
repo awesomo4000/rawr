@@ -235,34 +235,34 @@ fn benchDeserialize(out_choice: AllocChoice) void {
 // --- Output formatting ---
 
 fn printHeader() void {
-    std.debug.print("Allocator Matrix Benchmark\n", .{});
-    std.debug.print("==========================\n", .{});
-    std.debug.print("{d} warmup, {d} timed runs (median)\n\n", .{ WARMUP_RUNS, BENCH_RUNS });
+    bench_time.print("Allocator Matrix Benchmark\n", .{});
+    bench_time.print("==========================\n", .{});
+    bench_time.print("{d} warmup, {d} timed runs (median)\n\n", .{ WARMUP_RUNS, BENCH_RUNS });
 }
 
 fn printSingleResult(op_name: []const u8, input_name: []const u8, output_name: []const u8, ms: f64) void {
-    std.debug.print("{s:<30} input={s:<6} output={s:<6} {d:>8.2} ms\n", .{ op_name, input_name, output_name, ms });
+    bench_time.print("{s:<30} input={s:<6} output={s:<6} {d:>8.2} ms\n", .{ op_name, input_name, output_name, ms });
 }
 
 fn printMatrixHeader(op_name: []const u8) void {
-    std.debug.print("\n{s}\n", .{op_name});
-    std.debug.print("{s:>14}", .{""});
+    bench_time.print("\n{s}\n", .{op_name});
+    bench_time.print("{s:>14}", .{""});
     inline for (std.meta.fields(AllocChoice)) |f| {
-        std.debug.print(" {s:>8}", .{f.name});
+        bench_time.print(" {s:>8}", .{f.name});
     }
-    std.debug.print("\n", .{});
+    bench_time.print("\n", .{});
 }
 
 fn printMatrixRow(input_name: []const u8, values: [4]f64) void {
-    std.debug.print("INPUT: {s:<6}", .{input_name});
+    bench_time.print("INPUT: {s:<6}", .{input_name});
     for (values) |v| {
         if (v < 0) {
-            std.debug.print(" {s:>8}", .{"N/A"});
+            bench_time.print(" {s:>8}", .{"N/A"});
         } else {
-            std.debug.print(" {d:>8.2}", .{v});
+            bench_time.print(" {d:>8.2}", .{v});
         }
     }
-    std.debug.print("\n", .{});
+    bench_time.print("\n", .{});
 }
 
 // --- Main ---
@@ -283,13 +283,13 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.startsWith(u8, arg, "--input=")) {
             const name = arg[8..];
             input_choice = nameToChoice(name) orelse {
-                std.debug.print("Unknown allocator: {s}\n", .{name});
+                bench_time.print("Unknown allocator: {s}\n", .{name});
                 return;
             };
         } else if (std.mem.startsWith(u8, arg, "--output=")) {
             const name = arg[9..];
             output_choice = nameToChoice(name) orelse {
-                std.debug.print("Unknown allocator: {s}\n", .{name});
+                bench_time.print("Unknown allocator: {s}\n", .{name});
                 return;
             };
         } else if (std.mem.eql(u8, arg, "--matrix")) {
@@ -313,7 +313,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    std.debug.print("Initializing test data...\n", .{});
+    bench_time.print("Initializing test data...\n", .{});
     initTestData();
 
     if (run_matrix) {
@@ -325,7 +325,7 @@ pub fn main(init: std.process.Init) !void {
 
 fn runSingle(input_choice: AllocChoice, output_choice: AllocChoice, run_and: bool, run_or: bool, run_deser: bool) void {
     printHeader();
-    std.debug.print("input={s}, output={s}\n\n", .{ choiceToName(input_choice), choiceToName(output_choice) });
+    bench_time.print("input={s}, output={s}\n\n", .{ choiceToName(input_choice), choiceToName(output_choice) });
 
     // Build input bitmaps
     var input_ctx = AllocContext.init(input_choice);
@@ -410,5 +410,5 @@ fn runMatrix(run_and: bool, run_or: bool, run_deser: bool) void {
         printMatrixRow("(N/A)", row);
     }
 
-    std.debug.print("\nDone.\n", .{});
+    bench_time.print("\nDone.\n", .{});
 }
