@@ -24,18 +24,32 @@ fn stopAfter(comptime phase: []const u8) bool {
     return comptime std.mem.eql(u8, bench_croaring_options.openbsd_repro_mode, phase);
 }
 
+fn trace(comptime message: []const u8) void {
+    if (bench_croaring_options.openbsd_repro_trace) {
+        bench_time.print("TRACE: " ++ message ++ "\n", .{});
+    }
+}
+
+fn callBenchmarkTarget(comptime func: anytype, args: anytype) void {
+    if (comptime std.mem.eql(u8, bench_croaring_options.openbsd_repro_call_mode, "never_inline")) {
+        _ = @call(.never_inline, func, args);
+    } else {
+        _ = @call(.auto, func, args);
+    }
+}
+
 fn benchmark(comptime func: anytype, args: anytype) BenchResult {
     var times: [BENCH_RUNS]u64 = undefined;
 
     // Warmup
     for (0..WARMUP_RUNS) |_| {
-        _ = @call(.auto, func, args);
+        callBenchmarkTarget(func, args);
     }
 
     // Timed runs
     for (0..BENCH_RUNS) |i| {
         const start = bench_time.monotonicNanos();
-        _ = @call(.auto, func, args);
+        callBenchmarkTarget(func, args);
         times[i] = bench_time.monotonicNanos() - start;
     }
 
@@ -865,24 +879,39 @@ pub fn main() !void {
     printHeader();
     bench_time.print("ADD OPERATIONS\n", .{});
 
+    trace("add random rawr");
     var r = benchmark(benchRawrAddRandom, .{});
+    trace("add random croaring");
     var cr = benchmark(benchCRoaringAddRandom, .{});
+    trace("add random print");
     printResult("add (random 1M)", r.median_ns, cr.median_ns);
 
+    trace("add sequential rawr");
     r = benchmark(benchRawrAddSequential, .{});
+    trace("add sequential croaring");
     cr = benchmark(benchCRoaringAddSequential, .{});
+    trace("add sequential print");
     printResult("add (sequential 1M)", r.median_ns, cr.median_ns);
 
+    trace("addMany random rawr");
     r = benchmark(benchRawrAddManyRandom, .{});
+    trace("addMany random croaring");
     cr = benchmark(benchCRoaringAddManyRandom, .{});
+    trace("addMany random print");
     printResult("addMany (random 1M)", r.median_ns, cr.median_ns);
 
+    trace("addMany sequential rawr");
     r = benchmark(benchRawrAddManySequential, .{});
+    trace("addMany sequential croaring");
     cr = benchmark(benchCRoaringAddManySequential, .{});
+    trace("addMany sequential print");
     printResult("addMany (sequential 1M)", r.median_ns, cr.median_ns);
 
+    trace("addRange rawr");
     r = benchmark(benchRawrAddRange, .{});
+    trace("addRange croaring");
     cr = benchmark(benchCRoaringAddRange, .{});
+    trace("addRange print");
     printResult("addRange (1M)", r.median_ns, cr.median_ns);
     if (comptime stopAfter("add")) return;
 
@@ -891,12 +920,18 @@ pub fn main() !void {
     initRawrContainsBm();
     initCRoaringContainsBm();
 
+    trace("contains hit rawr");
     r = benchmark(benchRawrContainsHit, .{});
+    trace("contains hit croaring");
     cr = benchmark(benchCRoaringContainsHit, .{});
+    trace("contains hit print");
     printResult("contains (hit)", r.median_ns, cr.median_ns);
 
+    trace("contains miss rawr");
     r = benchmark(benchRawrContainsMiss, .{});
+    trace("contains miss croaring");
     cr = benchmark(benchCRoaringContainsMiss, .{});
+    trace("contains miss print");
     printResult("contains (miss)", r.median_ns, cr.median_ns);
     if (comptime stopAfter("contains")) return;
 
