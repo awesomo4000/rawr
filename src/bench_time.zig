@@ -302,12 +302,13 @@ fn writeOpenBsdHex(value: anytype, spec: FormatSpec) void {
 }
 
 fn writeOpenBsdFloat(value: anytype, spec: FormatSpec) void {
-    if (std.math.isNan(value)) {
+    const f: f64 = @floatCast(value);
+    if (std.math.isNan(f)) {
         writeOpenBsdPadded("nan", spec);
         return;
     }
-    if (std.math.isInf(value)) {
-        writeOpenBsdPadded(if (value < 0) "-inf" else "inf", spec);
+    if (std.math.isInf(f)) {
+        writeOpenBsdPadded(if (f < 0) "-inf" else "inf", spec);
         return;
     }
 
@@ -315,8 +316,8 @@ fn writeOpenBsdFloat(value: anytype, spec: FormatSpec) void {
     var scale: u128 = 1;
     for (0..precision) |_| scale *= 10;
 
-    const negative = value < 0;
-    const abs_value = if (negative) -value else value;
+    const negative = f < 0;
+    const abs_value = if (negative) -f else f;
     const scaled_float = abs_value * @as(f64, @floatFromInt(scale)) + 0.5;
     const scaled: u128 = @intFromFloat(scaled_float);
     const whole = scaled / scale;

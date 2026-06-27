@@ -151,12 +151,176 @@ pub fn build(b: *std.Build) void {
     const bench_alloc_step = b.step("bench-alloc", "Build allocator matrix benchmark");
     bench_alloc_step.dependOn(&b.addInstallArtifact(bench_alloc_exe, .{}).step);
 
+    const openbsd_repros_step = b.step("openbsd-repros", "Build OpenBSD runtime repro programs");
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_00_empty",
+        .root = "src/openbsd_repro/00_empty.zig",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_01_c_no_args",
+        .root = "src/openbsd_repro/01_c_no_args.zig",
+        .repro_c = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_02_c_puts_zstring",
+        .root = "src/openbsd_repro/02_c_puts_zstring.zig",
+        .repro_c = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_03_c_write_literal",
+        .root = "src/openbsd_repro/03_c_write_literal.zig",
+        .repro_c = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_04_c_write_stack",
+        .root = "src/openbsd_repro/04_c_write_stack.zig",
+        .repro_c = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_05_c_write_global",
+        .root = "src/openbsd_repro/05_c_write_global.zig",
+        .repro_c = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_06_std_debug_print_no_libc",
+        .root = "src/openbsd_repro/06_std_debug_print.zig",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_07_std_debug_print_libc",
+        .root = "src/openbsd_repro/06_std_debug_print.zig",
+        .link_libc = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_08_std_fmt_bufprint",
+        .root = "src/openbsd_repro/08_std_fmt_bufprint.zig",
+        .repro_c = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_09_io_writer_fixed",
+        .root = "src/openbsd_repro/09_io_writer_fixed.zig",
+        .repro_c = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_10_std_c_gettimeofday",
+        .root = "src/openbsd_repro/10_std_c_gettimeofday.zig",
+        .repro_c = true,
+        .link_libc = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_11_std_c_clock_gettime",
+        .root = "src/openbsd_repro/11_std_c_clock_gettime.zig",
+        .repro_c = true,
+        .link_libc = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_12_std_heap_c_allocator",
+        .root = "src/openbsd_repro/12_std_heap_c_allocator.zig",
+        .repro_c = true,
+        .link_libc = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_13_c_malloc_shim",
+        .root = "src/openbsd_repro/13_c_malloc_shim.zig",
+        .repro_c = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_14_bench_time_print",
+        .root = "src/openbsd_repro/14_bench_time_print.zig",
+        .bench_shim = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_15_rawr_basic",
+        .root = "src/openbsd_repro/15_rawr_basic.zig",
+        .rawr = true,
+        .bench_shim = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_16_croaring_basic",
+        .root = "src/openbsd_repro/16_croaring_basic.zig",
+        .rawr = true,
+        .repro_c = true,
+        .croaring = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_17_process_init",
+        .root = "src/openbsd_repro/17_process_init.zig",
+        .repro_c = true,
+    });
+
     // Tarball
     const tarball_step = b.step("tarball", "Create source tarball from git HEAD");
     const tarball_cmd = b.addSystemCommand(&.{
         "git", "archive", "--format=tar.gz", "--prefix=rawr/", "HEAD", "-o", "rawr.tar.gz",
     });
     tarball_step.dependOn(&tarball_cmd.step);
+}
+
+const OpenBsdReproOptions = struct {
+    name: []const u8,
+    root: []const u8,
+    rawr: bool = false,
+    repro_c: bool = false,
+    bench_shim: bool = false,
+    croaring: bool = false,
+    link_libc: bool = false,
+};
+
+fn addOpenBsdRepro(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    step: *std.Build.Step,
+    opts: OpenBsdReproOptions,
+) void {
+    const bench_lib_mod = b.createModule(.{
+        .root_source_file = b.path("src/roaring.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const mod = b.createModule(.{
+        .root_source_file = b.path(opts.root),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    if (opts.rawr) {
+        mod.addImport("rawr", bench_lib_mod);
+    }
+    if (opts.bench_shim) {
+        const bench_time_mod = b.createModule(.{
+            .root_source_file = b.path("src/bench_time.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        });
+        mod.addImport("bench_time", bench_time_mod);
+    }
+    if (opts.repro_c) {
+        mod.addCSourceFile(.{
+            .file = b.path("src/openbsd_repro/repro_c.c"),
+            .flags = &.{ "-std=c11", "-O0", "-g" },
+        });
+        mod.link_libc = true;
+    }
+    if (opts.bench_shim) {
+        addBenchmarkPlatformShim(b, mod, target);
+    }
+    if (opts.link_libc) {
+        mod.link_libc = true;
+    }
+    if (opts.croaring) {
+        addTranslatedCImport(b, mod, .{
+            .header = "vendor/croaring_wrapper.h",
+            .include_dir = "vendor/",
+            .c_source = "vendor/roaring.c",
+            .target = target,
+            .optimize = .ReleaseFast,
+        });
+    }
+
+    const exe = b.addExecutable(.{
+        .name = opts.name,
+        .root_module = mod,
+    });
+    step.dependOn(&b.addInstallArtifact(exe, .{}).step);
 }
 
 fn addBenchmarkPlatformShim(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {
