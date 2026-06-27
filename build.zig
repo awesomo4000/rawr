@@ -288,6 +288,18 @@ pub fn build(b: *std.Build) void {
         .bench_shim = true,
         .croaring = true,
     });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_24_relative_bench_time_print",
+        .root = "src/openbsd_repro_24_relative_bench_time_print.zig",
+        .bench_shim_c = true,
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_25_bench_croaring_header_shape",
+        .root = "src/openbsd_repro_25_bench_croaring_header_shape.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+    });
 
     // Tarball
     const tarball_step = b.step("tarball", "Create source tarball from git HEAD");
@@ -346,7 +358,7 @@ fn addOpenBsdRepro(
     if (opts.bench_shim) {
         addBenchmarkPlatformShim(b, mod, target);
     }
-    if (opts.bench_shim_c and target.result.os.tag != .openbsd) {
+    if (opts.bench_shim_c and !(opts.bench_shim and target.result.os.tag == .openbsd)) {
         addBenchmarkOpenBsdShimC(b, mod);
     }
     if (opts.link_libc) {
