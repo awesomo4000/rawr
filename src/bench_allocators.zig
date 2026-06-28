@@ -84,6 +84,8 @@ const AllocContext = struct {
 
 var random_values: [N_VALUES]u32 = undefined;
 var serialized_data: ?[]u8 = null;
+// Iterate this large fixed array as a slice (`random_values[0..]`), not as an
+// array value, to avoid ReleaseFast stack copies on OpenBSD's 4 MB stack.
 
 fn initTestData() void {
     var rng = std.Random.DefaultPrng.init(12345);
@@ -104,7 +106,7 @@ fn initTestData() void {
 fn buildSparseBitmaps(alloc: std.mem.Allocator) struct { a: RoaringBitmap, b: RoaringBitmap } {
     var a = RoaringBitmap.init(alloc) catch @panic("OOM");
     var b = RoaringBitmap.init(alloc) catch @panic("OOM");
-    for (random_values, 0..) |v, i| {
+    for (random_values[0..], 0..) |v, i| {
         if (i % 2 == 0) {
             _ = a.add(v) catch @panic("OOM");
         } else {

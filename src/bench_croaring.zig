@@ -64,6 +64,9 @@ var random_values: [N_VALUES]u32 = undefined;
 var sequential_values: [N_VALUES]u32 = undefined;
 var sparse_values: [500000]u32 = undefined;
 var sparse_len: usize = 0;
+// Iterate these large fixed arrays as slices (`values[0..]`), not as array
+// values (`values`), so ReleaseFast does not spill multi-megabyte copies to the
+// stack on OpenBSD's default 4 MB stack.
 var rank_queries: [N_VALUES]u32 = undefined;
 var select_queries: [N_VALUES]u32 = undefined;
 var rank_many_probes: [N_RANK_MANY_PROBES]u32 = undefined;
@@ -118,7 +121,7 @@ fn initTestData() void {
 fn benchRawrAddRandom() void {
     var bm = RoaringBitmap.init(allocator) catch unreachable;
     defer bm.deinit();
-    for (random_values) |v| {
+    for (random_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
     }
     std.mem.doNotOptimizeAway(&bm);
@@ -127,7 +130,7 @@ fn benchRawrAddRandom() void {
 fn benchRawrAddSequential() void {
     var bm = RoaringBitmap.init(allocator) catch unreachable;
     defer bm.deinit();
-    for (sequential_values) |v| {
+    for (sequential_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
     }
     std.mem.doNotOptimizeAway(&bm);
@@ -136,14 +139,14 @@ fn benchRawrAddSequential() void {
 fn benchRawrAddManyRandom() void {
     var bm = RoaringBitmap.init(allocator) catch unreachable;
     defer bm.deinit();
-    bm.addMany(&random_values) catch unreachable;
+    bm.addMany(random_values[0..]) catch unreachable;
     std.mem.doNotOptimizeAway(&bm);
 }
 
 fn benchRawrAddManySequential() void {
     var bm = RoaringBitmap.init(allocator) catch unreachable;
     defer bm.deinit();
-    bm.addMany(&sequential_values) catch unreachable;
+    bm.addMany(sequential_values[0..]) catch unreachable;
     std.mem.doNotOptimizeAway(&bm);
 }
 
@@ -159,7 +162,7 @@ var rawr_contains_bm: ?RoaringBitmap = null;
 fn initRawrContainsBm() void {
     if (rawr_contains_bm != null) return;
     var bm = RoaringBitmap.init(allocator) catch unreachable;
-    for (random_values) |v| {
+    for (random_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
     }
     rawr_contains_bm = bm;
@@ -168,7 +171,7 @@ fn initRawrContainsBm() void {
 fn benchRawrContainsHit() void {
     const bm = &rawr_contains_bm.?;
     var hits: u32 = 0;
-    for (random_values) |v| {
+    for (random_values[0..]) |v| {
         if (bm.contains(v)) hits += 1;
     }
     std.mem.doNotOptimizeAway(hits);
@@ -177,7 +180,7 @@ fn benchRawrContainsHit() void {
 fn benchRawrContainsMiss() void {
     const bm = &rawr_contains_bm.?;
     var hits: u32 = 0;
-    for (random_values) |v| {
+    for (random_values[0..]) |v| {
         if (bm.contains(v | 0x80000000)) hits += 1;
     }
     std.mem.doNotOptimizeAway(hits);
@@ -446,7 +449,7 @@ fn benchRawrCardinality() void {
 fn benchRawrRankDense() void {
     const bm = &rawr_dense_a.?;
     var total: u64 = 0;
-    for (rank_queries) |query| {
+    for (rank_queries[0..]) |query| {
         total +%= bm.rank(query);
     }
     std.mem.doNotOptimizeAway(total);
@@ -455,7 +458,7 @@ fn benchRawrRankDense() void {
 fn benchRawrSelectDense() void {
     const bm = &rawr_dense_a.?;
     var total: u64 = 0;
-    for (select_queries) |query| {
+    for (select_queries[0..]) |query| {
         total +%= bm.select(query).?;
     }
     std.mem.doNotOptimizeAway(total);
@@ -463,7 +466,7 @@ fn benchRawrSelectDense() void {
 
 fn benchRawrRankManyDense() void {
     const bm = &rawr_dense_a.?;
-    bm.rankMany(&rank_many_probes, &rank_many_out);
+    bm.rankMany(rank_many_probes[0..], rank_many_out[0..]);
     std.mem.doNotOptimizeAway(rank_many_out[rank_many_out.len - 1]);
 }
 
@@ -490,7 +493,7 @@ noinline fn rawrRangeCardinality(bm: *const RoaringBitmap, lo: u32, hi: u32) u64
 fn benchRawrRangeCardinalityBitset() void {
     const bm = &rawr_bitset_range_bm.?;
     var total: u64 = 0;
-    for (range_query_lo, range_query_hi) |lo, hi| {
+    for (range_query_lo[0..], range_query_hi[0..]) |lo, hi| {
         total +%= rawrRangeCardinality(bm, lo, hi);
     }
     std.mem.doNotOptimizeAway(total);
@@ -499,7 +502,7 @@ fn benchRawrRangeCardinalityBitset() void {
 fn benchRawrRangeCardinalityBitsetLarge() void {
     const bm = &rawr_bitset_range_bm.?;
     var total: u64 = 0;
-    for (range_large_query_lo, range_large_query_hi) |lo, hi| {
+    for (range_large_query_lo[0..], range_large_query_hi[0..]) |lo, hi| {
         total +%= rawrRangeCardinality(bm, lo, hi);
     }
     std.mem.doNotOptimizeAway(total);
@@ -512,7 +515,7 @@ fn benchRawrRangeCardinalityBitsetLarge() void {
 fn benchCRoaringAddRandom() void {
     const bm = c.roaring_bitmap_create() orelse unreachable;
     defer c.roaring_bitmap_free(bm);
-    for (random_values) |v| {
+    for (random_values[0..]) |v| {
         c.roaring_bitmap_add(bm, v);
     }
     std.mem.doNotOptimizeAway(bm);
@@ -521,7 +524,7 @@ fn benchCRoaringAddRandom() void {
 fn benchCRoaringAddSequential() void {
     const bm = c.roaring_bitmap_create() orelse unreachable;
     defer c.roaring_bitmap_free(bm);
-    for (sequential_values) |v| {
+    for (sequential_values[0..]) |v| {
         c.roaring_bitmap_add(bm, v);
     }
     std.mem.doNotOptimizeAway(bm);
@@ -530,14 +533,14 @@ fn benchCRoaringAddSequential() void {
 fn benchCRoaringAddManyRandom() void {
     const bm = c.roaring_bitmap_create() orelse unreachable;
     defer c.roaring_bitmap_free(bm);
-    c.roaring_bitmap_add_many(bm, N_VALUES, &random_values);
+    c.roaring_bitmap_add_many(bm, N_VALUES, random_values[0..].ptr);
     std.mem.doNotOptimizeAway(bm);
 }
 
 fn benchCRoaringAddManySequential() void {
     const bm = c.roaring_bitmap_create() orelse unreachable;
     defer c.roaring_bitmap_free(bm);
-    c.roaring_bitmap_add_many(bm, N_VALUES, &sequential_values);
+    c.roaring_bitmap_add_many(bm, N_VALUES, sequential_values[0..].ptr);
     std.mem.doNotOptimizeAway(bm);
 }
 
@@ -553,7 +556,7 @@ var cr_contains_bm: ?*c.roaring_bitmap_t = null;
 fn initCRoaringContainsBm() void {
     if (cr_contains_bm != null) return;
     const bm = c.roaring_bitmap_create() orelse unreachable;
-    for (random_values) |v| {
+    for (random_values[0..]) |v| {
         c.roaring_bitmap_add(bm, v);
     }
     cr_contains_bm = bm;
@@ -562,7 +565,7 @@ fn initCRoaringContainsBm() void {
 fn benchCRoaringContainsHit() void {
     const bm = cr_contains_bm.?;
     var hits: u32 = 0;
-    for (random_values) |v| {
+    for (random_values[0..]) |v| {
         if (c.roaring_bitmap_contains(bm, v)) hits += 1;
     }
     std.mem.doNotOptimizeAway(hits);
@@ -571,7 +574,7 @@ fn benchCRoaringContainsHit() void {
 fn benchCRoaringContainsMiss() void {
     const bm = cr_contains_bm.?;
     var hits: u32 = 0;
-    for (random_values) |v| {
+    for (random_values[0..]) |v| {
         if (c.roaring_bitmap_contains(bm, v | 0x80000000)) hits += 1;
     }
     std.mem.doNotOptimizeAway(hits);
@@ -781,7 +784,7 @@ fn benchCRoaringCardinality() void {
 fn benchCRoaringRankDense() void {
     const bm = cr_dense_a.?;
     var total: u64 = 0;
-    for (rank_queries) |query| {
+    for (rank_queries[0..]) |query| {
         total +%= c.roaring_bitmap_rank(bm, query);
     }
     std.mem.doNotOptimizeAway(total);
@@ -790,7 +793,7 @@ fn benchCRoaringRankDense() void {
 fn benchCRoaringSelectDense() void {
     const bm = cr_dense_a.?;
     var total: u64 = 0;
-    for (select_queries) |query| {
+    for (select_queries[0..]) |query| {
         var value: u32 = undefined;
         _ = c.roaring_bitmap_select(bm, query, &value);
         total +%= value;
@@ -802,9 +805,9 @@ fn benchCRoaringRankManyDense() void {
     const bm = cr_dense_a.?;
     c.roaring_bitmap_rank_many(
         bm,
-        &rank_many_probes,
+        rank_many_probes[0..].ptr,
         rank_many_probes[rank_many_probes.len..].ptr,
-        &rank_many_out,
+        rank_many_out[0..].ptr,
     );
     std.mem.doNotOptimizeAway(rank_many_out[rank_many_out.len - 1]);
 }
@@ -826,7 +829,7 @@ fn benchCRoaringRemoveRangeWideDense() void {
 fn benchCRoaringRangeCardinalityBitset() void {
     const bm = cr_bitset_range_bm.?;
     var total: u64 = 0;
-    for (range_query_lo, range_query_hi) |lo, hi| {
+    for (range_query_lo[0..], range_query_hi[0..]) |lo, hi| {
         total +%= c.roaring_bitmap_range_cardinality_closed(bm, lo, hi);
     }
     std.mem.doNotOptimizeAway(total);
@@ -835,7 +838,7 @@ fn benchCRoaringRangeCardinalityBitset() void {
 fn benchCRoaringRangeCardinalityBitsetLarge() void {
     const bm = cr_bitset_range_bm.?;
     var total: u64 = 0;
-    for (range_large_query_lo, range_large_query_hi) |lo, hi| {
+    for (range_large_query_lo[0..], range_large_query_hi[0..]) |lo, hi| {
         total +%= c.roaring_bitmap_range_cardinality_closed(bm, lo, hi);
     }
     std.mem.doNotOptimizeAway(total);
@@ -854,7 +857,23 @@ pub fn main() !void {
     bench_time.print("\nInitializing test data...\n", .{});
     initTestData();
 
-    // --- Add benchmarks ---
+    runAddBenchmarks();
+    runContainsBenchmarks();
+    runSetBenchmarks();
+    runIterationBenchmarks();
+    runSerializationBenchmarks();
+    runCardinalityBenchmarks();
+    runPositionalBenchmarks();
+    runRangeBenchmarks();
+    cleanupBenchmarks();
+
+    bench_time.print("\nDone.\n", .{});
+    bench_time.print("\nNote: ratio < 1.0 = rawr faster, > 1.0 = CRoaring faster\n", .{});
+}
+
+// Keep benchmark sections out of main so ReleaseFast does not build a single
+// multi-megabyte stack frame on OpenBSD's default 4 MB stack.
+noinline fn runAddBenchmarks() void {
     printHeader();
     bench_time.print("ADD OPERATIONS\n", .{});
 
@@ -877,21 +896,23 @@ pub fn main() !void {
     r = benchmark(benchRawrAddRange, .{});
     cr = benchmark(benchCRoaringAddRange, .{});
     printResult("addRange (1M)", r.median_ns, cr.median_ns);
+}
 
-    // --- Contains benchmarks ---
+noinline fn runContainsBenchmarks() void {
     bench_time.print("\nCONTAINS OPERATIONS\n", .{});
     initRawrContainsBm();
     initCRoaringContainsBm();
 
-    r = benchmark(benchRawrContainsHit, .{});
-    cr = benchmark(benchCRoaringContainsHit, .{});
+    var r = benchmark(benchRawrContainsHit, .{});
+    var cr = benchmark(benchCRoaringContainsHit, .{});
     printResult("contains (hit)", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrContainsMiss, .{});
     cr = benchmark(benchCRoaringContainsMiss, .{});
     printResult("contains (miss)", r.median_ns, cr.median_ns);
+}
 
-    // --- Set operations ---
+noinline fn runSetBenchmarks() void {
     bench_time.print("\nSET OPERATIONS (new bitmap)\n", .{});
     initRawrSparseBitmaps();
     initCRoaringSparseBitmaps();
@@ -900,8 +921,8 @@ pub fn main() !void {
     initRawrManyBitmaps();
     initCRoaringManyBitmaps();
 
-    r = benchmark(benchRawrAndSparse, .{});
-    cr = benchmark(benchCRoaringAndSparse, .{});
+    var r = benchmark(benchRawrAndSparse, .{});
+    var cr = benchmark(benchCRoaringAndSparse, .{});
     printResult("bitwiseAnd (sparse)", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrAndSparseArena, .{});
@@ -937,12 +958,13 @@ pub fn main() !void {
     r = benchmark(benchRawrXorMany, .{});
     cr = benchmark(benchCRoaringXorMany, .{});
     printResult("xorMany (32 mixed)", r.median_ns, cr.median_ns);
+}
 
-    // --- Iteration ---
+noinline fn runIterationBenchmarks() void {
     bench_time.print("\nITERATION\n", .{});
 
-    r = benchmark(benchRawrIterate, .{});
-    cr = benchmark(benchCRoaringIterate, .{});
+    var r = benchmark(benchRawrIterate, .{});
+    var cr = benchmark(benchCRoaringIterate, .{});
     printResult("iterate (1M values)", r.median_ns, cr.median_ns);
 
     initToArrayBuffers();
@@ -953,14 +975,15 @@ pub fn main() !void {
     r = benchmark(benchRawrToArrayAlloc, .{});
     cr = benchmark(benchCRoaringToArrayAlloc, .{});
     printResult("toArrayAlloc (1M values)", r.median_ns, cr.median_ns);
+}
 
-    // --- Serialization ---
+noinline fn runSerializationBenchmarks() void {
     bench_time.print("\nSERIALIZATION\n", .{});
     initRawrSerialized();
     initCRoaringSerialized();
 
-    r = benchmark(benchRawrSerialize, .{});
-    cr = benchmark(benchCRoaringSerialize, .{});
+    var r = benchmark(benchRawrSerialize, .{});
+    var cr = benchmark(benchCRoaringSerialize, .{});
     printResult("serialize", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrDeserialize, .{});
@@ -969,19 +992,21 @@ pub fn main() !void {
 
     r = benchmark(benchRawrDeserializeArena, .{});
     printResult("deserialize (arena)", r.median_ns, cr.median_ns);
+}
 
-    // --- Cardinality ---
+noinline fn runCardinalityBenchmarks() void {
     bench_time.print("\nCARDINALITY\n", .{});
 
-    r = benchmark(benchRawrCardinality, .{});
-    cr = benchmark(benchCRoaringCardinality, .{});
+    const r = benchmark(benchRawrCardinality, .{});
+    const cr = benchmark(benchCRoaringCardinality, .{});
     printResult("cardinality", r.median_ns, cr.median_ns);
+}
 
-    // --- Positional queries ---
+noinline fn runPositionalBenchmarks() void {
     bench_time.print("\nPOSITIONAL QUERIES\n", .{});
 
-    r = benchmark(benchRawrRankDense, .{});
-    cr = benchmark(benchCRoaringRankDense, .{});
+    var r = benchmark(benchRawrRankDense, .{});
+    var cr = benchmark(benchCRoaringRankDense, .{});
     printResult("rank (dense)", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrSelectDense, .{});
@@ -991,14 +1016,15 @@ pub fn main() !void {
     r = benchmark(benchRawrRankManyDense, .{});
     cr = benchmark(benchCRoaringRankManyDense, .{});
     printResult("rankMany (dense)", r.median_ns, cr.median_ns);
+}
 
-    // --- Range operations ---
+noinline fn runRangeBenchmarks() void {
     bench_time.print("\nRANGE OPERATIONS\n", .{});
     initRawrBitsetRangeBm();
     initCRoaringBitsetRangeBm();
 
-    r = benchmark(benchRawrRangeCardinalityBitset, .{});
-    cr = benchmark(benchCRoaringRangeCardinalityBitset, .{});
+    var r = benchmark(benchRawrRangeCardinalityBitset, .{});
+    var cr = benchmark(benchCRoaringRangeCardinalityBitset, .{});
     printResult("rangeCardinality small (bitset)", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrRangeCardinalityBitsetLarge, .{});
@@ -1012,8 +1038,9 @@ pub fn main() !void {
     r = benchmark(benchRawrRemoveRangeWideDense, .{});
     cr = benchmark(benchCRoaringRemoveRangeWideDense, .{});
     printResult("removeRange wide (dense)", r.median_ns, cr.median_ns);
+}
 
-    // Cleanup
+noinline fn cleanupBenchmarks() void {
     if (rawr_contains_bm) |*bm| bm.deinit();
     if (rawr_sparse_a) |*bm| bm.deinit();
     if (rawr_sparse_b) |*bm| bm.deinit();
@@ -1033,11 +1060,8 @@ pub fn main() !void {
     if (cr_dense_a) |bm| c.roaring_bitmap_free(bm);
     if (cr_dense_b) |bm| c.roaring_bitmap_free(bm);
     if (cr_bitset_range_bm) |bm| c.roaring_bitmap_free(bm);
-    for (cr_many_bms) |maybe_bm| {
+    for (cr_many_bms[0..]) |maybe_bm| {
         if (maybe_bm) |bm| c.roaring_bitmap_free(bm);
     }
     if (cr_serialized) |s| allocator.free(s);
-
-    bench_time.print("\nDone.\n", .{});
-    bench_time.print("\nNote: ratio < 1.0 = rawr faster, > 1.0 = CRoaring faster\n", .{});
 }

@@ -76,6 +76,9 @@ var sequential_values: [N_VALUES]u32 = undefined;
 var random_values: [N_VALUES]u32 = undefined;
 var clustered_values: [N_VALUES]u32 = undefined;
 var sorted_values: [N_VALUES]u32 = undefined;
+// Iterate these large fixed arrays as slices (`values[0..]`), not as array
+// values (`values`), so ReleaseFast does not spill multi-megabyte copies to the
+// stack on OpenBSD's default 4 MB stack.
 
 fn initTestData() void {
     var prng = std.Random.DefaultPrng.init(12345);
@@ -114,7 +117,7 @@ fn initTestData() void {
 fn benchAddSequential(allocator: std.mem.Allocator) void {
     var bm = RoaringBitmap.init(allocator) catch unreachable;
     defer bm.deinit();
-    for (sequential_values) |v| {
+    for (sequential_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
     }
 }
@@ -122,7 +125,7 @@ fn benchAddSequential(allocator: std.mem.Allocator) void {
 fn benchAddRandom(allocator: std.mem.Allocator) void {
     var bm = RoaringBitmap.init(allocator) catch unreachable;
     defer bm.deinit();
-    for (random_values) |v| {
+    for (random_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
     }
 }
@@ -130,7 +133,7 @@ fn benchAddRandom(allocator: std.mem.Allocator) void {
 fn benchAddClustered(allocator: std.mem.Allocator) void {
     var bm = RoaringBitmap.init(allocator) catch unreachable;
     defer bm.deinit();
-    for (clustered_values) |v| {
+    for (clustered_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
     }
 }
