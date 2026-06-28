@@ -98,38 +98,55 @@ pub fn main(init: std.process.Init) !void {
     trace(&cfg, "init test data");
     initTestData(cfg.values_len);
 
-    switch (cfg.case) {
-        .@"00_allocator_smoke" => allocatorSmoke(&cfg),
-        .@"01_rawr_init_loop" => rawrInitLoop(&cfg),
-        .@"02_rawr_add_random_once" => runOnce(&cfg, "rawr add random once", benchRawrAddRandom),
-        .@"03_rawr_add_sequential_once" => runOnce(&cfg, "rawr add sequential once", benchRawrAddSequential),
-        .@"04_rawr_add_random_bench" => runBenchmark(&cfg, "rawr add random", benchRawrAddRandom),
-        .@"05_rawr_add_sequential_bench" => runBenchmark(&cfg, "rawr add sequential", benchRawrAddSequential),
-        .@"06_rawr_contains_hit_bench" => {
-            initRawrContainsBm(&cfg);
-            runBenchmark(&cfg, "rawr contains hit", benchRawrContainsHit);
-        },
-        .@"07_rawr_contains_miss_bench" => {
-            initRawrContainsBm(&cfg);
-            runBenchmark(&cfg, "rawr contains miss", benchRawrContainsMiss);
-        },
-        .@"08_croaring_add_random_bench" => runBenchmark(&cfg, "CRoaring add random", benchCRoaringAddRandom),
-        .@"99_all" => {
-            allocatorSmoke(&cfg);
-            rawrInitLoop(&cfg);
-            runOnce(&cfg, "rawr add random once", benchRawrAddRandom);
-            runOnce(&cfg, "rawr add sequential once", benchRawrAddSequential);
-            runBenchmark(&cfg, "rawr add random", benchRawrAddRandom);
-            runBenchmark(&cfg, "rawr add sequential", benchRawrAddSequential);
-            initRawrContainsBm(&cfg);
-            runBenchmark(&cfg, "rawr contains hit", benchRawrContainsHit);
-            runBenchmark(&cfg, "rawr contains miss", benchRawrContainsMiss);
-            runBenchmark(&cfg, "CRoaring add random", benchCRoaringAddRandom);
-        },
-    }
+    runCase(&cfg, cfg.case);
 
     cleanup();
     trace(&cfg, "done");
+}
+
+fn runCase(cfg: *const Config, selected: Case) void {
+    printCaseHeader(selected);
+
+    switch (selected) {
+        .@"00_allocator_smoke" => allocatorSmoke(cfg),
+        .@"01_rawr_init_loop" => rawrInitLoop(cfg),
+        .@"02_rawr_add_random_once" => runOnce(cfg, "rawr add random once", benchRawrAddRandom),
+        .@"03_rawr_add_sequential_once" => runOnce(cfg, "rawr add sequential once", benchRawrAddSequential),
+        .@"04_rawr_add_random_bench" => runBenchmark(cfg, "rawr add random", benchRawrAddRandom),
+        .@"05_rawr_add_sequential_bench" => runBenchmark(cfg, "rawr add sequential", benchRawrAddSequential),
+        .@"06_rawr_contains_hit_bench" => {
+            initRawrContainsBm(cfg);
+            runBenchmark(cfg, "rawr contains hit", benchRawrContainsHit);
+        },
+        .@"07_rawr_contains_miss_bench" => {
+            initRawrContainsBm(cfg);
+            runBenchmark(cfg, "rawr contains miss", benchRawrContainsMiss);
+        },
+        .@"08_croaring_add_random_bench" => runBenchmark(cfg, "CRoaring add random", benchCRoaringAddRandom),
+        .@"99_all" => runAllCases(cfg),
+    }
+}
+
+fn runAllCases(cfg: *const Config) void {
+    runCase(cfg, .@"00_allocator_smoke");
+    runCase(cfg, .@"01_rawr_init_loop");
+    runCase(cfg, .@"02_rawr_add_random_once");
+    runCase(cfg, .@"03_rawr_add_sequential_once");
+    runCase(cfg, .@"04_rawr_add_random_bench");
+    runCase(cfg, .@"05_rawr_add_sequential_bench");
+    runCase(cfg, .@"06_rawr_contains_hit_bench");
+    runCase(cfg, .@"07_rawr_contains_miss_bench");
+    runCase(cfg, .@"08_croaring_add_random_bench");
+}
+
+fn printCaseHeader(selected: Case) void {
+    bench_time.print("\nCASE {d:0>2} {s}\n", .{ @intFromEnum(selected), caseDisplayName(selected) });
+}
+
+fn caseDisplayName(selected: Case) []const u8 {
+    const name = @tagName(selected);
+    if (name.len > 3 and name[2] == '_') return name[3..];
+    return name;
 }
 
 fn parseArgs(init: std.process.Init, cfg: *Config) !bool {
