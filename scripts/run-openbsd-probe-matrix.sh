@@ -4,7 +4,7 @@ set +e
 PROBE=${PROBE:-./zig-out/bin/openbsd_probe}
 LOG_DIR=${LOG_DIR:-misc/openbsd-probe-logs}
 
-CASES=${CASES:-"00 01 02 03 04 05 06 07 08"}
+CASES=${CASES:-"00 01 02 03 04 05 06 07 08 09 10 11"}
 SEQUENCE_CASES=${SEQUENCE_CASES:-"99"}
 ALLOCATORS=${ALLOCATORS:-"openbsd_c std_c smp"}
 CALLS=${CALLS:-"auto never_inline"}

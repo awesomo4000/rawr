@@ -37,6 +37,9 @@ const Case = enum(u8) {
     @"06_rawr_contains_hit_bench" = 6,
     @"07_rawr_contains_miss_bench" = 7,
     @"08_croaring_add_random_bench" = 8,
+    @"09_add_section_shape" = 9,
+    @"10_contains_section_shape" = 10,
+    @"11_add_then_contains_sections" = 11,
     @"99_all" = 99,
 };
 
@@ -123,6 +126,12 @@ fn runCase(cfg: *const Config, selected: Case) void {
             runBenchmark(cfg, "rawr contains miss", benchRawrContainsMiss);
         },
         .@"08_croaring_add_random_bench" => runBenchmark(cfg, "CRoaring add random", benchCRoaringAddRandom),
+        .@"09_add_section_shape" => runAddSectionShape(cfg),
+        .@"10_contains_section_shape" => runContainsSectionShape(cfg),
+        .@"11_add_then_contains_sections" => {
+            runAddSectionShape(cfg);
+            runContainsSectionShape(cfg);
+        },
         .@"99_all" => runAllCases(cfg),
     }
 }
@@ -137,6 +146,8 @@ fn runAllCases(cfg: *const Config) void {
     runCase(cfg, .@"06_rawr_contains_hit_bench");
     runCase(cfg, .@"07_rawr_contains_miss_bench");
     runCase(cfg, .@"08_croaring_add_random_bench");
+    runCase(cfg, .@"09_add_section_shape");
+    runCase(cfg, .@"10_contains_section_shape");
 }
 
 fn printCaseHeader(selected: Case) void {
@@ -216,6 +227,9 @@ fn parseCase(name: []const u8) ?Case {
         6 => .@"06_rawr_contains_hit_bench",
         7 => .@"07_rawr_contains_miss_bench",
         8 => .@"08_croaring_add_random_bench",
+        9 => .@"09_add_section_shape",
+        10 => .@"10_contains_section_shape",
+        11 => .@"11_add_then_contains_sections",
         99 => .@"99_all",
         else => null,
     };
@@ -238,7 +252,8 @@ fn printUsage() void {
         \\         |02_rawr_add_random_once|03_rawr_add_sequential_once
         \\         |04_rawr_add_random_bench|05_rawr_add_sequential_bench
         \\         |06_rawr_contains_hit_bench|07_rawr_contains_miss_bench
-        \\         |08_croaring_add_random_bench|99_all
+        \\         |08_croaring_add_random_bench|09_add_section_shape
+        \\         |10_contains_section_shape|11_add_then_contains_sections|99_all
         \\         Bare numbers also work: --case=0, --case=04, --case=99.
         \\  --allocator=openbsd_c|std_c|smp
         \\  --call=auto|never_inline
@@ -311,6 +326,37 @@ fn runBenchmark(cfg: *const Config, comptime name: []const u8, comptime func: an
     trace(cfg, name ++ " benchmark begin");
     const result = benchmark(func, .{}, cfg);
     printResult(name, result);
+}
+
+fn runAddSectionShape(cfg: *const Config) void {
+    bench_time.print("ADD SECTION SHAPE\n", .{});
+
+    runBenchmark(cfg, "rawr add random", benchRawrAddRandom);
+    runBenchmark(cfg, "CRoaring add random", benchCRoaringAddRandom);
+
+    runBenchmark(cfg, "rawr add sequential", benchRawrAddSequential);
+    runBenchmark(cfg, "CRoaring add sequential", benchCRoaringAddSequential);
+
+    runBenchmark(cfg, "rawr addMany random", benchRawrAddManyRandom);
+    runBenchmark(cfg, "CRoaring addMany random", benchCRoaringAddManyRandom);
+
+    runBenchmark(cfg, "rawr addMany sequential", benchRawrAddManySequential);
+    runBenchmark(cfg, "CRoaring addMany sequential", benchCRoaringAddManySequential);
+
+    runBenchmark(cfg, "rawr addRange", benchRawrAddRange);
+    runBenchmark(cfg, "CRoaring addRange", benchCRoaringAddRange);
+}
+
+fn runContainsSectionShape(cfg: *const Config) void {
+    bench_time.print("CONTAINS SECTION SHAPE\n", .{});
+    initRawrContainsBm(cfg);
+    initCRoaringContainsBm(cfg);
+
+    runBenchmark(cfg, "rawr contains hit", benchRawrContainsHit);
+    runBenchmark(cfg, "CRoaring contains hit", benchCRoaringContainsHit);
+
+    runBenchmark(cfg, "rawr contains miss", benchRawrContainsMiss);
+    runBenchmark(cfg, "CRoaring contains miss", benchCRoaringContainsMiss);
 }
 
 fn benchmark(comptime func: anytype, args: anytype, cfg: *const Config) BenchResult {
@@ -391,6 +437,27 @@ fn benchRawrAddSequential() void {
     std.mem.doNotOptimizeAway(&bm);
 }
 
+fn benchRawrAddManyRandom() void {
+    var bm = RoaringBitmap.init(active_allocator) catch unreachable;
+    defer bm.deinit();
+    bm.addMany(random_values[0..active_values_len]) catch unreachable;
+    std.mem.doNotOptimizeAway(&bm);
+}
+
+fn benchRawrAddManySequential() void {
+    var bm = RoaringBitmap.init(active_allocator) catch unreachable;
+    defer bm.deinit();
+    bm.addMany(sequential_values[0..active_values_len]) catch unreachable;
+    std.mem.doNotOptimizeAway(&bm);
+}
+
+fn benchRawrAddRange() void {
+    var bm = RoaringBitmap.init(active_allocator) catch unreachable;
+    defer bm.deinit();
+    _ = bm.addRange(0, @intCast(active_values_len - 1)) catch unreachable;
+    std.mem.doNotOptimizeAway(&bm);
+}
+
 fn initRawrContainsBm(cfg: *const Config) void {
     if (rawr_contains_bm != null) return;
 
@@ -429,9 +496,74 @@ fn benchCRoaringAddRandom() void {
     std.mem.doNotOptimizeAway(bm);
 }
 
+fn benchCRoaringAddSequential() void {
+    const bm = c.roaring_bitmap_create() orelse unreachable;
+    defer c.roaring_bitmap_free(bm);
+    for (sequential_values[0..active_values_len]) |value| {
+        c.roaring_bitmap_add(bm, value);
+    }
+    std.mem.doNotOptimizeAway(bm);
+}
+
+fn benchCRoaringAddManyRandom() void {
+    const bm = c.roaring_bitmap_create() orelse unreachable;
+    defer c.roaring_bitmap_free(bm);
+    c.roaring_bitmap_add_many(bm, active_values_len, random_values[0..active_values_len].ptr);
+    std.mem.doNotOptimizeAway(bm);
+}
+
+fn benchCRoaringAddManySequential() void {
+    const bm = c.roaring_bitmap_create() orelse unreachable;
+    defer c.roaring_bitmap_free(bm);
+    c.roaring_bitmap_add_many(bm, active_values_len, sequential_values[0..active_values_len].ptr);
+    std.mem.doNotOptimizeAway(bm);
+}
+
+fn benchCRoaringAddRange() void {
+    const bm = c.roaring_bitmap_create() orelse unreachable;
+    defer c.roaring_bitmap_free(bm);
+    c.roaring_bitmap_add_range(bm, 0, active_values_len);
+    std.mem.doNotOptimizeAway(bm);
+}
+
+var cr_contains_bm: ?*c.roaring_bitmap_t = null;
+
+fn initCRoaringContainsBm(cfg: *const Config) void {
+    if (cr_contains_bm != null) return;
+
+    trace(cfg, "init CRoaring contains bitmap");
+    const bm = c.roaring_bitmap_create() orelse unreachable;
+    for (random_values[0..active_values_len]) |value| {
+        c.roaring_bitmap_add(bm, value);
+    }
+    cr_contains_bm = bm;
+}
+
+fn benchCRoaringContainsHit() void {
+    const bm = cr_contains_bm.?;
+    var hits: u32 = 0;
+    for (random_values[0..active_values_len]) |value| {
+        if (c.roaring_bitmap_contains(bm, value)) hits += 1;
+    }
+    std.mem.doNotOptimizeAway(hits);
+}
+
+fn benchCRoaringContainsMiss() void {
+    const bm = cr_contains_bm.?;
+    var hits: u32 = 0;
+    for (random_values[0..active_values_len]) |value| {
+        if (c.roaring_bitmap_contains(bm, value | 0x80000000)) hits += 1;
+    }
+    std.mem.doNotOptimizeAway(hits);
+}
+
 fn cleanup() void {
     if (rawr_contains_bm) |*bm| {
         bm.deinit();
         rawr_contains_bm = null;
+    }
+    if (cr_contains_bm) |bm| {
+        c.roaring_bitmap_free(bm);
+        cr_contains_bm = null;
     }
 }
