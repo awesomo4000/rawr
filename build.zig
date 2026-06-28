@@ -514,6 +514,42 @@ pub fn build(b: *std.Build) void {
         .bench_croaring_call_mode = "never_inline",
         .bench_croaring_benchmark_mode = "noinline",
     });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_51_bench_croaring_stop_add_smp_allocator",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "add",
+        .bench_croaring_allocator = "smp",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_52_bench_croaring_full_smp_allocator",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "full",
+        .bench_croaring_allocator = "smp",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_53_bench_croaring_stop_add_std_c_allocator",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "add",
+        .bench_croaring_allocator = "std_c",
+    });
+    addOpenBsdRepro(b, target, openbsd_repros_step, .{
+        .name = "openbsd_repro_54_bench_croaring_full_std_c_allocator",
+        .root = "src/bench_croaring.zig",
+        .rawr = true,
+        .bench_shim_c = true,
+        .croaring = true,
+        .bench_croaring_mode = "full",
+        .bench_croaring_allocator = "std_c",
+    });
 
     // Tarball
     const tarball_step = b.step("tarball", "Create source tarball from git HEAD");
@@ -535,6 +571,7 @@ const OpenBsdReproOptions = struct {
     bench_croaring_mode: ?[]const u8 = null,
     bench_croaring_call_mode: []const u8 = "auto",
     bench_croaring_benchmark_mode: []const u8 = "inline",
+    bench_croaring_allocator: []const u8 = "openbsd_c",
     bench_croaring_trace: bool = false,
 };
 
@@ -563,6 +600,7 @@ fn addOpenBsdRepro(
             .mode = mode,
             .call_mode = opts.bench_croaring_call_mode,
             .benchmark_mode = opts.bench_croaring_benchmark_mode,
+            .allocator = opts.bench_croaring_allocator,
             .trace = opts.bench_croaring_trace,
         });
     }
@@ -615,6 +653,7 @@ const BenchCroaringOptions = struct {
     mode: []const u8,
     call_mode: []const u8 = "auto",
     benchmark_mode: []const u8 = "inline",
+    allocator: []const u8 = "openbsd_c",
     trace: bool = false,
 };
 
@@ -623,6 +662,7 @@ fn addBenchCroaringOptionsEx(b: *std.Build, mod: *std.Build.Module, opts: BenchC
     options.addOption([]const u8, "openbsd_repro_mode", opts.mode);
     options.addOption([]const u8, "openbsd_repro_call_mode", opts.call_mode);
     options.addOption([]const u8, "openbsd_repro_benchmark_mode", opts.benchmark_mode);
+    options.addOption([]const u8, "openbsd_repro_allocator", opts.allocator);
     options.addOption(bool, "openbsd_repro_trace", opts.trace);
     mod.addOptions("bench_croaring_options", options);
 }

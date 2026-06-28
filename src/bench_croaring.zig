@@ -6,7 +6,20 @@ const c = @import("c");
 const bench_time = @import("bench_time.zig");
 const bench_croaring_options = @import("bench_croaring_options");
 
-const allocator = if (builtin.os.tag == .openbsd) bench_time.openbsd_c_allocator else std.heap.smp_allocator;
+const allocator = benchmarkAllocator();
+
+fn benchmarkAllocator() std.mem.Allocator {
+    if (builtin.os.tag == .openbsd) {
+        if (comptime std.mem.eql(u8, bench_croaring_options.openbsd_repro_allocator, "smp")) {
+            return std.heap.smp_allocator;
+        }
+        if (comptime std.mem.eql(u8, bench_croaring_options.openbsd_repro_allocator, "std_c")) {
+            return std.heap.c_allocator;
+        }
+        return bench_time.openbsd_c_allocator;
+    }
+    return std.heap.smp_allocator;
+}
 
 const WARMUP_RUNS = 3;
 const BENCH_RUNS = 21;
