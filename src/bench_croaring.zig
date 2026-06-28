@@ -890,7 +890,37 @@ pub fn main() !void {
     initTestData();
     if (comptime stopAfter("init_data")) return;
 
-    // --- Add benchmarks ---
+    runAddBenchmarks();
+    if (comptime stopAfter("add")) return;
+
+    runContainsBenchmarks();
+    if (comptime stopAfter("contains")) return;
+
+    runSetBenchmarks();
+    if (comptime stopAfter("set")) return;
+
+    runIterationBenchmarks();
+    if (comptime stopAfter("iteration")) return;
+
+    runSerializationBenchmarks();
+    if (comptime stopAfter("serialization")) return;
+
+    runCardinalityBenchmarks();
+    if (comptime stopAfter("cardinality")) return;
+
+    runPositionalBenchmarks();
+    if (comptime stopAfter("positional")) return;
+
+    runRangeBenchmarks();
+    if (comptime stopAfter("range")) return;
+
+    cleanupBenchmarks();
+
+    bench_time.print("\nDone.\n", .{});
+    bench_time.print("\nNote: ratio < 1.0 = rawr faster, > 1.0 = CRoaring faster\n", .{});
+}
+
+noinline fn runAddBenchmarks() void {
     printHeader();
     bench_time.print("ADD OPERATIONS\n", .{});
 
@@ -928,17 +958,17 @@ pub fn main() !void {
     cr = benchmark(benchCRoaringAddRange, .{});
     trace("addRange print");
     printResult("addRange (1M)", r.median_ns, cr.median_ns);
-    if (comptime stopAfter("add")) return;
+}
 
-    // --- Contains benchmarks ---
+noinline fn runContainsBenchmarks() void {
     bench_time.print("\nCONTAINS OPERATIONS\n", .{});
     initRawrContainsBm();
     initCRoaringContainsBm();
 
     trace("contains hit rawr");
-    r = benchmark(benchRawrContainsHit, .{});
+    var r = benchmark(benchRawrContainsHit, .{});
     trace("contains hit croaring");
-    cr = benchmark(benchCRoaringContainsHit, .{});
+    var cr = benchmark(benchCRoaringContainsHit, .{});
     trace("contains hit print");
     printResult("contains (hit)", r.median_ns, cr.median_ns);
 
@@ -948,9 +978,9 @@ pub fn main() !void {
     cr = benchmark(benchCRoaringContainsMiss, .{});
     trace("contains miss print");
     printResult("contains (miss)", r.median_ns, cr.median_ns);
-    if (comptime stopAfter("contains")) return;
+}
 
-    // --- Set operations ---
+noinline fn runSetBenchmarks() void {
     bench_time.print("\nSET OPERATIONS (new bitmap)\n", .{});
     initRawrSparseBitmaps();
     initCRoaringSparseBitmaps();
@@ -959,8 +989,8 @@ pub fn main() !void {
     initRawrManyBitmaps();
     initCRoaringManyBitmaps();
 
-    r = benchmark(benchRawrAndSparse, .{});
-    cr = benchmark(benchCRoaringAndSparse, .{});
+    var r = benchmark(benchRawrAndSparse, .{});
+    var cr = benchmark(benchCRoaringAndSparse, .{});
     printResult("bitwiseAnd (sparse)", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrAndSparseArena, .{});
@@ -996,13 +1026,13 @@ pub fn main() !void {
     r = benchmark(benchRawrXorMany, .{});
     cr = benchmark(benchCRoaringXorMany, .{});
     printResult("xorMany (32 mixed)", r.median_ns, cr.median_ns);
-    if (comptime stopAfter("set")) return;
+}
 
-    // --- Iteration ---
+noinline fn runIterationBenchmarks() void {
     bench_time.print("\nITERATION\n", .{});
 
-    r = benchmark(benchRawrIterate, .{});
-    cr = benchmark(benchCRoaringIterate, .{});
+    var r = benchmark(benchRawrIterate, .{});
+    var cr = benchmark(benchCRoaringIterate, .{});
     printResult("iterate (1M values)", r.median_ns, cr.median_ns);
 
     initToArrayBuffers();
@@ -1013,15 +1043,15 @@ pub fn main() !void {
     r = benchmark(benchRawrToArrayAlloc, .{});
     cr = benchmark(benchCRoaringToArrayAlloc, .{});
     printResult("toArrayAlloc (1M values)", r.median_ns, cr.median_ns);
-    if (comptime stopAfter("iteration")) return;
+}
 
-    // --- Serialization ---
+noinline fn runSerializationBenchmarks() void {
     bench_time.print("\nSERIALIZATION\n", .{});
     initRawrSerialized();
     initCRoaringSerialized();
 
-    r = benchmark(benchRawrSerialize, .{});
-    cr = benchmark(benchCRoaringSerialize, .{});
+    var r = benchmark(benchRawrSerialize, .{});
+    var cr = benchmark(benchCRoaringSerialize, .{});
     printResult("serialize", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrDeserialize, .{});
@@ -1030,21 +1060,21 @@ pub fn main() !void {
 
     r = benchmark(benchRawrDeserializeArena, .{});
     printResult("deserialize (arena)", r.median_ns, cr.median_ns);
-    if (comptime stopAfter("serialization")) return;
+}
 
-    // --- Cardinality ---
+noinline fn runCardinalityBenchmarks() void {
     bench_time.print("\nCARDINALITY\n", .{});
 
-    r = benchmark(benchRawrCardinality, .{});
-    cr = benchmark(benchCRoaringCardinality, .{});
+    const r = benchmark(benchRawrCardinality, .{});
+    const cr = benchmark(benchCRoaringCardinality, .{});
     printResult("cardinality", r.median_ns, cr.median_ns);
-    if (comptime stopAfter("cardinality")) return;
+}
 
-    // --- Positional queries ---
+noinline fn runPositionalBenchmarks() void {
     bench_time.print("\nPOSITIONAL QUERIES\n", .{});
 
-    r = benchmark(benchRawrRankDense, .{});
-    cr = benchmark(benchCRoaringRankDense, .{});
+    var r = benchmark(benchRawrRankDense, .{});
+    var cr = benchmark(benchCRoaringRankDense, .{});
     printResult("rank (dense)", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrSelectDense, .{});
@@ -1054,15 +1084,15 @@ pub fn main() !void {
     r = benchmark(benchRawrRankManyDense, .{});
     cr = benchmark(benchCRoaringRankManyDense, .{});
     printResult("rankMany (dense)", r.median_ns, cr.median_ns);
-    if (comptime stopAfter("positional")) return;
+}
 
-    // --- Range operations ---
+noinline fn runRangeBenchmarks() void {
     bench_time.print("\nRANGE OPERATIONS\n", .{});
     initRawrBitsetRangeBm();
     initCRoaringBitsetRangeBm();
 
-    r = benchmark(benchRawrRangeCardinalityBitset, .{});
-    cr = benchmark(benchCRoaringRangeCardinalityBitset, .{});
+    var r = benchmark(benchRawrRangeCardinalityBitset, .{});
+    var cr = benchmark(benchCRoaringRangeCardinalityBitset, .{});
     printResult("rangeCardinality small (bitset)", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrRangeCardinalityBitsetLarge, .{});
@@ -1076,9 +1106,9 @@ pub fn main() !void {
     r = benchmark(benchRawrRemoveRangeWideDense, .{});
     cr = benchmark(benchCRoaringRemoveRangeWideDense, .{});
     printResult("removeRange wide (dense)", r.median_ns, cr.median_ns);
-    if (comptime stopAfter("range")) return;
+}
 
-    // Cleanup
+noinline fn cleanupBenchmarks() void {
     if (rawr_contains_bm) |*bm| bm.deinit();
     if (rawr_sparse_a) |*bm| bm.deinit();
     if (rawr_sparse_b) |*bm| bm.deinit();
@@ -1102,7 +1132,4 @@ pub fn main() !void {
         if (maybe_bm) |bm| c.roaring_bitmap_free(bm);
     }
     if (cr_serialized) |s| allocator.free(s);
-
-    bench_time.print("\nDone.\n", .{});
-    bench_time.print("\nNote: ratio < 1.0 = rawr faster, > 1.0 = CRoaring faster\n", .{});
 }
