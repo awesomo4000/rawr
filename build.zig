@@ -152,6 +152,31 @@ pub fn build(b: *std.Build) void {
     const bench_alloc_step = b.step("bench-alloc", "Build allocator matrix benchmark");
     bench_alloc_step.dependOn(&b.addInstallArtifact(bench_alloc_exe, .{}).step);
 
+    // Focused OpenBSD runtime probe. This intentionally builds one binary with
+    // runtime-selected cases so OpenBSD crash isolation does not require the
+    // full repro matrix.
+    const openbsd_probe_mod = b.createModule(.{
+        .root_source_file = b.path("src/openbsd_probe.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    openbsd_probe_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, openbsd_probe_mod, target);
+    addTranslatedCImport(b, openbsd_probe_mod, .{
+        .header = "vendor/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const openbsd_probe_exe = b.addExecutable(.{
+        .name = "openbsd_probe",
+        .root_module = openbsd_probe_mod,
+    });
+    const openbsd_probe_step = b.step("openbsd-probe", "Build one focused OpenBSD runtime probe");
+    openbsd_probe_step.dependOn(&b.addInstallArtifact(openbsd_probe_exe, .{}).step);
+
     const openbsd_repros_step = b.step("openbsd-repros", "Build OpenBSD runtime repro programs");
     addOpenBsdRepro(b, target, openbsd_repros_step, .{
         .name = "openbsd_repro_00_empty",
