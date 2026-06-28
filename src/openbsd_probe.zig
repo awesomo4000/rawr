@@ -27,21 +27,21 @@ const HarnessMode = enum {
     noinline_harness,
 };
 
-const Case = enum {
-    allocator_smoke,
-    rawr_init_loop,
-    rawr_add_random_once,
-    rawr_add_sequential_once,
-    rawr_add_random_bench,
-    rawr_add_sequential_bench,
-    rawr_contains_hit_bench,
-    rawr_contains_miss_bench,
-    croaring_add_random_bench,
-    all,
+const Case = enum(u8) {
+    @"00_allocator_smoke" = 0,
+    @"01_rawr_init_loop" = 1,
+    @"02_rawr_add_random_once" = 2,
+    @"03_rawr_add_sequential_once" = 3,
+    @"04_rawr_add_random_bench" = 4,
+    @"05_rawr_add_sequential_bench" = 5,
+    @"06_rawr_contains_hit_bench" = 6,
+    @"07_rawr_contains_miss_bench" = 7,
+    @"08_croaring_add_random_bench" = 8,
+    @"99_all" = 99,
 };
 
 const Config = struct {
-    case: Case = .rawr_add_random_bench,
+    case: Case = .@"04_rawr_add_random_bench",
     allocator_choice: AllocatorChoice = .openbsd_c,
     call_mode: CallMode = .auto,
     harness_mode: HarnessMode = .direct,
@@ -99,22 +99,22 @@ pub fn main(init: std.process.Init) !void {
     initTestData(cfg.values_len);
 
     switch (cfg.case) {
-        .allocator_smoke => allocatorSmoke(&cfg),
-        .rawr_init_loop => rawrInitLoop(&cfg),
-        .rawr_add_random_once => runOnce(&cfg, "rawr add random once", benchRawrAddRandom),
-        .rawr_add_sequential_once => runOnce(&cfg, "rawr add sequential once", benchRawrAddSequential),
-        .rawr_add_random_bench => runBenchmark(&cfg, "rawr add random", benchRawrAddRandom),
-        .rawr_add_sequential_bench => runBenchmark(&cfg, "rawr add sequential", benchRawrAddSequential),
-        .rawr_contains_hit_bench => {
+        .@"00_allocator_smoke" => allocatorSmoke(&cfg),
+        .@"01_rawr_init_loop" => rawrInitLoop(&cfg),
+        .@"02_rawr_add_random_once" => runOnce(&cfg, "rawr add random once", benchRawrAddRandom),
+        .@"03_rawr_add_sequential_once" => runOnce(&cfg, "rawr add sequential once", benchRawrAddSequential),
+        .@"04_rawr_add_random_bench" => runBenchmark(&cfg, "rawr add random", benchRawrAddRandom),
+        .@"05_rawr_add_sequential_bench" => runBenchmark(&cfg, "rawr add sequential", benchRawrAddSequential),
+        .@"06_rawr_contains_hit_bench" => {
             initRawrContainsBm(&cfg);
             runBenchmark(&cfg, "rawr contains hit", benchRawrContainsHit);
         },
-        .rawr_contains_miss_bench => {
+        .@"07_rawr_contains_miss_bench" => {
             initRawrContainsBm(&cfg);
             runBenchmark(&cfg, "rawr contains miss", benchRawrContainsMiss);
         },
-        .croaring_add_random_bench => runBenchmark(&cfg, "CRoaring add random", benchCRoaringAddRandom),
-        .all => {
+        .@"08_croaring_add_random_bench" => runBenchmark(&cfg, "CRoaring add random", benchCRoaringAddRandom),
+        .@"99_all" => {
             allocatorSmoke(&cfg);
             rawrInitLoop(&cfg);
             runOnce(&cfg, "rawr add random once", benchRawrAddRandom);
@@ -142,7 +142,7 @@ fn parseArgs(init: std.process.Init, cfg: *Config) !bool {
             printUsage();
             return false;
         } else if (std.mem.startsWith(u8, arg, "--case=")) {
-            cfg.case = parseEnum(Case, arg[7..]) orelse {
+            cfg.case = parseCase(arg[7..]) orelse {
                 bench_time.print("unknown --case={s}\n", .{arg[7..]});
                 printUsage();
                 return false;
@@ -185,6 +185,25 @@ fn parseArgs(init: std.process.Init, cfg: *Config) !bool {
     return true;
 }
 
+fn parseCase(name: []const u8) ?Case {
+    if (parseEnum(Case, name)) |case| return case;
+
+    const number = std.fmt.parseInt(u8, name, 10) catch return null;
+    return switch (number) {
+        0 => .@"00_allocator_smoke",
+        1 => .@"01_rawr_init_loop",
+        2 => .@"02_rawr_add_random_once",
+        3 => .@"03_rawr_add_sequential_once",
+        4 => .@"04_rawr_add_random_bench",
+        5 => .@"05_rawr_add_sequential_bench",
+        6 => .@"06_rawr_contains_hit_bench",
+        7 => .@"07_rawr_contains_miss_bench",
+        8 => .@"08_croaring_add_random_bench",
+        99 => .@"99_all",
+        else => null,
+    };
+}
+
 fn parseEnum(comptime E: type, name: []const u8) ?E {
     inline for (std.meta.fields(E)) |field| {
         if (std.mem.eql(u8, name, field.name)) {
@@ -198,10 +217,12 @@ fn printUsage() void {
     bench_time.print(
         \\usage: openbsd_probe [options]
         \\
-        \\  --case=allocator_smoke|rawr_init_loop|rawr_add_random_once|rawr_add_sequential_once
-        \\         |rawr_add_random_bench|rawr_add_sequential_bench
-        \\         |rawr_contains_hit_bench|rawr_contains_miss_bench
-        \\         |croaring_add_random_bench|all
+        \\  --case=00_allocator_smoke|01_rawr_init_loop
+        \\         |02_rawr_add_random_once|03_rawr_add_sequential_once
+        \\         |04_rawr_add_random_bench|05_rawr_add_sequential_bench
+        \\         |06_rawr_contains_hit_bench|07_rawr_contains_miss_bench
+        \\         |08_croaring_add_random_bench|99_all
+        \\         Bare numbers also work: --case=0, --case=04, --case=99.
         \\  --allocator=openbsd_c|std_c|smp
         \\  --call=auto|never_inline
         \\  --harness=direct|noinline_harness
