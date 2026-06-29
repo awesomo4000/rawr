@@ -149,6 +149,10 @@ zig build bench-compare # rawr vs CRoaring comparison
 zig build bench-alloc  # allocator matrix experiment
 ```
 
+The vendored CRoaring reference build disables AVX512 by default for portable
+Zig 0.16 builds. Use `-Dcroaring-avx512=true` when comparing against an AVX512
+CRoaring build on a compatible target/toolchain.
+
 Run benchmarks (results saved to `misc/`):
 
 ```bash

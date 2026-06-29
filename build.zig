@@ -3,6 +3,11 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const croaring_avx512 = b.option(
+        bool,
+        "croaring-avx512",
+        "Enable AVX512 in the vendored CRoaring reference build",
+    ) orelse false;
 
     // Library module (exposed for package consumers)
     const lib_mod = b.addModule("rawr", .{
@@ -67,6 +72,7 @@ pub fn build(b: *std.Build) void {
         .header = "vendor/croaring_wrapper.h",
         .include_dir = "vendor/",
         .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
         .target = target,
         .optimize = .ReleaseFast,
     });
@@ -93,6 +99,7 @@ pub fn build(b: *std.Build) void {
         .header = "vendor/croaring_wrapper.h",
         .include_dir = "vendor/",
         .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
         .target = target,
         .optimize = .ReleaseFast,
     });
@@ -119,6 +126,7 @@ pub fn build(b: *std.Build) void {
         .header = "vendor/croaring_wrapper.h",
         .include_dir = "vendor/",
         .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
         .target = target,
         .optimize = .ReleaseFast,
     });
@@ -175,6 +183,7 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
     include_dir: []const u8,
     c_source: ?[]const u8 = null,
     c_flags: []const []const u8 = &.{ "-std=c11", "-O3", "-DNDEBUG" },
+    croaring_avx512: bool = false,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 }) void {
@@ -183,14 +192,14 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
     if (opts.target.result.os.tag == .freebsd) {
         mod.addCMacro("bswap64", "__builtin_bswap64");
     }
-    if (isBsdTarget(opts.target.result)) {
+    if (!opts.croaring_avx512) {
         mod.addCMacro("CROARING_COMPILER_SUPPORTS_AVX512", "0");
     }
 
     if (opts.c_source) |c_source| {
         mod.addCSourceFile(.{
             .file = b.path(c_source),
-            .flags = opts.c_flags,
+            .flags = croaringCFlags(b, opts.c_flags, opts.croaring_avx512),
         });
     }
     mod.link_libc = true;
@@ -204,16 +213,18 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
     if (opts.target.result.os.tag == .freebsd) {
         translate_c.defineCMacro("bswap64", "__builtin_bswap64");
     }
-    if (isBsdTarget(opts.target.result)) {
+    if (!opts.croaring_avx512) {
         translate_c.defineCMacro("CROARING_COMPILER_SUPPORTS_AVX512", "0");
     }
 
     mod.addImport(opts.import_name, translate_c.createModule());
 }
 
-fn isBsdTarget(target: std.Target) bool {
-    return switch (target.os.tag) {
-        .dragonfly, .freebsd, .netbsd, .openbsd => true,
-        else => false,
-    };
+fn croaringCFlags(b: *std.Build, base: []const []const u8, croaring_avx512: bool) []const []const u8 {
+    if (croaring_avx512) return base;
+
+    const flags = b.allocator.alloc([]const u8, base.len + 1) catch @panic("OOM");
+    @memcpy(flags[0..base.len], base);
+    flags[base.len] = "-DCROARING_COMPILER_SUPPORTS_AVX512=0";
+    return flags;
 }
