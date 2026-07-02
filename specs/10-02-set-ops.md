@@ -79,6 +79,14 @@ build the result and swap. **Either way the prune invariant holds afterward.**
 Invalidate the cardinality cache. (Match the 32-bit in-place ops' behavior —
 `src/bitmap.zig` `bitwiseOrInPlace` et al. — for the shared-key delegation.)
 
+**Self-aliasing (`self == other`):** rawr should define `A ⊕ A = ∅` and
+`A − A = ∅` for the in-place ops (they prune to a truly empty bitmap). But
+CRoaring's `roaring64_bitmap_xor_inplace` / `andnot_inplace` **forbid identical
+pointers** — the differential test must never hand CRoaring `(r, r)`. Test the
+self-aliased case **rawr-only** (assert the result is empty), or clone the oracle
+first (`copy` then op) when an aliased comparison is wanted. Same caveat noted in
+10-05's property pass (`A ⊕ A`, `A − A`).
+
 ## Task 4 — Cardinality + predicate ops
 
 - `andCardinality/orCardinality/xorCardinality/differenceCardinality(self, other)

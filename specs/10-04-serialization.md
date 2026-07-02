@@ -51,11 +51,37 @@ Place the framing logic in `src/serialize.zig` next to the 32-bit functions (or 
 sibling), reusing the 32-bit writer for the payload — do not duplicate the
 container-encoding logic.
 
-## Task 2 — `deserialize` / `deserializeSafe`
+## Task 2 — Prerequisite: per-sub-bitmap consumed length
+
+The existing 32-bit `RoaringBitmap.deserialize(data)` does **not** report how many
+bytes it consumed, but a 64-bit frame packs multiple portable bitmaps back-to-back
+— so the 64-bit parser must know where each sub-bitmap ends to find the next key.
+Pick one (implement in `src/serialize.zig` alongside the 32-bit code):
+
+- **(a) header-driven size helper** — `portableSizeInBytes(data) !usize` that
+  reads only the portable header (cookie, container count, the per-container
+  type/cardinality descriptors, and the offset table when the run-flag/threshold
+  says one is present) to compute the exact serialized length of the *leading*
+  bitmap without materializing it. Then `deserialize` slices `data[0..len]`, parses
+  it, and advances by `len`. This mirrors what `serializedSizeInBytes` computes,
+  but from serialized bytes rather than a live bitmap.
+- **(b) counting-reader parse** — a reader wrapper over the byte slice that tracks
+  its cursor, and a `deserialize`-from-reader path that consumes exactly one
+  portable bitmap and exposes the new cursor. (Note the existing
+  `deserializeFromReader` takes `data_len` up front — which is the unknown here —
+  so this route still needs the header to bound each sub-bitmap, i.e. it reduces
+  to (a) unless the reader parse is genuinely length-free.)
+
+Prefer **(a)** — it's a small, testable, `*const` byte-length function and keeps
+the 64-bit parser a plain slice-and-advance loop. Whichever is chosen, it is
+bounds-checked in the `Safe` path (a malformed header must not compute a length
+past the buffer).
+
+## Task 3 — `deserialize` / `deserializeSafe`
 
 - `deserialize(allocator, data) !Self` — read count, then for each bucket read the
-  `u32` key and call `RoaringBitmap.deserialize` on the remaining slice,
-  advancing by each sub-bitmap's consumed length. Keys must be **strictly
+  `u32` key, compute the sub-bitmap length via the Task 2 helper, parse that slice
+  with `RoaringBitmap.deserialize`, and advance. Keys must be **strictly
   ascending**; sub-bitmaps must be non-empty (mirror the 32-bit validate
   posture).
 - `deserializeSafe(allocator, data) !Self` — bounds-checked variant routing the
@@ -68,7 +94,7 @@ container-encoding logic.
 (`deserializeFromReader` / owned / frozen 64-bit variants are out of scope —
 deferred per the toplevel.)
 
-## Task 3 — `validate64` round-trip path
+## Task 4 — `validate64` round-trip path
 
 Extend `src/validate_roaring64.zig` (from 10-01) with the serialization bar,
 mirroring `src/validate_croaring.zig`:
@@ -86,7 +112,7 @@ mirroring `src/validate_croaring.zig`:
 Cover the empty bitmap, single-bucket, many-buckets, and run-containing
 sub-bitmaps (so the 32-bit RUN payload path is exercised under the 64-bit frame).
 
-## Task 4 — Docs
+## Task 5 — Docs
 
 Document the interop scope in the public API docs (wherever the 32-bit
 serialization interop is documented): rawr's 64-bit portable format round-trips

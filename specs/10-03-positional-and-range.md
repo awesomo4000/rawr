@@ -14,11 +14,19 @@ and the multi-key-spanning range ops (`addRange`/`removeRange`).
 | `getIndex(value)` | `roaring64_bitmap_get_index` | 0-based position of `value` if present, else `null` |
 | `addRange(lo, hi)` | `roaring64_bitmap_add_range_closed` | add `[lo, hi]` **inclusive** |
 | `removeRange(lo, hi)` | `roaring64_bitmap_remove_range_closed` | remove `[lo, hi]` inclusive |
-| `rangeCardinality(lo, hi)` | `roaring64_bitmap_range_cardinality` | count in `[lo, hi]` |
-| `containsRange(lo, hi)` | `roaring64_bitmap_contains_range` | all of `[lo, hi]` present |
+| `rangeCardinality(lo, hi)` | `roaring64_bitmap_range_closed_cardinality` | count in `[lo, hi]` **inclusive** |
+| `containsRange(lo, hi)` | `roaring64_bitmap_contains_range` (half-open — see Task 5) | all of `[lo, hi]` present |
 
 `rank`/`select`/`getIndex`/`rangeCardinality`/`containsRange` are `*const`,
 alloc-free. `addRange`/`removeRange` mutate `self` and may create/drop buckets.
+
+**Return types — intentional divergence from the 32-bit API.** The 32-bit
+`addRange`/`removeRange` return `!u64` (count added/removed). The 64-bit ops
+return **`!void`**: a full-domain range spans up to 2⁶⁴ elements, so an exact
+delta can overflow `u64` (the same cardinality edge documented in the toplevel),
+and CRoaring's `roaring64_bitmap_add_range_closed` itself returns `void`. We drop
+the count deliberately rather than return a saturating/wrong number. Call this
+out in the doc comment so the width difference is not mistaken for an oversight.
 
 ## Task 0 — Wrapper decls
 
@@ -32,9 +40,17 @@ bool roaring64_bitmap_select(const roaring64_bitmap_t*, uint64_t rank, uint64_t 
 bool roaring64_bitmap_get_index(const roaring64_bitmap_t*, uint64_t x, uint64_t *out_index);
 void roaring64_bitmap_add_range_closed(roaring64_bitmap_t*, uint64_t min, uint64_t max);
 void roaring64_bitmap_remove_range_closed(roaring64_bitmap_t*, uint64_t min, uint64_t max);
-uint64_t roaring64_bitmap_range_cardinality(const roaring64_bitmap_t*, uint64_t min, uint64_t max);
-bool roaring64_bitmap_contains_range(const roaring64_bitmap_t*, uint64_t min, uint64_t max);
+uint64_t roaring64_bitmap_range_closed_cardinality(const roaring64_bitmap_t*, uint64_t min, uint64_t max);
+bool roaring64_bitmap_contains_range(const roaring64_bitmap_t*, uint64_t min, uint64_t max);  // half-open [min,max)
 ```
+
+> There is no `contains_range_closed` in the vendored 64-bit API — only the
+> half-open `contains_range`. To oracle rawr's inclusive `containsRange(lo, hi)`,
+> the difftest calls `roaring64_bitmap_contains_range(r, lo, hi + 1)` — which
+> **overflows when `hi == maxInt(u64)`.** Special-case it: when `hi` is the max
+> value, split into `contains_range(r, lo, hi)` AND `contains(r, hi)`, or assert
+> that top case rawr-only. `range_closed_cardinality` has no such issue (it takes
+> inclusive bounds directly).
 
 > Confirm exact `get_index` signature against `vendor/roaring.h` during
 > implementation — CRoaring 64-bit returns presence via bool + out-param in the
@@ -78,6 +94,11 @@ Inclusive carries from the 32-bit `addRange` (already inclusive both ends).
 Reject `lo > hi` the same way the 32-bit API does (empty/no-op or error — match
 `RoaringBitmap.addRange`). Invalidate cardinality cache.
 
+Per the 10-01 OOM-rollback rule, a wide range creates several interior buckets
+before delegating — if any `bm.addRange` fails partway, `dropBucket` every bucket
+this call newly created (track the created keys, or `errdefer` a rollback) so a
+failed `addRange` leaves no zombie empty buckets.
+
 > Materializing every interior key for a very wide range is O(#keys) buckets —
 > acceptable and correct; matches CRoaring's behavior. Not a perf concern for v1.
 
@@ -90,7 +111,10 @@ empty must be pruned** (the core invariant). Invalidate cache.
 
 ## Task 5 — `rangeCardinality` / `containsRange`
 
-Same key-spanning decomposition as `addRange`, but read-only:
+Same key-spanning decomposition as `addRange`, but read-only. Both are inclusive
+`[lo, hi]`; the oracle is `roaring64_bitmap_range_closed_cardinality` (inclusive,
+no overflow) and `roaring64_bitmap_contains_range` (half-open — apply the
+`hi + 1` / max-value handling from Task 0's note).
 - `rangeCardinality` — sum of per-key `bm.rangeCardinality(...)` (full
   `cardinality()` for fully-covered interior keys; `0` for absent keys).
 - `containsRange` — every key in `[lo_key, hi_key]` must exist and its covered

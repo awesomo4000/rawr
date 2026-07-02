@@ -31,6 +31,15 @@ Helpers (private):
 - `dropBucket(idx)` — deinit the sub-bitmap and remove it from the slice
   (the prune primitive; used heavily from 10-02 on).
 
+**OOM rollback (the zombie-bucket dual of the prune invariant):** a caller that
+creates a bucket and *then* delegates a fallible op into it must undo the
+creation on failure. If `findOrCreateBucket` inserted a fresh empty bucket and
+the subsequent `bm.add` / `bm.addRange` returns `error.OutOfMemory`, `dropBucket`
+it (via `errdefer`) before propagating — otherwise a failed op leaves a zombie
+empty bucket and breaks the "buckets are never empty" invariant. A caller that
+hit an *existing* bucket leaves it alone (it was non-empty before). Applies to
+`add`/`addMany` here and to every create-then-delegate op in later chunks.
+
 ## Task 2 — Per-value operations
 
 All split `value` into `hi = @truncate(value >> 32)`, `lo = @truncate(value)`.

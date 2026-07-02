@@ -60,6 +60,10 @@ loop mirroring `diff_test.zig`'s `runRandomizedLoop` / `runOperationMatrix`:
   cardinality + element-wise membership + serialized-bytes equality.
 - iteration count tunable; default to a few thousand iters so the loop stays in
   the "fast" tier (seconds), per the harness layout.
+- **Never call CRoaring `xor_inplace` / `andnot_inplace` with identical pointers**
+  (it forbids `r1 == r2`; see 10-02). The oracle path for any in-place op uses two
+  distinct CRoaring bitmaps; the self-aliased `A ⊕ A` / `A − A` cases are asserted
+  rawr-only (result is empty), per the property pass in Task 2.
 
 ## Task 4 — Malformed-input smoke (deserialize)
 

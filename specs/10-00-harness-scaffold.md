@@ -55,7 +55,7 @@ portable serialize in 10-04):
 ```c
 typedef struct roaring64_bitmap_s roaring64_bitmap_t;
 roaring64_bitmap_t *roaring64_bitmap_create(void);
-void roaring64_bitmap_free(const roaring64_bitmap_t *r);
+void roaring64_bitmap_free(roaring64_bitmap_t *r);  // NB: non-const, unlike 32-bit roaring_bitmap_free
 roaring64_bitmap_t *roaring64_bitmap_copy(const roaring64_bitmap_t *r);
 void roaring64_bitmap_add(roaring64_bitmap_t *r, uint64_t x);
 uint64_t roaring64_bitmap_get_cardinality(const roaring64_bitmap_t *r);
