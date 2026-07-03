@@ -70,7 +70,10 @@ All split `value` into `hi = @truncate(value >> 32)`, `lo = @truncate(value)`.
 
 - `toArrayAlloc(self, allocator) ![]u64` / `toArray(self, out: []u64) usize` —
   concat sub-bitmap extractions, re-attaching `hi` to the high 32 bits, in key
-  order.
+  order. Per the toplevel **overflow policy**, `toArrayAlloc` returns
+  `error.Overflow` when the element count (or `count * @sizeOf(u64)`) exceeds
+  `maxInt(usize)` — use checked arithmetic, never wrap. `toArray(out)` just fills
+  the caller buffer and returns the count, so it's unaffected.
 - `iterator(self) Iterator` — ordered walk: outer cursor over buckets, inner
   `RoaringBitmap.Iterator` over the current sub-bitmap; `next()` yields
   `(hi << 32) | lo` and advances to the next bucket when the inner iterator is

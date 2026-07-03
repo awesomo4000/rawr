@@ -68,6 +68,30 @@ Two operations have **genuinely new logic** (not pure delegation):
 A fully-saturated 64-bit bitmap holds 2⁶⁴ elements, which overflows `u64`.
 CRoaring has the same limitation. **Document it; do not engineer around it.**
 
+## Overflow policy for materializing APIs (decided)
+
+Distinct from the `u64` cardinality edge above: any API that **materializes**
+memory sized by the set can need more than `usize` can address — a 64-bit
+bitmap's element count or serialized byte length may exceed `maxInt(usize)`
+(always possible on 32-bit-`usize` targets; the cardinality itself can even
+exceed `maxInt(u64)`). Affected APIs: `toArrayAlloc`, `serialize`,
+`serializedSizeInBytes` (and any future owned/frozen variants).
+
+**Policy:** compute these sizes with **checked arithmetic** (`std.math.mul`/`add`
+or `@addWithOverflow`), and **return an error** (`error.Overflow`) from the
+allocating/writing API when the required size exceeds `maxInt(usize)` — never
+truncate or wrap. Consequences per API:
+- `toArrayAlloc` — already `!`; add `error.Overflow` when `cardinality *
+  @sizeOf(u64)` (or the count itself) exceeds `usize`. `toArray(out)` (caller
+  buffer) is unaffected — it writes what fits and returns the count.
+- `serialize` / `serializeToWriter` — already `!`; propagate `error.Overflow`.
+- `serializedSizeInBytes` — make it **`!usize`** for the 64-bit type (it can
+  legitimately overflow, unlike the 32-bit one whose max encoded size fits
+  `usize`). This is a deliberate signature divergence from the 32-bit method;
+  document it. (Alternatively keep it `usize` and document "valid only when the
+  encoded size fits `usize`" — but `!usize` is the honest signature and is
+  preferred.)
+
 ## Serialization — interop scope (decided)
 
 "Portable 64-bit" is **not** universally interoperable: CRoaring's

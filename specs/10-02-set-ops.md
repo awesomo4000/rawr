@@ -69,7 +69,8 @@ buckets sorted by construction (merge order is ascending).
 
 `bitwiseOr/And/Xor/Difference(self, allocator, other) !Self` — run the driver
 into a fresh `Roaring64Bitmap`, computing cardinality as you go (or leave the
-cache `-1`). Sub-bitmap clones for copy cases use the result's allocator.
+cache `null` = unknown, per the `?u64` cache in 10-00). Sub-bitmap clones for copy
+cases use the result's allocator.
 
 ## Task 3 — In-place ops
 

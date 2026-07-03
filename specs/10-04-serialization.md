@@ -38,14 +38,17 @@ roaring64_bitmap_t *roaring64_bitmap_portable_deserialize_safe(const char *buf, 
 
 ## Task 1 — `serializedSizeInBytes` / `serialize` / `serializeToWriter`
 
-- `serializedSizeInBytes(self) usize` — `8` (count) + Σ over buckets of
-  `4` (key) + `bucket.bm.serializedSizeInBytes()`.
+- `serializedSizeInBytes(self) !usize` — `8` (count) + Σ over buckets of
+  `4` (key) + `bucket.bm.serializedSizeInBytes()`. **Returns `!usize`** (a
+  signature divergence from the 32-bit method) and yields `error.Overflow` when
+  the running sum exceeds `maxInt(usize)`, per the toplevel overflow policy —
+  accumulate with checked arithmetic.
 - `serializeToWriter(self, writer) !void` — write the `u64` count, then for each
   bucket the `u32` key and the sub-bitmap via the existing
   `RoaringBitmap.serializeToWriter`. Match the byte order CRoaring uses (the
   32-bit path is already correct; replicate its key/count endianness).
-- `serialize(self, allocator) ![]u8` — allocate `serializedSizeInBytes`, write via
-  a fixed buffer.
+- `serialize(self, allocator) ![]u8` — allocate `try serializedSizeInBytes()`,
+  write via a fixed buffer; propagates `error.Overflow`.
 
 Place the framing logic in `src/serialize.zig` next to the 32-bit functions (or a
 sibling), reusing the 32-bit writer for the payload — do not duplicate the
@@ -59,12 +62,22 @@ bytes it consumed, but a 64-bit frame packs multiple portable bitmaps back-to-ba
 Pick one (implement in `src/serialize.zig` alongside the 32-bit code):
 
 - **(a) header-driven size helper** — `portableSizeInBytes(data) !usize` that
-  reads only the portable header (cookie, container count, the per-container
+  reads the portable header (cookie, container count, the per-container
   type/cardinality descriptors, and the offset table when the run-flag/threshold
   says one is present) to compute the exact serialized length of the *leading*
   bitmap without materializing it. Then `deserialize` slices `data[0..len]`, parses
   it, and advances by `len`. This mirrors what `serializedSizeInBytes` computes,
   but from serialized bytes rather than a live bitmap.
+
+  > **RUN containers need a data peek, not just the header.** A RUN container's
+  > run count (`n_runs`) is **not** in the descriptor block — it's the first `u16`
+  > of that container's own data, and its byte size is `2 + 4 * n_runs`. So the
+  > helper cannot size a bitmap from headers/descriptors/offsets alone: for each
+  > container flagged RUN it must read that leading `u16` from the container's data
+  > region. This is exactly what CRoaring's `ra_portable_deserialize_size` does.
+  > Array/bitset container sizes *are* fixed by their cardinality descriptor; only
+  > RUN needs the peek. Bounds-check the peek in the `Safe` path (a RUN `n_runs`
+  > must not push the computed length past the buffer).
 - **(b) counting-reader parse** — a reader wrapper over the byte slice that tracks
   its cursor, and a `deserialize`-from-reader path that consumes exactly one
   portable bitmap and exposes the new cursor. (Note the existing
