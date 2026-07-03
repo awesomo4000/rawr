@@ -72,6 +72,12 @@ into a fresh `Roaring64Bitmap`, computing cardinality as you go (or leave the
 cache `null` = unknown, per the `?u64` cache in 10-00). Sub-bitmap clones for copy
 cases use the result's allocator.
 
+Prefer **computing cardinality as you go** here (you already visit every result
+bucket). `cardinality()` is `*const` and does not repopulate the cache, so leaving
+it `null` makes the next `cardinality()` call O(buckets) — and set-op results are
+exactly the values callers tend to immediately measure. Setting the cache during
+construction is nearly free and avoids that. Same guidance for the in-place ops.
+
 ## Task 3 — In-place ops
 
 `bitwiseOrInPlace/AndInPlace/XorInPlace/DifferenceInPlace(self, other) !void` —
