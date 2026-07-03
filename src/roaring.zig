@@ -8,6 +8,7 @@
 // ============================================================================
 
 pub const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
+pub const Roaring64Bitmap = @import("roaring64.zig").Roaring64Bitmap;
 pub const OwnedBitmap = @import("bitmap.zig").OwnedBitmap;
 pub const FrozenBitmap = @import("frozen.zig").FrozenBitmap;
 pub const ValidateError = RoaringBitmap.ValidateError;
@@ -35,6 +36,7 @@ test {
     _ = @import("container.zig");
     _ = @import("container_ops.zig");
     _ = @import("bitmap.zig");
+    _ = @import("roaring64.zig");
     _ = @import("frozen.zig");
     _ = @import("compare.zig");
     _ = @import("serialize.zig");

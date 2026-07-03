@@ -10,6 +10,7 @@
 
 // Opaque bitmap type
 typedef struct roaring_bitmap_s roaring_bitmap_t;
+typedef struct roaring64_bitmap_s roaring64_bitmap_t;
 
 // Creation and destruction
 roaring_bitmap_t *roaring_bitmap_create(void);
@@ -79,5 +80,13 @@ roaring_bitmap_t *roaring_bitmap_portable_deserialize_safe(const char *buf, size
 // Iteration callback
 typedef bool (*roaring_iterator)(uint32_t value, void *param);
 bool roaring_iterate(const roaring_bitmap_t *r, roaring_iterator iterator, void *ptr);
+
+// 64-bit bitmap lifecycle / identity operations
+roaring64_bitmap_t *roaring64_bitmap_create(void);
+void roaring64_bitmap_free(roaring64_bitmap_t *r);
+roaring64_bitmap_t *roaring64_bitmap_copy(const roaring64_bitmap_t *r);
+void roaring64_bitmap_add(roaring64_bitmap_t *r, uint64_t x);
+uint64_t roaring64_bitmap_get_cardinality(const roaring64_bitmap_t *r);
+bool roaring64_bitmap_is_empty(const roaring64_bitmap_t *r);
 
 #endif // CROARING_WRAPPER_H

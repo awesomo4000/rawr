@@ -36,6 +36,17 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_tests.step);
 
+    const roaring64_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/roaring64.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_roaring64_tests = b.addRunArtifact(roaring64_tests);
+    const test64_step = b.step("test64", "Run Roaring64 unit tests");
+    test64_step.dependOn(&run_roaring64_tests.step);
+
     // Benchmark executable (always ReleaseFast, including the library)
     const bench_lib_mod = b.createModule(.{
         .root_source_file = b.path("src/roaring.zig"),
@@ -87,6 +98,32 @@ pub fn build(b: *std.Build) void {
     const run_validate = b.addRunArtifact(validate_exe);
     validate_step.dependOn(&run_validate.step);
 
+    const validate64_mod = b.createModule(.{
+        .root_source_file = b.path("src/validate_roaring64.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    validate64_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, validate64_mod, target);
+    addTranslatedCImport(b, validate64_mod, .{
+        .header = "vendor/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const validate64_exe = b.addExecutable(.{
+        .name = "validate_roaring64",
+        .root_module = validate64_mod,
+    });
+    b.installArtifact(validate64_exe);
+
+    const validate64_step = b.step("validate64", "Run CRoaring roaring64 interop validation");
+    const run_validate64 = b.addRunArtifact(validate64_exe);
+    validate64_step.dependOn(&run_validate64.step);
+
     // Differential tests against CRoaring
     const difftest_mod = b.createModule(.{
         .root_source_file = b.path("src/diff_test.zig"),
@@ -113,6 +150,32 @@ pub fn build(b: *std.Build) void {
     const difftest_step = b.step("difftest", "Differential tests vs CRoaring");
     const run_difftest = b.addRunArtifact(difftest_exe);
     difftest_step.dependOn(&run_difftest.step);
+
+    const difftest64_mod = b.createModule(.{
+        .root_source_file = b.path("src/diff_test64.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    difftest64_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, difftest64_mod, target);
+    addTranslatedCImport(b, difftest64_mod, .{
+        .header = "vendor/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const difftest64_exe = b.addExecutable(.{
+        .name = "diff_test64",
+        .root_module = difftest64_mod,
+    });
+    b.installArtifact(difftest64_exe);
+
+    const difftest64_step = b.step("difftest64", "Differential tests vs CRoaring roaring64");
+    const run_difftest64 = b.addRunArtifact(difftest64_exe);
+    difftest64_step.dependOn(&run_difftest64.step);
 
     // CRoaring benchmark comparison
     const bench_cr_mod = b.createModule(.{
