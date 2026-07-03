@@ -79,8 +79,9 @@ Pick one (implement in `src/serialize.zig` alongside the 32-bit code):
   > container flagged RUN it must read that leading `u16` from the container's data
   > region. This is exactly what CRoaring's `ra_portable_deserialize_size` does.
   > Array/bitset container sizes *are* fixed by their cardinality descriptor; only
-  > RUN needs the peek. Bounds-check the peek in the `Safe` path (a RUN `n_runs`
-  > must not push the computed length past the buffer).
+  > RUN needs the peek. Bounds-check the peek (a RUN `n_runs` must not push the
+  > computed length past the buffer) — in **both** deserialize paths, per the note
+  > below.
 - **(b) counting-reader parse** — a reader wrapper over the byte slice that tracks
   its cursor, and a `deserialize`-from-reader path that consumes exactly one
   portable bitmap and exposes the new cursor. (Note the existing

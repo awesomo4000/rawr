@@ -82,6 +82,14 @@ In `build.zig`, mirror the existing `test` / `validate` / `difftest` wiring:
   `difftest64`. **Stub body:** same trivial empty-vs-empty agreement check.
   Real generators/assertions arrive from 10-01 on.
 
+**Mirror the full existing tooling wiring, not just the CRoaring import.** The
+current `validate` / `difftest` modules both call `addBenchmarkPlatformShim(b,
+mod, target)` (build.zig) — `validate64` / `difftest64` must do the same **if they
+pull in `bench_time`** (or any of the platform-sensitive tooling helpers), or we
+regress the OpenBSD/BSD builds that those shims exist to keep green. Copy the
+`validate`/`difftest` step wiring verbatim and swap the root source; don't
+hand-roll a reduced version that drops the shim.
+
 The stubs exist so every later chunk has a place to hang its assertions and so we
 catch build-system / translate-c wiring problems now, in isolation, instead of
 tangled with first-feature bugs.
