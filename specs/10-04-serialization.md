@@ -91,6 +91,10 @@ past the buffer).
   surface beyond the count+key frame, since the payloads go through the
   already-hardened 32-bit path.
 
+The count field is `u64` on the wire but `size` is `u32`; **reject any count
+`> maxInt(u32)`** before allocating (matches CRoaring and the `size: u32` field).
+This is a cheap early rejection independent of the buffer-overrun check.
+
 (`deserializeFromReader` / owned / frozen 64-bit variants are out of scope —
 deferred per the toplevel.)
 
@@ -106,8 +110,24 @@ mirroring `src/validate_croaring.zig`:
    `roaring64_bitmap_portable_serialize` → `rawr.deserialize` → assert `equals`
    the original rawr bitmap.
 4. **rawr → rawr:** `serialize` → `deserialize` → `equals` (self round-trip).
-5. Assert `serializedSizeInBytes` equals the actual bytes written **and**
-   `roaring64_bitmap_portable_size_in_bytes` for the same set.
+5. Assert `serializedSizeInBytes` equals the actual bytes written. Compare against
+   `roaring64_bitmap_portable_size_in_bytes` **only after the run-container caveat
+   below** — otherwise sizes legitimately differ.
+
+**Run-container caveat (same as the 32-bit difftest).** rawr's `addRange` and
+`runOptimize` produce RUN containers, so rawr's serialized bytes encode runs while
+a freshly-built CRoaring oracle does not — byte-length and byte-equality then
+differ even though the *sets* are identical. Before any byte-level comparison
+(size or bytes), **clone the CRoaring oracle and call
+`roaring64_bitmap_run_optimize` on it** so both sides agree on run encoding; or
+drop the byte comparison for that case and rely on set-equality + cross-deserialize
+(`equals`) instead. Steps 2–4 (set/membership/`equals`) are unaffected and are the
+primary bar; step 5's byte/size check is the one that needs the run-optimize.
+
+Add the wrapper decl:
+```c
+bool roaring64_bitmap_run_optimize(roaring64_bitmap_t *r);
+```
 
 Cover the empty bitmap, single-bucket, many-buckets, and run-containing
 sub-bitmaps (so the 32-bit RUN payload path is exercised under the 64-bit frame).

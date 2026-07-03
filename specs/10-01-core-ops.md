@@ -57,7 +57,14 @@ All split `value` into `hi = @truncate(value >> 32)`, `lo = @truncate(value)`.
   invariant).
 - `minimum(self) ?u64` — first bucket: `(hi << 32) | bm.minimum().?`. `null` if
   empty.
-- `maximum(self) ?u64` — last bucket: `(hi << 32) | bm.maximum().?`.
+- `maximum(self) ?u64` — last bucket: `(hi << 32) | bm.maximum().?`. `null` if
+  empty.
+
+> **Oracle caveat for empty:** rawr returns `null` for min/max of an empty
+> bitmap, but CRoaring returns sentinels — `roaring64_bitmap_minimum` yields
+> `UINT64_MAX` and `roaring64_bitmap_maximum` yields `0`. The validate/difftest
+> comparison must special-case empty (assert rawr → `null` and skip the raw CRoaring
+> value), not compare the sentinels directly.
 
 ## Task 3 — Bulk extract + iterator
 

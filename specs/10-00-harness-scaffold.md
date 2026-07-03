@@ -28,7 +28,7 @@ pub const Roaring64Bitmap = struct {
     size: u32,
     capacity: u32,
     allocator: std.mem.Allocator,
-    cached_cardinality: i64 = 0,
+    cached_cardinality: ?u64 = 0, // null = unknown/invalid; recompute on next query
 
     pub fn init(allocator) !Self
     pub fn deinit(self) void
@@ -36,6 +36,11 @@ pub const Roaring64Bitmap = struct {
     pub fn cardinality(self) u64    // 0 for now
 };
 ```
+
+**Cache type — `?u64`, not the 32-bit `i64`-with-`-1` sentinel.** A valid 64-bit
+bitmap can exceed `maxInt(i64)` long before `u64` overflows, so the negative
+sentinel would collide with a real cardinality. Use `null` for
+unknown/invalidated; a cached value is always a plain `u64`.
 
 Re-export from `src/roaring.zig` (`pub const Roaring64Bitmap =
 @import("roaring64.zig").Roaring64Bitmap;`) and import it so its inline tests

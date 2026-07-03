@@ -99,6 +99,12 @@ before delegating — if any `bm.addRange` fails partway, `dropBucket` every buc
 this call newly created (track the created keys, or `errdefer` a rollback) so a
 failed `addRange` leaves no zombie empty buckets.
 
+**Cursor width.** `hi_key` can be `0xFFFFFFFF`, so a `u32` loop variable walking
+`lo_key … hi_key` overflows on the final `+= 1` (UB / wraparound). Iterate the key
+cursor as `u64`/`usize` (`var key: u64 = lo_key; while (key <= hi_key) : (key += 1)`),
+or use an explicit last-iteration break, so the top key is handled without
+overflowing. Same care in `removeRange`, `rangeCardinality`, and `containsRange`.
+
 > Materializing every interior key for a very wide range is O(#keys) buckets —
 > acceptable and correct; matches CRoaring's behavior. Not a perf concern for v1.
 

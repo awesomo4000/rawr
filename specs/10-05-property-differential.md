@@ -57,7 +57,11 @@ loop mirroring `diff_test.zig`'s `runRandomizedLoop` / `runOperationMatrix`:
   - portable serialize round-trip both directions (rawr↔CRoaring).
 - an `assertAgree64` helper (the analog of the 32-bit `assertAgree`) that
   compares a rawr `Roaring64Bitmap` to a CRoaring `roaring64_bitmap_t` by
-  cardinality + element-wise membership + serialized-bytes equality.
+  cardinality + element-wise membership. **Serialized-byte equality only after
+  run-optimizing the oracle** (rawr `addRange`/`runOptimize` emit RUN containers
+  the fresh oracle lacks — clone + `roaring64_bitmap_run_optimize` the CRoaring
+  side first, per the 10-04 caveat), otherwise compare by cross-deserialize
+  `equals` rather than raw bytes.
 - iteration count tunable; default to a few thousand iters so the loop stays in
   the "fast" tier (seconds), per the harness layout.
 - **Never call CRoaring `xor_inplace` / `andnot_inplace` with identical pointers**

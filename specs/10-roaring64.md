@@ -54,8 +54,11 @@ Two operations have **genuinely new logic** (not pure delegation):
 - **`addRange(u64, u64)` / `removeRange`** — a range can span many keys. Partial
   first/last keys delegate to the sub-bitmap's `addRange`/`removeRange`;
   fully-covered interior keys get materialized full (`addRange(0, 0xFFFFFFFF)`).
-  Inclusive-both-ends semantics carry over from the 32-bit API (CRoaring's
-  `roaring64_bitmap_add_range` is exclusive on max → pass `end + 1`).
+  Inclusive-both-ends semantics carry over from the 32-bit API. For the CRoaring
+  oracle, bind the **closed** variants (`roaring64_bitmap_add_range_closed` /
+  `remove_range_closed`), which take inclusive bounds directly — no `end + 1`
+  adjustment, and no overflow at `maxInt(u64)`. (The half-open `add_range` exists
+  too but is not what we oracle against; see 10-03.)
 - **`rank(u64)` / `select(u64)` / `getIndex`** — prefix-sum of sub-bitmap
   cardinalities over the key sequence, plus one sub-bitmap `rank`/`select`/
   `getIndex`. Worth caching per-key cardinalities.
