@@ -86,7 +86,14 @@ roaring64_bitmap_t *roaring64_bitmap_create(void);
 void roaring64_bitmap_free(roaring64_bitmap_t *r);
 roaring64_bitmap_t *roaring64_bitmap_copy(const roaring64_bitmap_t *r);
 void roaring64_bitmap_add(roaring64_bitmap_t *r, uint64_t x);
+void roaring64_bitmap_add_many(roaring64_bitmap_t *r, size_t n, const uint64_t *vals);
+bool roaring64_bitmap_remove_checked(roaring64_bitmap_t *r, uint64_t x);
+bool roaring64_bitmap_contains(const roaring64_bitmap_t *r, uint64_t x);
 uint64_t roaring64_bitmap_get_cardinality(const roaring64_bitmap_t *r);
 bool roaring64_bitmap_is_empty(const roaring64_bitmap_t *r);
+uint64_t roaring64_bitmap_minimum(const roaring64_bitmap_t *r);
+uint64_t roaring64_bitmap_maximum(const roaring64_bitmap_t *r);
+void roaring64_bitmap_to_uint64_array(const roaring64_bitmap_t *r, uint64_t *out);
+bool roaring64_bitmap_equals(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
 
 #endif // CROARING_WRAPPER_H
