@@ -72,8 +72,12 @@ All split `value` into `hi = @truncate(value >> 32)`, `lo = @truncate(value)`.
   concat sub-bitmap extractions, re-attaching `hi` to the high 32 bits, in key
   order. Per the toplevel **overflow policy**, `toArrayAlloc` returns
   `error.Overflow` when the element count (or `count * @sizeOf(u64)`) exceeds
-  `maxInt(usize)` — use checked arithmetic, never wrap. `toArray(out)` just fills
-  the caller buffer and returns the count, so it's unaffected.
+  `maxInt(usize)` — use checked arithmetic, never wrap. `toArray(out)` writes
+  `min(cardinality, out.len)` values and **returns the number written**; it can't
+  overflow (bounded by `out.len`). A caller wanting a full extraction compares the
+  return to `out.len` — a short fill means the set was larger than the buffer
+  (and, when cardinality exceeds `usize`, full extraction is impossible by
+  construction).
 - `iterator(self) Iterator` — ordered walk: outer cursor over buckets, inner
   `RoaringBitmap.Iterator` over the current sub-bitmap; `next()` yields
   `(hi << 32) | lo` and advances to the next bucket when the inner iterator is

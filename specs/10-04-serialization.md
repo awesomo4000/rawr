@@ -14,13 +14,16 @@ must say exactly this.
 
 ## Format
 
-CRoaring's portable 64-bit layout (confirm field widths/endianness against
-`vendor/roaring.h` / the CRoaring serialization source during implementation):
+CRoaring's portable 64-bit layout, confirmed from `vendor/roaring.c`:
 
 - a `uint64_t` count of buckets (high-32 keys), then
 - for each bucket, in ascending key order: the `uint32_t` high key followed by a
   standard **32-bit portable** roaring bitmap (exactly the bytes rawr's existing
   `serialize` already produces for a `RoaringBitmap`).
+
+Endianness is little-endian for the count and key fields — the same assumption
+rawr's current 32-bit serialization already makes; reuse the existing byte-order
+helpers rather than introducing a new convention.
 
 This is why the chunk is small: the per-bucket payload is the already-validated
 32-bit portable encoding from `src/serialize.zig`. The 64-bit layer is only the
@@ -86,9 +89,13 @@ Pick one (implement in `src/serialize.zig` alongside the 32-bit code):
   to (a) unless the reader parse is genuinely length-free.)
 
 Prefer **(a)** — it's a small, testable, `*const` byte-length function and keeps
-the 64-bit parser a plain slice-and-advance loop. Whichever is chosen, it is
-bounds-checked in the `Safe` path (a malformed header must not compute a length
-past the buffer).
+the 64-bit parser a plain slice-and-advance loop. The helper is **bounds-checked
+in both paths, not only `Safe`**: a truncated slice or a length (including a RUN
+`n_runs` peek) that would read past the buffer must return an error, never read
+out of bounds — even plain `deserialize` must fail cleanly on truncated input
+rather than over-read. The `Safe` vs plain distinction is about how the *32-bit
+sub-bitmap payload* is validated (`deserializeSafe` vs `deserialize`), not about
+whether the frame bounds are checked — the frame is always checked.
 
 ## Task 3 — `deserialize` / `deserializeSafe`
 

@@ -37,7 +37,7 @@ match rawr's inclusive semantics):
 ```c
 uint64_t roaring64_bitmap_rank(const roaring64_bitmap_t*, uint64_t x);
 bool roaring64_bitmap_select(const roaring64_bitmap_t*, uint64_t rank, uint64_t *element);
-bool roaring64_bitmap_get_index(const roaring64_bitmap_t*, uint64_t x, uint64_t *out_index);
+bool roaring64_bitmap_get_index(const roaring64_bitmap_t*, uint64_t x, uint64_t *out_index);  // confirmed against vendor/roaring.c
 void roaring64_bitmap_add_range_closed(roaring64_bitmap_t*, uint64_t min, uint64_t max);
 void roaring64_bitmap_remove_range_closed(roaring64_bitmap_t*, uint64_t min, uint64_t max);
 uint64_t roaring64_bitmap_range_closed_cardinality(const roaring64_bitmap_t*, uint64_t min, uint64_t max);
@@ -52,10 +52,9 @@ bool roaring64_bitmap_contains_range(const roaring64_bitmap_t*, uint64_t min, ui
 > that top case rawr-only. `range_closed_cardinality` has no such issue (it takes
 > inclusive bounds directly).
 
-> Confirm exact `get_index` signature against `vendor/roaring.h` during
-> implementation — CRoaring 64-bit returns presence via bool + out-param in the
-> modern API; if the vendored amalgam differs, bind what is actually exported and
-> note it.
+> `get_index` signature is confirmed against `vendor/roaring.c`: it returns
+> presence as `bool` with the 0-based index written to `*out_index`. `select`
+> likewise returns `bool` + `*element`. Bind exactly these.
 
 ## Task 1 — `rank` / `getIndex`
 

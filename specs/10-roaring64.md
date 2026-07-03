@@ -83,7 +83,11 @@ allocating/writing API when the required size exceeds `maxInt(usize)` — never
 truncate or wrap. Consequences per API:
 - `toArrayAlloc` — already `!`; add `error.Overflow` when `cardinality *
   @sizeOf(u64)` (or the count itself) exceeds `usize`. `toArray(out)` (caller
-  buffer) is unaffected — it writes what fits and returns the count.
+  buffer) writes `min(cardinality, out.len)` values and **returns the number
+  written** — it never overflows because it's bounded by `out.len` (a `usize`).
+  The caller checks the return against `out.len` to detect a partial fill; when
+  cardinality exceeds `usize` a full extraction is simply impossible and the
+  bounded write is the honest behavior.
 - `serialize` / `serializeToWriter` — already `!`; propagate `error.Overflow`.
 - `serializedSizeInBytes` — make it **`!usize`** for the 64-bit type (it can
   legitimately overflow, unlike the 32-bit one whose max encoded size fits
