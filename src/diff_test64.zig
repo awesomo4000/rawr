@@ -21,8 +21,8 @@ pub fn main() !void {
 }
 
 fn expectEmptyAgreement(rbm: *const rawr.Roaring64Bitmap, cr: *c.roaring64_bitmap_t) !void {
-    try std.testing.expect(rbm.isEmpty());
-    try std.testing.expect(c.roaring64_bitmap_is_empty(cr));
-    try std.testing.expectEqual(@as(u64, 0), rbm.cardinality());
-    try std.testing.expectEqual(@as(u64, 0), @as(u64, @intCast(c.roaring64_bitmap_get_cardinality(cr))));
+    if (!rbm.isEmpty()) return error.RawrNotEmpty;
+    if (!c.roaring64_bitmap_is_empty(cr)) return error.CRoaringNotEmpty;
+    if (rbm.cardinality() != 0) return error.RawrCardinalityMismatch;
+    if (c.roaring64_bitmap_get_cardinality(cr) != 0) return error.CRoaringCardinalityMismatch;
 }
