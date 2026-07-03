@@ -216,6 +216,281 @@ pub const Roaring64Bitmap = struct {
         return it;
     }
 
+    /// Return a new bitmap that is the union (OR) of self and other.
+    pub fn bitwiseOr(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
+        return self.twoWayAllocatingMerge(.bor, allocator, other);
+    }
+
+    /// Return a new bitmap that is the intersection (AND) of self and other.
+    pub fn bitwiseAnd(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
+        return self.twoWayAllocatingMerge(.band, allocator, other);
+    }
+
+    /// Return a new bitmap that is the symmetric difference (XOR) of self and other.
+    pub fn bitwiseXor(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
+        return self.twoWayAllocatingMerge(.xor, allocator, other);
+    }
+
+    /// Return a new bitmap that is the difference (AND NOT) of self and other.
+    pub fn bitwiseDifference(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
+        return self.twoWayAllocatingMerge(.andnot, allocator, other);
+    }
+
+    /// Compute |self ∩ other| without allocating a result bitmap.
+    pub fn andCardinality(self: *const Self, other: *const Self) u64 {
+        return self.twoWayCardinality(.band, other);
+    }
+
+    /// Compute |self ∪ other| without allocating a result bitmap.
+    pub fn orCardinality(self: *const Self, other: *const Self) u64 {
+        return self.twoWayCardinality(.bor, other);
+    }
+
+    /// Compute |self △ other| without allocating a result bitmap.
+    pub fn xorCardinality(self: *const Self, other: *const Self) u64 {
+        return self.twoWayCardinality(.xor, other);
+    }
+
+    /// Compute |self \ other| without allocating a result bitmap.
+    pub fn differenceCardinality(self: *const Self, other: *const Self) u64 {
+        return self.twoWayCardinality(.andnot, other);
+    }
+
+    /// Return true if self and other have any values in common.
+    pub fn intersects(self: *const Self, other: *const Self) bool {
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < self.size and j < other.size) {
+            const hi_a = self.buckets[i].hi;
+            const hi_b = other.buckets[j].hi;
+
+            if (hi_a < hi_b) {
+                i += 1;
+            } else if (hi_a > hi_b) {
+                j += 1;
+            } else {
+                if (self.buckets[i].bm.intersects(&other.buckets[j].bm)) return true;
+                i += 1;
+                j += 1;
+            }
+        }
+        return false;
+    }
+
+    /// Check if self is a subset of other.
+    pub fn isSubsetOf(self: *const Self, other: *const Self) bool {
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < self.size) {
+            if (j >= other.size) return false;
+
+            const hi_a = self.buckets[i].hi;
+            const hi_b = other.buckets[j].hi;
+
+            if (hi_a < hi_b) {
+                return false;
+            } else if (hi_a > hi_b) {
+                j += 1;
+            } else {
+                if (!self.buckets[i].bm.isSubsetOf(&other.buckets[j].bm)) return false;
+                i += 1;
+                j += 1;
+            }
+        }
+        return true;
+    }
+
+    /// Check if self is a proper subset of other.
+    pub fn isStrictSubsetOf(self: *const Self, other: *const Self) bool {
+        return self.isSubsetOf(other) and self.cardinality() < other.cardinality();
+    }
+
+    /// Check if two bitmaps are equal.
+    pub fn equals(self: *const Self, other: *const Self) bool {
+        if (self.size != other.size) return false;
+        for (self.buckets[0..self.size], other.buckets[0..other.size]) |*a, *b| {
+            if (a.hi != b.hi) return false;
+            if (!a.bm.equals(&b.bm)) return false;
+        }
+        return true;
+    }
+
+    /// In-place union: self |= other.
+    pub fn bitwiseOrInPlace(self: *Self, other: *const Self) !void {
+        var result = try self.bitwiseOr(self.allocator, other);
+        self.swapWithResult(&result);
+    }
+
+    /// In-place intersection: self &= other.
+    pub fn bitwiseAndInPlace(self: *Self, other: *const Self) !void {
+        var result = try self.bitwiseAnd(self.allocator, other);
+        self.swapWithResult(&result);
+    }
+
+    /// In-place symmetric difference: self ^= other.
+    pub fn bitwiseXorInPlace(self: *Self, other: *const Self) !void {
+        var result = try self.bitwiseXor(self.allocator, other);
+        self.swapWithResult(&result);
+    }
+
+    /// In-place difference: self -= other.
+    pub fn bitwiseDifferenceInPlace(self: *Self, other: *const Self) !void {
+        var result = try self.bitwiseDifference(self.allocator, other);
+        self.swapWithResult(&result);
+    }
+
+    fn swapWithResult(self: *Self, result: *Self) void {
+        var old = self.*;
+        self.* = result.*;
+        old.deinit();
+    }
+
+    const SetOp = enum { bor, band, xor, andnot };
+
+    fn twoWayAllocatingMerge(self: *const Self, comptime op: SetOp, allocator: std.mem.Allocator, other: *const Self) !Self {
+        var result = try Self.init(allocator);
+        errdefer result.deinit();
+
+        var total: u64 = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < self.size and j < other.size) {
+            const hi_a = self.buckets[i].hi;
+            const hi_b = other.buckets[j].hi;
+
+            if (hi_a < hi_b) {
+                total += try appendLeftOnly(op, &result, &self.buckets[i]);
+                i += 1;
+            } else if (hi_a > hi_b) {
+                total += try appendRightOnly(op, &result, &other.buckets[j]);
+                j += 1;
+            } else {
+                total += try appendBoth(op, &result, &self.buckets[i], &other.buckets[j]);
+                i += 1;
+                j += 1;
+            }
+        }
+
+        while (i < self.size) : (i += 1) {
+            total += try appendLeftOnly(op, &result, &self.buckets[i]);
+        }
+        while (j < other.size) : (j += 1) {
+            total += try appendRightOnly(op, &result, &other.buckets[j]);
+        }
+
+        result.cached_cardinality = total;
+        return result;
+    }
+
+    fn appendLeftOnly(comptime op: SetOp, result: *Self, bucket: *const Bucket) !u64 {
+        return switch (op) {
+            .bor, .xor, .andnot => try result.appendClonedBucket(bucket),
+            .band => 0,
+        };
+    }
+
+    fn appendRightOnly(comptime op: SetOp, result: *Self, bucket: *const Bucket) !u64 {
+        return switch (op) {
+            .bor, .xor => try result.appendClonedBucket(bucket),
+            .band, .andnot => 0,
+        };
+    }
+
+    fn appendBoth(comptime op: SetOp, result: *Self, a: *const Bucket, b: *const Bucket) !u64 {
+        var merged = switch (op) {
+            .bor => try a.bm.bitwiseOr(result.allocator, &b.bm),
+            .band => try a.bm.bitwiseAnd(result.allocator, &b.bm),
+            .xor => try a.bm.bitwiseXor(result.allocator, &b.bm),
+            .andnot => try a.bm.bitwiseDifference(result.allocator, &b.bm),
+        };
+
+        const card = merged.cardinality();
+        if (card == 0) {
+            merged.deinit();
+            return 0;
+        }
+
+        try result.appendOwnedBucket(a.hi, merged);
+        return card;
+    }
+
+    fn twoWayCardinality(self: *const Self, comptime op: SetOp, other: *const Self) u64 {
+        var total: u64 = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < self.size and j < other.size) {
+            const hi_a = self.buckets[i].hi;
+            const hi_b = other.buckets[j].hi;
+
+            if (hi_a < hi_b) {
+                total += leftOnlyCardinality(op, &self.buckets[i].bm);
+                i += 1;
+            } else if (hi_a > hi_b) {
+                total += rightOnlyCardinality(op, &other.buckets[j].bm);
+                j += 1;
+            } else {
+                total += bothCardinality(op, &self.buckets[i].bm, &other.buckets[j].bm);
+                i += 1;
+                j += 1;
+            }
+        }
+
+        while (i < self.size) : (i += 1) {
+            total += leftOnlyCardinality(op, &self.buckets[i].bm);
+        }
+        while (j < other.size) : (j += 1) {
+            total += rightOnlyCardinality(op, &other.buckets[j].bm);
+        }
+
+        return total;
+    }
+
+    fn leftOnlyCardinality(comptime op: SetOp, bm: *const RoaringBitmap) u64 {
+        return switch (op) {
+            .bor, .xor, .andnot => bm.cardinality(),
+            .band => 0,
+        };
+    }
+
+    fn rightOnlyCardinality(comptime op: SetOp, bm: *const RoaringBitmap) u64 {
+        return switch (op) {
+            .bor, .xor => bm.cardinality(),
+            .band, .andnot => 0,
+        };
+    }
+
+    fn bothCardinality(comptime op: SetOp, a: *const RoaringBitmap, b: *const RoaringBitmap) u64 {
+        return switch (op) {
+            .bor => a.orCardinality(b),
+            .band => a.andCardinality(b),
+            .xor => a.xorCardinality(b),
+            .andnot => a.differenceCardinality(b),
+        };
+    }
+
+    fn appendClonedBucket(self: *Self, bucket: *const Bucket) !u64 {
+        const cloned = try bucket.bm.clone(self.allocator);
+        const card = cloned.cardinality();
+        try self.appendOwnedBucket(bucket.hi, cloned);
+        return card;
+    }
+
+    fn appendOwnedBucket(self: *Self, hi_key: u32, bm: RoaringBitmap) !void {
+        var owned = bm;
+        errdefer owned.deinit();
+
+        try self.ensureCapacity(self.size + 1);
+        self.buckets[self.size] = .{
+            .hi = hi_key,
+            .bm = owned,
+        };
+        self.size += 1;
+    }
+
     inline fn highBits(value: u64) u32 {
         return @truncate(value >> 32);
     }
@@ -461,4 +736,223 @@ test "Roaring64Bitmap clone is independent" {
     try std.testing.expect(try cloned.remove(1));
     try std.testing.expect(bm.contains(1));
     try std.testing.expect(!cloned.contains(1));
+}
+
+test "Roaring64Bitmap set ops out of place and in place" {
+    const allocator = std.testing.allocator;
+    const a_values = [_]u64{
+        0,
+        (@as(u64, 1) << 32) | 1,
+        (@as(u64, 1) << 32) | 2,
+        (@as(u64, 3) << 32) | 5,
+        (@as(u64, 5) << 32) | 5,
+    };
+    const b_values = [_]u64{
+        (@as(u64, 1) << 32) | 2,
+        (@as(u64, 1) << 32) | 9,
+        (@as(u64, 2) << 32) | 1,
+        (@as(u64, 3) << 32) | 5,
+        (@as(u64, 4) << 32) | 7,
+    };
+
+    var a = try roaring64FromValues(allocator, &a_values);
+    defer a.deinit();
+    var b = try roaring64FromValues(allocator, &b_values);
+    defer b.deinit();
+
+    const expected_or = [_]u64{
+        0,
+        (@as(u64, 1) << 32) | 1,
+        (@as(u64, 1) << 32) | 2,
+        (@as(u64, 1) << 32) | 9,
+        (@as(u64, 2) << 32) | 1,
+        (@as(u64, 3) << 32) | 5,
+        (@as(u64, 4) << 32) | 7,
+        (@as(u64, 5) << 32) | 5,
+    };
+    const expected_and = [_]u64{
+        (@as(u64, 1) << 32) | 2,
+        (@as(u64, 3) << 32) | 5,
+    };
+    const expected_xor = [_]u64{
+        0,
+        (@as(u64, 1) << 32) | 1,
+        (@as(u64, 1) << 32) | 9,
+        (@as(u64, 2) << 32) | 1,
+        (@as(u64, 4) << 32) | 7,
+        (@as(u64, 5) << 32) | 5,
+    };
+    const expected_diff = [_]u64{
+        0,
+        (@as(u64, 1) << 32) | 1,
+        (@as(u64, 5) << 32) | 5,
+    };
+
+    var out_or = try a.bitwiseOr(allocator, &b);
+    defer out_or.deinit();
+    try expectRoaring64Values(&out_or, &expected_or);
+
+    var out_and = try a.bitwiseAnd(allocator, &b);
+    defer out_and.deinit();
+    try expectRoaring64Values(&out_and, &expected_and);
+
+    var out_xor = try a.bitwiseXor(allocator, &b);
+    defer out_xor.deinit();
+    try expectRoaring64Values(&out_xor, &expected_xor);
+
+    var out_diff = try a.bitwiseDifference(allocator, &b);
+    defer out_diff.deinit();
+    try expectRoaring64Values(&out_diff, &expected_diff);
+
+    {
+        var in_place = try a.clone(allocator);
+        defer in_place.deinit();
+        try in_place.bitwiseOrInPlace(&b);
+        try expectRoaring64Values(&in_place, &expected_or);
+    }
+    {
+        var in_place = try a.clone(allocator);
+        defer in_place.deinit();
+        try in_place.bitwiseAndInPlace(&b);
+        try expectRoaring64Values(&in_place, &expected_and);
+    }
+    {
+        var in_place = try a.clone(allocator);
+        defer in_place.deinit();
+        try in_place.bitwiseXorInPlace(&b);
+        try expectRoaring64Values(&in_place, &expected_xor);
+    }
+    {
+        var in_place = try a.clone(allocator);
+        defer in_place.deinit();
+        try in_place.bitwiseDifferenceInPlace(&b);
+        try expectRoaring64Values(&in_place, &expected_diff);
+    }
+}
+
+test "Roaring64Bitmap cardinalities and predicates" {
+    const allocator = std.testing.allocator;
+    const a_values = [_]u64{
+        0,
+        (@as(u64, 1) << 32) | 1,
+        (@as(u64, 1) << 32) | 2,
+        (@as(u64, 3) << 32) | 5,
+        (@as(u64, 5) << 32) | 5,
+    };
+    const b_values = [_]u64{
+        (@as(u64, 1) << 32) | 2,
+        (@as(u64, 1) << 32) | 9,
+        (@as(u64, 2) << 32) | 1,
+        (@as(u64, 3) << 32) | 5,
+        (@as(u64, 4) << 32) | 7,
+    };
+    const shared_values = [_]u64{
+        (@as(u64, 1) << 32) | 2,
+        (@as(u64, 3) << 32) | 5,
+    };
+
+    var a = try roaring64FromValues(allocator, &a_values);
+    defer a.deinit();
+    var b = try roaring64FromValues(allocator, &b_values);
+    defer b.deinit();
+    var shared = try roaring64FromValues(allocator, &shared_values);
+    defer shared.deinit();
+    var a_clone = try a.clone(allocator);
+    defer a_clone.deinit();
+    var empty = try Roaring64Bitmap.init(allocator);
+    defer empty.deinit();
+
+    try std.testing.expectEqual(@as(u64, 2), a.andCardinality(&b));
+    try std.testing.expectEqual(@as(u64, 8), a.orCardinality(&b));
+    try std.testing.expectEqual(@as(u64, 6), a.xorCardinality(&b));
+    try std.testing.expectEqual(@as(u64, 3), a.differenceCardinality(&b));
+
+    try std.testing.expect(a.intersects(&b));
+    try std.testing.expect(!a.intersects(&empty));
+    try std.testing.expect(shared.isSubsetOf(&a));
+    try std.testing.expect(shared.isStrictSubsetOf(&a));
+    try std.testing.expect(!a.isSubsetOf(&shared));
+    try std.testing.expect(a.equals(&a_clone));
+    try std.testing.expect(!a.equals(&b));
+    try std.testing.expect(!a.isStrictSubsetOf(&a_clone));
+}
+
+test "Roaring64Bitmap set ops prune empty buckets" {
+    const allocator = std.testing.allocator;
+
+    var a = try roaring64FromValues(allocator, &[_]u64{(@as(u64, 10) << 32) | 1});
+    defer a.deinit();
+    var b = try roaring64FromValues(allocator, &[_]u64{(@as(u64, 10) << 32) | 2});
+    defer b.deinit();
+    var empty = try Roaring64Bitmap.init(allocator);
+    defer empty.deinit();
+
+    var and_result = try a.bitwiseAnd(allocator, &b);
+    defer and_result.deinit();
+    try std.testing.expect(and_result.isEmpty());
+    try std.testing.expectEqual(@as(u32, 0), and_result.size);
+    try std.testing.expect(and_result.equals(&empty));
+    try expectNoEmptyBuckets(&and_result);
+
+    var c = try roaring64FromValues(allocator, &[_]u64{(@as(u64, 20) << 32) | 1});
+    defer c.deinit();
+    var d = try roaring64FromValues(allocator, &[_]u64{(@as(u64, 20) << 32) | 1});
+    defer d.deinit();
+
+    var diff_result = try c.bitwiseDifference(allocator, &d);
+    defer diff_result.deinit();
+    try std.testing.expect(diff_result.isEmpty());
+    try std.testing.expectEqual(@as(u32, 0), diff_result.size);
+    try std.testing.expect(diff_result.equals(&empty));
+    try expectNoEmptyBuckets(&diff_result);
+
+    var in_place = try c.clone(allocator);
+    defer in_place.deinit();
+    try in_place.bitwiseDifferenceInPlace(&d);
+    try std.testing.expect(in_place.isEmpty());
+    try expectNoEmptyBuckets(&in_place);
+}
+
+test "Roaring64Bitmap in-place self alias xor and difference empty the bitmap" {
+    const allocator = std.testing.allocator;
+    const values = [_]u64{
+        1,
+        (@as(u64, 2) << 32) | 3,
+        std.math.maxInt(u64),
+    };
+
+    var xor_self = try roaring64FromValues(allocator, &values);
+    defer xor_self.deinit();
+    try xor_self.bitwiseXorInPlace(&xor_self);
+    try std.testing.expect(xor_self.isEmpty());
+    try std.testing.expectEqual(@as(u32, 0), xor_self.size);
+
+    var diff_self = try roaring64FromValues(allocator, &values);
+    defer diff_self.deinit();
+    try diff_self.bitwiseDifferenceInPlace(&diff_self);
+    try std.testing.expect(diff_self.isEmpty());
+    try std.testing.expectEqual(@as(u32, 0), diff_self.size);
+}
+
+fn roaring64FromValues(allocator: std.mem.Allocator, values: []const u64) !Roaring64Bitmap {
+    var bm = try Roaring64Bitmap.init(allocator);
+    errdefer bm.deinit();
+    try bm.addMany(values);
+    return bm;
+}
+
+fn expectRoaring64Values(bm: *const Roaring64Bitmap, expected: []const u64) !void {
+    const allocator = std.testing.allocator;
+    const actual = try bm.toArrayAlloc(allocator);
+    defer allocator.free(actual);
+
+    try std.testing.expectEqualSlices(u64, expected, actual);
+    try std.testing.expectEqual(@as(u64, @intCast(expected.len)), bm.cardinality());
+    try expectNoEmptyBuckets(bm);
+}
+
+fn expectNoEmptyBuckets(bm: *const Roaring64Bitmap) !void {
+    for (bm.buckets[0..bm.size]) |*bucket| {
+        try std.testing.expect(!bucket.bm.isEmpty());
+    }
 }

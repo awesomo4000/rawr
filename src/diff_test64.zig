@@ -10,6 +10,7 @@ pub fn main() !void {
 
     {
         try runPerValueAgreement(allocator);
+        try runSetOperationMatrix(allocator);
     }
 
     if (gpa.deinit() != .ok) return error.MemoryLeak;
@@ -69,6 +70,135 @@ fn runPerValueAgreement(allocator: std.mem.Allocator) !void {
     }
 }
 
+const MatrixProfile = enum {
+    empty,
+    sparse,
+    mixed,
+};
+
+const BinarySetOp = enum {
+    bitwise_and,
+    bitwise_or,
+    bitwise_xor,
+    bitwise_difference,
+};
+
+fn runSetOperationMatrix(allocator: std.mem.Allocator) !void {
+    const profiles = [_]MatrixProfile{ .empty, .sparse, .mixed };
+
+    for (profiles) |profile_a| {
+        for (profiles) |profile_b| {
+            var a_buf: [192]u64 = undefined;
+            var b_buf: [192]u64 = undefined;
+            const a_values = fillMatrixProfile(profile_a, &a_buf);
+            const b_values = fillMatrixProfile(profile_b, &b_buf);
+
+            var a = try roaring64FromValues(allocator, a_values);
+            defer a.deinit();
+            var b = try roaring64FromValues(allocator, b_values);
+            defer b.deinit();
+
+            const cr_a = try buildCRoaring(a_values);
+            defer c.roaring64_bitmap_free(cr_a);
+            const cr_b = try buildCRoaring(b_values);
+            defer c.roaring64_bitmap_free(cr_b);
+
+            try assertCardinalityOpsAgree(&a, &b, cr_a, cr_b);
+            try assertPredicatesAgree(&a, &b, cr_a, cr_b);
+
+            const ops = [_]BinarySetOp{ .bitwise_and, .bitwise_or, .bitwise_xor, .bitwise_difference };
+            for (ops) |op| {
+                try assertOutOfPlaceSetOpAgree(allocator, op, &a, &b, cr_a, cr_b);
+                try assertInPlaceSetOpAgree(allocator, op, &a, &b, cr_a, cr_b);
+            }
+        }
+    }
+}
+
+fn assertCardinalityOpsAgree(
+    a: *const Roaring64Bitmap,
+    b: *const Roaring64Bitmap,
+    cr_a: *const c.roaring64_bitmap_t,
+    cr_b: *const c.roaring64_bitmap_t,
+) !void {
+    if (a.andCardinality(b) != c.roaring64_bitmap_and_cardinality(cr_a, cr_b)) return error.AndCardinalityMismatch;
+    if (a.orCardinality(b) != c.roaring64_bitmap_or_cardinality(cr_a, cr_b)) return error.OrCardinalityMismatch;
+    if (a.xorCardinality(b) != c.roaring64_bitmap_xor_cardinality(cr_a, cr_b)) return error.XorCardinalityMismatch;
+    if (a.differenceCardinality(b) != c.roaring64_bitmap_andnot_cardinality(cr_a, cr_b)) return error.DifferenceCardinalityMismatch;
+}
+
+fn assertPredicatesAgree(
+    a: *const Roaring64Bitmap,
+    b: *const Roaring64Bitmap,
+    cr_a: *const c.roaring64_bitmap_t,
+    cr_b: *const c.roaring64_bitmap_t,
+) !void {
+    if (a.intersects(b) != c.roaring64_bitmap_intersect(cr_a, cr_b)) return error.IntersectsMismatch;
+    if (a.isSubsetOf(b) != c.roaring64_bitmap_is_subset(cr_a, cr_b)) return error.SubsetMismatch;
+    if (a.isStrictSubsetOf(b) != c.roaring64_bitmap_is_strict_subset(cr_a, cr_b)) return error.StrictSubsetMismatch;
+    if (a.equals(b) != c.roaring64_bitmap_equals(cr_a, cr_b)) return error.EqualsMismatch;
+}
+
+fn assertOutOfPlaceSetOpAgree(
+    allocator: std.mem.Allocator,
+    op: BinarySetOp,
+    a: *const Roaring64Bitmap,
+    b: *const Roaring64Bitmap,
+    cr_a: *const c.roaring64_bitmap_t,
+    cr_b: *const c.roaring64_bitmap_t,
+) !void {
+    var rawr_result = switch (op) {
+        .bitwise_and => try a.bitwiseAnd(allocator, b),
+        .bitwise_or => try a.bitwiseOr(allocator, b),
+        .bitwise_xor => try a.bitwiseXor(allocator, b),
+        .bitwise_difference => try a.bitwiseDifference(allocator, b),
+    };
+    defer rawr_result.deinit();
+
+    const cr_result = switch (op) {
+        .bitwise_and => c.roaring64_bitmap_and(cr_a, cr_b) orelse return error.CRoaringAllocFailed,
+        .bitwise_or => c.roaring64_bitmap_or(cr_a, cr_b) orelse return error.CRoaringAllocFailed,
+        .bitwise_xor => c.roaring64_bitmap_xor(cr_a, cr_b) orelse return error.CRoaringAllocFailed,
+        .bitwise_difference => c.roaring64_bitmap_andnot(cr_a, cr_b) orelse return error.CRoaringAllocFailed,
+    };
+    defer c.roaring64_bitmap_free(cr_result);
+
+    const no_probes = [_]u64{};
+    try assertAgreement(allocator, &rawr_result, cr_result, &no_probes);
+}
+
+fn assertInPlaceSetOpAgree(
+    allocator: std.mem.Allocator,
+    op: BinarySetOp,
+    a: *const Roaring64Bitmap,
+    b: *const Roaring64Bitmap,
+    cr_a: *const c.roaring64_bitmap_t,
+    cr_b: *const c.roaring64_bitmap_t,
+) !void {
+    var rawr_result = try a.clone(allocator);
+    defer rawr_result.deinit();
+
+    switch (op) {
+        .bitwise_and => try rawr_result.bitwiseAndInPlace(b),
+        .bitwise_or => try rawr_result.bitwiseOrInPlace(b),
+        .bitwise_xor => try rawr_result.bitwiseXorInPlace(b),
+        .bitwise_difference => try rawr_result.bitwiseDifferenceInPlace(b),
+    }
+
+    const cr_result = c.roaring64_bitmap_copy(cr_a) orelse return error.CRoaringAllocFailed;
+    defer c.roaring64_bitmap_free(cr_result);
+
+    switch (op) {
+        .bitwise_and => c.roaring64_bitmap_and_inplace(cr_result, cr_b),
+        .bitwise_or => c.roaring64_bitmap_or_inplace(cr_result, cr_b),
+        .bitwise_xor => c.roaring64_bitmap_xor_inplace(cr_result, cr_b),
+        .bitwise_difference => c.roaring64_bitmap_andnot_inplace(cr_result, cr_b),
+    }
+
+    const no_probes = [_]u64{};
+    try assertAgreement(allocator, &rawr_result, cr_result, &no_probes);
+}
+
 fn assertAgreement(
     allocator: std.mem.Allocator,
     rbm: *const Roaring64Bitmap,
@@ -108,6 +238,72 @@ fn assertAgreement(
         if (iter.next() != expected) return error.IteratorMismatch;
     }
     if (iter.next() != null) return error.IteratorExtraValue;
+}
+
+fn roaring64FromValues(allocator: std.mem.Allocator, values: []const u64) !Roaring64Bitmap {
+    var bm = try Roaring64Bitmap.init(allocator);
+    errdefer bm.deinit();
+    try bm.addMany(values);
+    return bm;
+}
+
+fn buildCRoaring(values: []const u64) !*c.roaring64_bitmap_t {
+    const cr = c.roaring64_bitmap_create() orelse return error.CRoaringAllocFailed;
+    errdefer c.roaring64_bitmap_free(cr);
+
+    for (values) |value| {
+        c.roaring64_bitmap_add(cr, value);
+    }
+    return cr;
+}
+
+fn fillMatrixProfile(profile: MatrixProfile, out: []u64) []const u64 {
+    return switch (profile) {
+        .empty => out[0..0],
+        .sparse => fillSparseProfile(out),
+        .mixed => fillMixedProfile(out),
+    };
+}
+
+fn fillSparseProfile(out: []u64) []const u64 {
+    const len: usize = 72;
+    for (out[0..len], 0..) |*slot, i| {
+        const idx: u64 = @intCast(i);
+        const hi: u32 = switch (i % 6) {
+            0 => 0,
+            1 => 1,
+            2 => 17,
+            3 => 0x0001_0000,
+            4 => 0x8000_0000,
+            else => 0xffff_ffff,
+        };
+        const lo: u32 = @truncate((idx * 97_531) ^ (idx << 19) ^ (idx >> 2));
+        slot.* = (@as(u64, hi) << 32) | lo;
+    }
+    return out[0..len];
+}
+
+fn fillMixedProfile(out: []u64) []const u64 {
+    const len: usize = 144;
+    for (out[0..len], 0..) |*slot, i| {
+        const idx: u64 = @intCast(i);
+        const hi: u32 = switch (i % 8) {
+            0 => 1,
+            1 => 2,
+            2 => 17,
+            3 => 18,
+            4 => 0x0001_0000,
+            5 => 0x7fff_ffff,
+            6 => 0x8000_0000,
+            else => 0xffff_fffe,
+        };
+        const lo: u32 = if (i % 5 == 0)
+            @truncate(idx / 5)
+        else
+            @truncate((idx * 1_103_515_245) ^ (idx << 11) ^ 0xa5a5_a5a5);
+        slot.* = (@as(u64, hi) << 32) | lo;
+    }
+    return out[0..len];
 }
 
 fn fillGeneratedCorpus(out: []u64) void {

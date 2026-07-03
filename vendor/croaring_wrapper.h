@@ -95,5 +95,20 @@ uint64_t roaring64_bitmap_minimum(const roaring64_bitmap_t *r);
 uint64_t roaring64_bitmap_maximum(const roaring64_bitmap_t *r);
 void roaring64_bitmap_to_uint64_array(const roaring64_bitmap_t *r, uint64_t *out);
 bool roaring64_bitmap_equals(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+roaring64_bitmap_t *roaring64_bitmap_and(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+roaring64_bitmap_t *roaring64_bitmap_or(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+roaring64_bitmap_t *roaring64_bitmap_xor(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+roaring64_bitmap_t *roaring64_bitmap_andnot(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+void roaring64_bitmap_and_inplace(roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+void roaring64_bitmap_or_inplace(roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+void roaring64_bitmap_xor_inplace(roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+void roaring64_bitmap_andnot_inplace(roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+uint64_t roaring64_bitmap_and_cardinality(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+uint64_t roaring64_bitmap_or_cardinality(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+uint64_t roaring64_bitmap_xor_cardinality(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+uint64_t roaring64_bitmap_andnot_cardinality(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+bool roaring64_bitmap_intersect(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+bool roaring64_bitmap_is_subset(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+bool roaring64_bitmap_is_strict_subset(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
 
 #endif // CROARING_WRAPPER_H
