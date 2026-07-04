@@ -504,20 +504,8 @@ pub const Roaring64Bitmap = struct {
     }
 
     fn bucketIndex(self: *const Self, hi_key: u32) ?usize {
-        if (self.size == 0) return null;
-
-        var lo: usize = 0;
-        var hi: usize = self.size;
-        while (lo < hi) {
-            const mid = lo + (hi - lo) / 2;
-            if (self.buckets[mid].hi < hi_key) {
-                lo = mid + 1;
-            } else if (self.buckets[mid].hi > hi_key) {
-                hi = mid;
-            } else {
-                return mid;
-            }
-        }
+        const idx = self.lowerBound(hi_key);
+        if (idx < self.size and self.buckets[idx].hi == hi_key) return idx;
         return null;
     }
 
