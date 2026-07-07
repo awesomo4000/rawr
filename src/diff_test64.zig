@@ -11,6 +11,8 @@ pub fn main() !void {
     {
         try runPerValueAgreement(allocator);
         try runSetOperationMatrix(allocator);
+        try runPositionalAgreement(allocator);
+        try runRangeAgreement(allocator);
     }
 
     if (gpa.deinit() != .ok) return error.MemoryLeak;
@@ -115,6 +117,64 @@ fn runSetOperationMatrix(allocator: std.mem.Allocator) !void {
     }
 }
 
+fn runPositionalAgreement(allocator: std.mem.Allocator) !void {
+    var values: [384]u64 = undefined;
+    fillGeneratedCorpus(&values);
+
+    var rbm = try roaring64FromValues(allocator, &values);
+    defer rbm.deinit();
+
+    const cr = try buildCRoaring(&values);
+    defer c.roaring64_bitmap_free(cr);
+
+    const probes = [_]u64{
+        0,
+        1,
+        std.math.maxInt(u32),
+        @as(u64, 1) << 32,
+        (@as(u64, 17) << 32) | 42,
+        (@as(u64, 0x8000_0000) << 32) | 9,
+        std.math.maxInt(u64),
+    };
+
+    try assertPositionalAgreement(&rbm, cr, &probes);
+
+    const card = rbm.cardinality();
+    const ranks = [_]u64{ 0, 1, card / 2, card - 1, card };
+    for (ranks) |rank| {
+        const rawr_value = rbm.select(rank);
+        var cr_value: u64 = undefined;
+        const cr_present = c.roaring64_bitmap_select(cr, rank, &cr_value);
+        if ((rawr_value != null) != cr_present) return error.SelectPresenceMismatch;
+        if (rawr_value) |value| {
+            if (value != cr_value) return error.SelectMismatch;
+        }
+    }
+}
+
+fn runRangeAgreement(allocator: std.mem.Allocator) !void {
+    var rbm = try Roaring64Bitmap.init(allocator);
+    defer rbm.deinit();
+
+    const cr = c.roaring64_bitmap_create() orelse return error.CRoaringAllocFailed;
+    defer c.roaring64_bitmap_free(cr);
+
+    try applyAddRange(allocator, &rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
+    try applyAddRange(allocator, &rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
+    try applyAddRange(allocator, &rbm, cr, std.math.maxInt(u64), std.math.maxInt(u64));
+
+    try assertRangeAgreement(&rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
+    try assertRangeAgreement(&rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
+    try assertRangeAgreement(&rbm, cr, (@as(u64, 6) << 32), (@as(u64, 6) << 32) | 10);
+    try assertRangeAgreement(&rbm, cr, std.math.maxInt(u64), std.math.maxInt(u64));
+
+    try applyRemoveRange(allocator, &rbm, cr, (@as(u64, 3) << 32) | 12, (@as(u64, 3) << 32) | 18);
+    try assertRangeAgreement(&rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
+
+    try applyRemoveRange(allocator, &rbm, cr, (@as(u64, 4) << 32) | 0xffff_ffff, (@as(u64, 5) << 32));
+    try assertRangeAgreement(&rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
+}
+
 fn assertCardinalityOpsAgree(
     a: *const Roaring64Bitmap,
     b: *const Roaring64Bitmap,
@@ -137,6 +197,67 @@ fn assertPredicatesAgree(
     if (a.isSubsetOf(b) != c.roaring64_bitmap_is_subset(cr_a, cr_b)) return error.SubsetMismatch;
     if (a.isStrictSubsetOf(b) != c.roaring64_bitmap_is_strict_subset(cr_a, cr_b)) return error.StrictSubsetMismatch;
     if (a.equals(b) != c.roaring64_bitmap_equals(cr_a, cr_b)) return error.EqualsMismatch;
+}
+
+fn assertPositionalAgreement(
+    rbm: *const Roaring64Bitmap,
+    cr: *const c.roaring64_bitmap_t,
+    probes: []const u64,
+) !void {
+    for (probes) |value| {
+        if (rbm.rank(value) != c.roaring64_bitmap_rank(cr, value)) return error.RankMismatch;
+
+        const rawr_index = rbm.getIndex(value);
+        var cr_index: u64 = undefined;
+        const cr_present = c.roaring64_bitmap_get_index(cr, value, &cr_index);
+        if ((rawr_index != null) != cr_present) return error.GetIndexPresenceMismatch;
+        if (rawr_index) |idx| {
+            if (idx != cr_index) return error.GetIndexMismatch;
+        }
+    }
+}
+
+fn applyAddRange(
+    allocator: std.mem.Allocator,
+    rbm: *Roaring64Bitmap,
+    cr: *c.roaring64_bitmap_t,
+    lo: u64,
+    hi: u64,
+) !void {
+    try rbm.addRange(lo, hi);
+    c.roaring64_bitmap_add_range_closed(cr, lo, hi);
+    const probes = [_]u64{ lo, hi };
+    try assertAgreement(allocator, rbm, cr, &probes);
+}
+
+fn applyRemoveRange(
+    allocator: std.mem.Allocator,
+    rbm: *Roaring64Bitmap,
+    cr: *c.roaring64_bitmap_t,
+    lo: u64,
+    hi: u64,
+) !void {
+    try rbm.removeRange(lo, hi);
+    c.roaring64_bitmap_remove_range_closed(cr, lo, hi);
+    const probes = [_]u64{ lo, hi };
+    try assertAgreement(allocator, rbm, cr, &probes);
+}
+
+fn assertRangeAgreement(rbm: *const Roaring64Bitmap, cr: *const c.roaring64_bitmap_t, lo: u64, hi: u64) !void {
+    if (rbm.rangeCardinality(lo, hi) != c.roaring64_bitmap_range_closed_cardinality(cr, lo, hi)) {
+        return error.RangeCardinalityMismatch;
+    }
+    if (rbm.containsRange(lo, hi) != cContainsRangeClosed(cr, lo, hi)) {
+        return error.ContainsRangeMismatch;
+    }
+}
+
+fn cContainsRangeClosed(cr: *const c.roaring64_bitmap_t, lo: u64, hi: u64) bool {
+    if (lo > hi) return true;
+    if (hi == std.math.maxInt(u64)) {
+        return c.roaring64_bitmap_contains_range(cr, lo, hi) and c.roaring64_bitmap_contains(cr, hi);
+    }
+    return c.roaring64_bitmap_contains_range(cr, lo, hi + 1);
 }
 
 fn assertOutOfPlaceSetOpAgree(

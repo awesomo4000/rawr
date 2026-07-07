@@ -110,5 +110,12 @@ uint64_t roaring64_bitmap_andnot_cardinality(const roaring64_bitmap_t *r1, const
 bool roaring64_bitmap_intersect(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
 bool roaring64_bitmap_is_subset(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
 bool roaring64_bitmap_is_strict_subset(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+uint64_t roaring64_bitmap_rank(const roaring64_bitmap_t *r, uint64_t x);
+bool roaring64_bitmap_select(const roaring64_bitmap_t *r, uint64_t rank, uint64_t *element);
+bool roaring64_bitmap_get_index(const roaring64_bitmap_t *r, uint64_t x, uint64_t *out_index);
+void roaring64_bitmap_add_range_closed(roaring64_bitmap_t *r, uint64_t min, uint64_t max);
+void roaring64_bitmap_remove_range_closed(roaring64_bitmap_t *r, uint64_t min, uint64_t max);
+uint64_t roaring64_bitmap_range_closed_cardinality(const roaring64_bitmap_t *r, uint64_t min, uint64_t max);
+bool roaring64_bitmap_contains_range(const roaring64_bitmap_t *r, uint64_t min, uint64_t max);
 
 #endif // CROARING_WRAPPER_H

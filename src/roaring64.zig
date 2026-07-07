@@ -347,6 +347,178 @@ pub const Roaring64Bitmap = struct {
         old.deinit();
     }
 
+    /// Count values <= `value`.
+    pub fn rank(self: *const Self, value: u64) u64 {
+        const target_hi = highBits(value);
+        const target_low = lowBits(value);
+
+        var total: u64 = 0;
+        for (self.buckets[0..self.size]) |*bucket| {
+            if (bucket.hi < target_hi) {
+                total += bucket.bm.cardinality();
+            } else if (bucket.hi == target_hi) {
+                return total + bucket.bm.rank(target_low);
+            } else {
+                return total;
+            }
+        }
+        return total;
+    }
+
+    /// Return the 0-based position of `value`, or null if absent.
+    pub fn getIndex(self: *const Self, value: u64) ?u64 {
+        const target_hi = highBits(value);
+        const target_low = lowBits(value);
+
+        var total: u64 = 0;
+        for (self.buckets[0..self.size]) |*bucket| {
+            if (bucket.hi < target_hi) {
+                total += bucket.bm.cardinality();
+            } else if (bucket.hi == target_hi) {
+                const local = bucket.bm.getIndex(target_low) orelse return null;
+                return total + local;
+            } else {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /// Return the k-th smallest value, 0-based, or null if out of range.
+    pub fn select(self: *const Self, k: u64) ?u64 {
+        var prior: u64 = 0;
+        for (self.buckets[0..self.size]) |*bucket| {
+            const card = bucket.bm.cardinality();
+            if (k >= prior and k - prior < card) {
+                const low = bucket.bm.select(k - prior) orelse return null;
+                return combine(bucket.hi, low);
+            }
+            prior += card;
+        }
+        return null;
+    }
+
+    /// Add all values in the inclusive range [lo, hi].
+    /// Unlike the 32-bit API, this returns no added-count because a 64-bit range
+    /// can contain more values than fit in u64.
+    pub fn addRange(self: *Self, lo: u64, hi: u64) !void {
+        if (lo > hi) return;
+
+        const start_hi = highBits(lo);
+        const end_hi = highBits(hi);
+        const key_count = @as(u64, end_hi) - start_hi + 1;
+        if (key_count > std.math.maxInt(usize)) return error.Overflow;
+
+        const created_keys = try self.allocator.alloc(u32, @intCast(key_count));
+        defer self.allocator.free(created_keys);
+        var created_len: usize = 0;
+        errdefer self.dropCreatedBuckets(created_keys[0..created_len]);
+
+        self.cached_cardinality = null;
+
+        const end_hi_u64: u64 = end_hi;
+        var key: u64 = start_hi;
+        while (key <= end_hi_u64) {
+            const key_u32: u32 = @intCast(key);
+            const start_low: u32 = if (key_u32 == start_hi) lowBits(lo) else 0;
+            const end_low: u32 = if (key_u32 == end_hi) lowBits(hi) else std.math.maxInt(u32);
+
+            const found = try self.findOrCreateBucket(key_u32);
+            if (found.created) {
+                created_keys[created_len] = key_u32;
+                created_len += 1;
+            }
+
+            _ = try found.bucket.bm.addRange(start_low, end_low);
+
+            if (key == end_hi_u64) break;
+            key += 1;
+        }
+    }
+
+    /// Remove all values in the inclusive range [lo, hi].
+    /// Unlike the 32-bit API, this returns no removed-count because a 64-bit
+    /// range can contain more values than fit in u64.
+    pub fn removeRange(self: *Self, lo: u64, hi: u64) !void {
+        if (lo > hi or self.size == 0) return;
+
+        const start_hi = highBits(lo);
+        const end_hi = highBits(hi);
+        const end_hi_u64: u64 = end_hi;
+        var idx = self.lowerBound(start_hi);
+
+        self.cached_cardinality = null;
+
+        while (idx < self.size and @as(u64, self.buckets[idx].hi) <= end_hi_u64) {
+            const bucket = &self.buckets[idx];
+            const start_low: u32 = if (bucket.hi == start_hi) lowBits(lo) else 0;
+            const end_low: u32 = if (bucket.hi == end_hi) lowBits(hi) else std.math.maxInt(u32);
+
+            if (start_low == 0 and end_low == std.math.maxInt(u32)) {
+                self.dropBucket(idx);
+                continue;
+            }
+
+            _ = try bucket.bm.removeRange(start_low, end_low);
+            if (bucket.bm.isEmpty()) {
+                self.dropBucket(idx);
+            } else {
+                idx += 1;
+            }
+        }
+    }
+
+    /// Count values in the inclusive range [lo, hi].
+    pub fn rangeCardinality(self: *const Self, lo: u64, hi: u64) u64 {
+        if (lo > hi) return 0;
+
+        const start_hi = highBits(lo);
+        const end_hi = highBits(hi);
+        const end_hi_u64: u64 = end_hi;
+        var idx = self.lowerBound(start_hi);
+        var total: u64 = 0;
+
+        while (idx < self.size and @as(u64, self.buckets[idx].hi) <= end_hi_u64) : (idx += 1) {
+            const bucket = &self.buckets[idx];
+            const start_low: u32 = if (bucket.hi == start_hi) lowBits(lo) else 0;
+            const end_low: u32 = if (bucket.hi == end_hi) lowBits(hi) else std.math.maxInt(u32);
+
+            if (start_low == 0 and end_low == std.math.maxInt(u32)) {
+                total += bucket.bm.cardinality();
+            } else {
+                total += bucket.bm.rangeCardinality(start_low, end_low);
+            }
+        }
+
+        return total;
+    }
+
+    /// Return whether every value in the inclusive range [lo, hi] is present.
+    pub fn containsRange(self: *const Self, lo: u64, hi: u64) bool {
+        if (lo > hi) return true;
+
+        const start_hi = highBits(lo);
+        const end_hi = highBits(hi);
+        const end_hi_u64: u64 = end_hi;
+        var idx = self.lowerBound(start_hi);
+        var key: u64 = start_hi;
+
+        while (key <= end_hi_u64) {
+            if (idx >= self.size or @as(u64, self.buckets[idx].hi) != key) return false;
+
+            const bucket = &self.buckets[idx];
+            const start_low: u32 = if (bucket.hi == start_hi) lowBits(lo) else 0;
+            const end_low: u32 = if (bucket.hi == end_hi) lowBits(hi) else std.math.maxInt(u32);
+            if (!bucket.bm.containsRange(start_low, end_low)) return false;
+
+            idx += 1;
+            if (key == end_hi_u64) break;
+            key += 1;
+        }
+
+        return true;
+    }
+
     const SetOp = enum { bor, band, xor, andnot };
 
     fn twoWayAllocatingMerge(self: *const Self, comptime op: SetOp, allocator: std.mem.Allocator, other: *const Self) !Self {
@@ -576,6 +748,16 @@ pub const Roaring64Bitmap = struct {
             @memmove(self.buckets[idx .. self.size - 1], self.buckets[idx + 1 .. self.size]);
         }
         self.size -= 1;
+    }
+
+    fn dropCreatedBuckets(self: *Self, keys: []const u32) void {
+        var i = keys.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.bucketIndex(keys[i])) |idx| {
+                self.dropBucket(idx);
+            }
+        }
     }
 };
 
@@ -920,6 +1102,109 @@ test "Roaring64Bitmap in-place self alias xor and difference empty the bitmap" {
     try diff_self.bitwiseDifferenceInPlace(&diff_self);
     try std.testing.expect(diff_self.isEmpty());
     try std.testing.expectEqual(@as(u32, 0), diff_self.size);
+}
+
+test "Roaring64Bitmap rank select and getIndex" {
+    const allocator = std.testing.allocator;
+    const values = [_]u64{
+        0,
+        5,
+        (@as(u64, 1) << 32),
+        (@as(u64, 1) << 32) | 10,
+        (@as(u64, 3) << 32) | 1,
+    };
+    var bm = try roaring64FromValues(allocator, &values);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u64, 1), bm.rank(0));
+    try std.testing.expectEqual(@as(u64, 1), bm.rank(4));
+    try std.testing.expectEqual(@as(u64, 2), bm.rank(5));
+    try std.testing.expectEqual(@as(u64, 2), bm.rank(std.math.maxInt(u32)));
+    try std.testing.expectEqual(@as(u64, 3), bm.rank(@as(u64, 1) << 32));
+    try std.testing.expectEqual(@as(u64, 4), bm.rank((@as(u64, 2) << 32) | 999));
+    try std.testing.expectEqual(@as(u64, 5), bm.rank(std.math.maxInt(u64)));
+
+    try std.testing.expectEqual(@as(?u64, 0), bm.getIndex(0));
+    try std.testing.expectEqual(@as(?u64, 1), bm.getIndex(5));
+    try std.testing.expectEqual(@as(?u64, 2), bm.getIndex(@as(u64, 1) << 32));
+    try std.testing.expectEqual(@as(?u64, 4), bm.getIndex((@as(u64, 3) << 32) | 1));
+    try std.testing.expectEqual(@as(?u64, null), bm.getIndex(4));
+
+    try std.testing.expectEqual(@as(?u64, values[0]), bm.select(0));
+    try std.testing.expectEqual(@as(?u64, values[2]), bm.select(2));
+    try std.testing.expectEqual(@as(?u64, values[4]), bm.select(@intCast(values.len - 1)));
+    try std.testing.expectEqual(@as(?u64, null), bm.select(@intCast(values.len)));
+}
+
+test "Roaring64Bitmap addRange single key and spanning keys" {
+    const allocator = std.testing.allocator;
+
+    var single = try Roaring64Bitmap.init(allocator);
+    defer single.deinit();
+    try single.addRange((@as(u64, 9) << 32) | 10, (@as(u64, 9) << 32) | 12);
+    try expectRoaring64Values(&single, &[_]u64{
+        (@as(u64, 9) << 32) | 10,
+        (@as(u64, 9) << 32) | 11,
+        (@as(u64, 9) << 32) | 12,
+    });
+
+    var spanning = try Roaring64Bitmap.init(allocator);
+    defer spanning.deinit();
+    const lo = (@as(u64, 5) << 32) | 0xffff_fffe;
+    const hi = (@as(u64, 7) << 32) | 1;
+    try spanning.addRange(lo, hi);
+
+    try std.testing.expectEqual(@as(u32, 3), spanning.size);
+    try std.testing.expectEqual(@as(u64, 4_294_967_300), spanning.cardinality());
+    try std.testing.expect(spanning.contains(lo));
+    try std.testing.expect(spanning.contains((@as(u64, 6) << 32) | 12345));
+    try std.testing.expect(spanning.contains(hi));
+    try std.testing.expect(spanning.containsRange(lo, hi));
+    try std.testing.expectEqual(@as(u64, 4_294_967_300), spanning.rangeCardinality(lo, hi));
+    try expectNoEmptyBuckets(&spanning);
+}
+
+test "Roaring64Bitmap removeRange prunes partial and interior buckets" {
+    const allocator = std.testing.allocator;
+
+    var partial = try Roaring64Bitmap.init(allocator);
+    defer partial.deinit();
+    try partial.addRange((@as(u64, 10) << 32) | 1, (@as(u64, 10) << 32) | 3);
+    try partial.removeRange((@as(u64, 10) << 32) | 1, (@as(u64, 10) << 32) | 3);
+    try std.testing.expect(partial.isEmpty());
+    try std.testing.expectEqual(@as(u32, 0), partial.size);
+
+    var spanning = try Roaring64Bitmap.init(allocator);
+    defer spanning.deinit();
+    const lo = (@as(u64, 5) << 32) | 0xffff_fffe;
+    const hi = (@as(u64, 7) << 32) | 1;
+    try spanning.addRange(lo, hi);
+    try spanning.removeRange((@as(u64, 5) << 32) | 0xffff_ffff, (@as(u64, 7) << 32));
+
+    try std.testing.expectEqual(@as(u64, 2), spanning.cardinality());
+    try std.testing.expectEqual(@as(u32, 2), spanning.size);
+    try std.testing.expect(spanning.contains(lo));
+    try std.testing.expect(spanning.contains(hi));
+    try std.testing.expect(!spanning.contains((@as(u64, 6) << 32) | 12345));
+    try expectNoEmptyBuckets(&spanning);
+}
+
+test "Roaring64Bitmap rangeCardinality and containsRange across boundaries and gaps" {
+    const allocator = std.testing.allocator;
+    var bm = try Roaring64Bitmap.init(allocator);
+    defer bm.deinit();
+
+    const adjacent_lo = (@as(u64, 1) << 32) | 0xffff_fffe;
+    const adjacent_hi = (@as(u64, 2) << 32) | 2;
+    try bm.addRange(adjacent_lo, adjacent_hi);
+    _ = try bm.add((@as(u64, 4) << 32) | 10);
+
+    try std.testing.expectEqual(@as(u64, 5), bm.rangeCardinality(adjacent_lo, adjacent_hi));
+    try std.testing.expect(bm.containsRange(adjacent_lo, adjacent_hi));
+    try std.testing.expectEqual(@as(u64, 1), bm.rangeCardinality((@as(u64, 4) << 32) | 9, (@as(u64, 4) << 32) | 11));
+    try std.testing.expect(!bm.containsRange((@as(u64, 2) << 32) | 2, (@as(u64, 4) << 32) | 10));
+    try std.testing.expect(!bm.containsRange((@as(u64, 3) << 32), (@as(u64, 3) << 32) | 1));
+    try std.testing.expectEqual(@as(u64, 0), bm.rangeCardinality((@as(u64, 3) << 32), (@as(u64, 3) << 32) | 1));
 }
 
 fn roaring64FromValues(allocator: std.mem.Allocator, values: []const u64) !Roaring64Bitmap {
