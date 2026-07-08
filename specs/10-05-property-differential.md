@@ -57,11 +57,20 @@ loop mirroring `diff_test.zig`'s `runRandomizedLoop` / `runOperationMatrix`:
   - portable serialize round-trip both directions (rawr↔CRoaring).
 - an `assertAgree64` helper (the analog of the 32-bit `assertAgree`) that
   compares a rawr `Roaring64Bitmap` to a CRoaring `roaring64_bitmap_t` by
-  cardinality + element-wise membership. **Serialized-byte equality only after
-  run-optimizing the oracle** (rawr `addRange`/`runOptimize` emit RUN containers
-  the fresh oracle lacks — clone + `roaring64_bitmap_run_optimize` the CRoaring
-  side first, per the 10-04 caveat), otherwise compare by cross-deserialize
-  `equals` rather than raw bytes.
+  cardinality + element-wise membership, plus a serialization cross-check.
+  **Byte-identity is NOT a valid bar for run-bearing bitmaps** — as 10-04 found,
+  rawr's `addRange` emits RUN containers *eagerly*, but CRoaring's
+  `run_optimize` is *size-driven* and keeps tiny ranges as arrays, so even after
+  cloning + `roaring64_bitmap_run_optimize`-ing the oracle the two encodings can
+  legitimately differ in bytes. So:
+  - **run-free** rawr bitmap → require exact serialized-byte identity against the
+    (run-optimized) oracle.
+  - **run-bearing** rawr bitmap → drop byte-identity; the interop bar is
+    cross-deserialize `equals` (rawr bytes → CRoaring `portable_deserialize` and
+    CRoaring bytes → rawr `deserialize`, both round-trip equal). Detect runs the
+    way 10-04's `validateSerializationCase` does (walk sub-bitmap container types),
+    and `log()` that byte-identity was skipped so the relaxation is visible.
+  Reuse 10-04's `validateSerializationCase` shape rather than re-deriving it.
 - iteration count tunable; default to a few thousand iters so the loop stays in
   the "fast" tier (seconds), per the harness layout.
 - **Never call CRoaring `xor_inplace` / `andnot_inplace` with identical pointers**
