@@ -3,6 +3,7 @@
 rawr's stable public API is:
 
 - `RoaringBitmap`: mutable, caller-allocated bitmap.
+- `Roaring64Bitmap`: mutable 64-bit bitmap layered over 32-bit roaring buckets.
 - `OwnedBitmap`: arena-backed owned result for read-heavy temporary values.
 - `FrozenBitmap`: zero-copy read-only view over serialized bytes.
 - `ValidateError`: structural validation errors from `RoaringBitmap.validate()`.
@@ -262,6 +263,9 @@ a.isStrictSubsetOf(&b)
 ## Serialization
 
 rawr uses the CRoaring-compatible RoaringFormatSpec wire format.
+`Roaring64Bitmap` uses CRoaring's `roaring64` portable format. Java 64-bit
+Roaring layouts are different and are not supported or tested by rawr's 64-bit
+serializer.
 
 ```zig
 const bytes = try bm.serialize(allocator);

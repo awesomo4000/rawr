@@ -1,5 +1,6 @@
 const std = @import("std");
 const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
+const ser = @import("serialize.zig");
 
 /// A 64-bit Roaring bitmap layered over sorted 32-bit high-key buckets.
 pub const Roaring64Bitmap = struct {
@@ -519,7 +520,98 @@ pub const Roaring64Bitmap = struct {
         return true;
     }
 
+    /// Compute serialized size in bytes for CRoaring's portable 64-bit format.
+    pub fn serializedSizeInBytes(self: *const Self) !usize {
+        var size: usize = 8;
+        for (self.buckets[0..self.size]) |*bucket| {
+            size = std.math.add(usize, size, 4) catch return error.Overflow;
+            size = std.math.add(usize, size, bucket.bm.serializedSizeInBytes()) catch return error.Overflow;
+        }
+        return size;
+    }
+
+    /// Serialize to a byte slice in CRoaring's portable 64-bit format.
+    pub fn serialize(self: *const Self, allocator: std.mem.Allocator) ![]u8 {
+        const size_bytes = try self.serializedSizeInBytes();
+        const buf = try allocator.alloc(u8, size_bytes);
+        errdefer allocator.free(buf);
+
+        var writer = std.Io.Writer.fixed(buf);
+        try self.serializeToWriter(&writer);
+        return buf;
+    }
+
+    /// Serialize to any writer in CRoaring's portable 64-bit format.
+    pub fn serializeToWriter(self: *const Self, writer: anytype) !void {
+        try writer.writeInt(u64, self.size, .little);
+        for (self.buckets[0..self.size]) |*bucket| {
+            try writer.writeInt(u32, bucket.hi, .little);
+            try bucket.bm.serializeToWriter(writer);
+        }
+    }
+
+    /// Deserialize a bitmap from CRoaring's portable 64-bit format.
+    pub fn deserialize(allocator: std.mem.Allocator, data: []const u8) !Self {
+        return deserializeWithMode(allocator, data, .plain);
+    }
+
+    /// Deserialize and validate embedded 32-bit bitmap invariants.
+    pub fn deserializeSafe(allocator: std.mem.Allocator, data: []const u8) !Self {
+        return deserializeWithMode(allocator, data, .safe);
+    }
+
     const SetOp = enum { bor, band, xor, andnot };
+    const DeserializeMode = enum { plain, safe };
+
+    fn deserializeWithMode(allocator: std.mem.Allocator, data: []const u8, comptime mode: DeserializeMode) !Self {
+        if (data.len < 8) return error.InvalidFormat;
+
+        const bucket_count = std.mem.readInt(u64, data[0..8], .little);
+        if (bucket_count > std.math.maxInt(u32)) return error.InvalidFormat;
+
+        var result = try Self.init(allocator);
+        errdefer result.deinit();
+
+        try result.ensureCapacity(@intCast(bucket_count));
+
+        var offset: usize = 8;
+        var total: u64 = 0;
+        var previous_hi: ?u32 = null;
+
+        for (0..@as(usize, @intCast(bucket_count))) |_| {
+            const key_end = std.math.add(usize, offset, 4) catch return error.InvalidFormat;
+            if (key_end > data.len) return error.InvalidFormat;
+
+            const hi = std.mem.readInt(u32, data[offset..][0..4], .little);
+            offset = key_end;
+            if (previous_hi) |prev| {
+                if (hi <= prev) return error.InvalidFormat;
+            }
+            previous_hi = hi;
+
+            const sub_len = try ser.portableSizeInBytes(data[offset..]);
+            const sub_end = std.math.add(usize, offset, sub_len) catch return error.InvalidFormat;
+            if (sub_end > data.len) return error.InvalidFormat;
+
+            var sub = switch (mode) {
+                .plain => try RoaringBitmap.deserialize(allocator, data[offset..sub_end]),
+                .safe => try RoaringBitmap.deserializeSafe(allocator, data[offset..sub_end]),
+            };
+            if (sub.isEmpty()) {
+                sub.deinit();
+                return error.InvalidFormat;
+            }
+
+            const card = sub.cardinality();
+            try result.appendOwnedBucket(hi, sub);
+            total = std.math.add(u64, total, card) catch return error.Overflow;
+            offset = sub_end;
+        }
+
+        if (offset != data.len) return error.InvalidFormat;
+        result.cached_cardinality = total;
+        return result;
+    }
 
     fn twoWayAllocatingMerge(self: *const Self, comptime op: SetOp, allocator: std.mem.Allocator, other: *const Self) !Self {
         var result = try Self.init(allocator);
@@ -1207,11 +1299,140 @@ test "Roaring64Bitmap rangeCardinality and containsRange across boundaries and g
     try std.testing.expectEqual(@as(u64, 0), bm.rangeCardinality((@as(u64, 3) << 32), (@as(u64, 3) << 32) | 1));
 }
 
+test "Roaring64Bitmap serialize round-trips empty bitmap" {
+    const allocator = std.testing.allocator;
+
+    var bm = try Roaring64Bitmap.init(allocator);
+    defer bm.deinit();
+
+    try expectRoaring64SerializationRoundTrip(&bm);
+}
+
+test "Roaring64Bitmap serialize round-trips single and many buckets" {
+    const allocator = std.testing.allocator;
+
+    var single = try roaring64FromValues(allocator, &[_]u64{
+        (@as(u64, 7) << 32) | 1,
+        (@as(u64, 7) << 32) | 999,
+    });
+    defer single.deinit();
+    try expectRoaring64SerializationRoundTrip(&single);
+
+    var many = try roaring64FromValues(allocator, &[_]u64{
+        0,
+        1,
+        std.math.maxInt(u32),
+        (@as(u64, 1) << 32),
+        (@as(u64, 2) << 32) | 3,
+        (@as(u64, 17) << 32) | 42,
+        std.math.maxInt(u64),
+    });
+    defer many.deinit();
+    try expectRoaring64SerializationRoundTrip(&many);
+}
+
+test "Roaring64Bitmap serialize round-trips run-bearing sub-bitmap" {
+    const allocator = std.testing.allocator;
+
+    var bm = try Roaring64Bitmap.init(allocator);
+    defer bm.deinit();
+
+    try bm.addRange((@as(u64, 11) << 32) | 10, (@as(u64, 11) << 32) | 100);
+    _ = try bm.add((@as(u64, 12) << 32) | 5);
+
+    try std.testing.expect(roaring64HasRunContainers(&bm));
+    try expectRoaring64SerializationRoundTrip(&bm);
+}
+
+test "Roaring64Bitmap deserializeSafe rejects malformed frames" {
+    const allocator = std.testing.allocator;
+
+    var bm = try roaring64FromValues(allocator, &[_]u64{
+        1,
+        (@as(u64, 2) << 32) | 3,
+    });
+    defer bm.deinit();
+
+    const bytes = try bm.serialize(allocator);
+    defer allocator.free(bytes);
+
+    for (0..bytes.len) |len| {
+        try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, bytes[0..len]));
+    }
+
+    var overrun_count: [8]u8 = undefined;
+    {
+        var writer = std.Io.Writer.fixed(&overrun_count);
+        try writer.writeInt(u64, @as(u64, std.math.maxInt(u32)) + 1, .little);
+    }
+    try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, &overrun_count));
+
+    var sub = try RoaringBitmap.init(allocator);
+    defer sub.deinit();
+    _ = try sub.add(1);
+    const sub_bytes = try sub.serialize(allocator);
+    defer allocator.free(sub_bytes);
+
+    const non_ascending = try buildRoaring64Frame(allocator, &[_]u32{ 2, 1 }, sub_bytes);
+    defer allocator.free(non_ascending);
+    try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, non_ascending));
+
+    var empty_sub = try RoaringBitmap.init(allocator);
+    defer empty_sub.deinit();
+    const empty_sub_bytes = try empty_sub.serialize(allocator);
+    defer allocator.free(empty_sub_bytes);
+
+    const empty_bucket = try buildRoaring64Frame(allocator, &[_]u32{0}, empty_sub_bytes);
+    defer allocator.free(empty_bucket);
+    try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, empty_bucket));
+}
+
 fn roaring64FromValues(allocator: std.mem.Allocator, values: []const u64) !Roaring64Bitmap {
     var bm = try Roaring64Bitmap.init(allocator);
     errdefer bm.deinit();
     try bm.addMany(values);
     return bm;
+}
+
+fn expectRoaring64SerializationRoundTrip(bm: *const Roaring64Bitmap) !void {
+    const allocator = std.testing.allocator;
+    const bytes = try bm.serialize(allocator);
+    defer allocator.free(bytes);
+
+    try std.testing.expectEqual(bytes.len, try bm.serializedSizeInBytes());
+
+    var restored = try Roaring64Bitmap.deserialize(allocator, bytes);
+    defer restored.deinit();
+    try std.testing.expect(bm.equals(&restored));
+
+    var restored_safe = try Roaring64Bitmap.deserializeSafe(allocator, bytes);
+    defer restored_safe.deinit();
+    try std.testing.expect(bm.equals(&restored_safe));
+}
+
+fn buildRoaring64Frame(allocator: std.mem.Allocator, keys: []const u32, sub_bitmap: []const u8) ![]u8 {
+    var size = try std.math.add(usize, 8, try std.math.mul(usize, keys.len, 4));
+    size = try std.math.add(usize, size, try std.math.mul(usize, keys.len, sub_bitmap.len));
+
+    const bytes = try allocator.alloc(u8, size);
+    errdefer allocator.free(bytes);
+
+    var writer = std.Io.Writer.fixed(bytes);
+    try writer.writeInt(u64, keys.len, .little);
+    for (keys) |key| {
+        try writer.writeInt(u32, key, .little);
+        try writer.writeAll(sub_bitmap);
+    }
+    return bytes;
+}
+
+fn roaring64HasRunContainers(bm: *const Roaring64Bitmap) bool {
+    for (bm.buckets[0..bm.size]) |*bucket| {
+        for (bucket.bm.containers[0..bucket.bm.size]) |container| {
+            if (container.getType() == .run) return true;
+        }
+    }
+    return false;
 }
 
 fn expectRoaring64Values(bm: *const Roaring64Bitmap, expected: []const u64) !void {

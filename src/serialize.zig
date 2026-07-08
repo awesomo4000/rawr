@@ -64,6 +64,84 @@ pub fn serializedSizeInBytes(bm: *const RoaringBitmap) usize {
     return size;
 }
 
+/// Compute the exact byte length of the leading 32-bit portable bitmap in `data`.
+pub fn portableSizeInBytes(data: []const u8) !usize {
+    if (data.len < 4) return error.InvalidFormat;
+
+    const cookie = std.mem.readInt(u32, data[0..4], .little);
+    var offset: usize = 4;
+    var has_runs = false;
+    var run_bitset_start: usize = 0;
+    var run_bitset_len: usize = 0;
+    var size: u32 = undefined;
+
+    if ((cookie & 0xFFFF) == fmt.SERIAL_COOKIE) {
+        has_runs = true;
+        size = ((cookie >> 16) & 0xFFFF) + 1;
+        run_bitset_start = offset;
+        run_bitset_len = (@as(usize, size) + 7) / 8;
+        offset = try checkedAdvance(data, offset, run_bitset_len);
+    } else if (cookie == fmt.SERIAL_COOKIE_NO_RUNCONTAINER) {
+        try ensureAvailable(data, offset, 4);
+        size = std.mem.readInt(u32, data[offset..][0..4], .little);
+        if (size > MAX_CONTAINER_COUNT) return error.InvalidFormat;
+        offset += 4;
+    } else {
+        return error.InvalidFormat;
+    }
+
+    if (size > MAX_CONTAINER_COUNT) return error.InvalidFormat;
+
+    const container_count: usize = @intCast(size);
+    const desc_start = offset;
+    offset = try checkedAdvance(data, offset, try checkedMul(container_count, 4));
+
+    if (!has_runs or size >= fmt.NO_OFFSET_THRESHOLD) {
+        offset = try checkedAdvance(data, offset, try checkedMul(container_count, 4));
+    }
+
+    for (0..container_count) |i| {
+        const desc_offset = desc_start + i * 4;
+        const card = @as(u32, std.mem.readInt(u16, data[desc_offset + 2 ..][0..2], .little)) + 1;
+        const is_run = has_runs and runContainerBit(data[run_bitset_start .. run_bitset_start + run_bitset_len], i);
+
+        const container_size = if (is_run) blk: {
+            try ensureAvailable(data, offset, 2);
+            const n_runs = std.mem.readInt(u16, data[offset..][0..2], .little);
+            break :blk try checkedAdd(2, try checkedMul(@intCast(n_runs), 4));
+        } else if (card > ArrayContainer.MAX_CARDINALITY)
+            BitsetContainer.SIZE_BYTES
+        else
+            try checkedMul(@intCast(card), 2);
+
+        offset = try checkedAdvance(data, offset, container_size);
+    }
+
+    return offset;
+}
+
+fn runContainerBit(bits: []const u8, index: usize) bool {
+    return (bits[index / 8] & (@as(u8, 1) << @intCast(index % 8))) != 0;
+}
+
+fn checkedAdd(a: usize, b: usize) !usize {
+    return std.math.add(usize, a, b) catch error.InvalidFormat;
+}
+
+fn checkedMul(a: usize, b: usize) !usize {
+    return std.math.mul(usize, a, b) catch error.InvalidFormat;
+}
+
+fn checkedAdvance(data: []const u8, offset: usize, len: usize) !usize {
+    const next = try checkedAdd(offset, len);
+    if (next > data.len) return error.InvalidFormat;
+    return next;
+}
+
+fn ensureAvailable(data: []const u8, offset: usize, len: usize) !void {
+    _ = try checkedAdvance(data, offset, len);
+}
+
 /// Serialize the bitmap to a byte slice (RoaringFormatSpec compatible).
 pub fn serialize(bm: *const RoaringBitmap, allocator: std.mem.Allocator) ![]u8 {
     const size_bytes = serializedSizeInBytes(bm);
@@ -344,6 +422,47 @@ test "serialize and deserialize array container" {
     try std.testing.expect(restored.contains(100));
     try std.testing.expect(restored.contains(1000));
     try std.testing.expect(bm.equals(&restored));
+}
+
+test "portableSizeInBytes reports leading bitmap length" {
+    const allocator = std.testing.allocator;
+
+    var first = try RoaringBitmap.init(allocator);
+    defer first.deinit();
+    _ = try first.add(1);
+    _ = try first.add(100);
+
+    var second = try RoaringBitmap.init(allocator);
+    defer second.deinit();
+    _ = try second.addRange(10, 100);
+
+    const first_bytes = try serialize(&first, allocator);
+    defer allocator.free(first_bytes);
+    const second_bytes = try serialize(&second, allocator);
+    defer allocator.free(second_bytes);
+
+    const combined = try allocator.alloc(u8, first_bytes.len + second_bytes.len);
+    defer allocator.free(combined);
+    @memcpy(combined[0..first_bytes.len], first_bytes);
+    @memcpy(combined[first_bytes.len..], second_bytes);
+
+    try std.testing.expectEqual(first_bytes.len, try portableSizeInBytes(combined));
+    try std.testing.expectEqual(second_bytes.len, try portableSizeInBytes(combined[first_bytes.len..]));
+}
+
+test "portableSizeInBytes rejects truncated bitmap" {
+    const allocator = std.testing.allocator;
+
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+    _ = try bm.addRange(10, 100);
+
+    const bytes = try serialize(&bm, allocator);
+    defer allocator.free(bytes);
+
+    for (0..bytes.len) |len| {
+        try std.testing.expectError(error.InvalidFormat, portableSizeInBytes(bytes[0..len]));
+    }
 }
 
 test "serialize and deserialize multiple containers" {

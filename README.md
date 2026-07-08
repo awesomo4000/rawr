@@ -15,6 +15,10 @@ Java RoaringBitmap, Go roaring, and any other compliant implementation — and v
 versa. Validated by `zig build validate` which round-trips through both rawr and
 CRoaring.
 
+`Roaring64Bitmap` uses CRoaring's `roaring64` portable format and is validated by
+`zig build validate64`. Java's 64-bit Roaring layouts differ and are not
+supported or tested by rawr's 64-bit serializer.
+
 See [API.md](API.md) for the full API reference.
 
 ## Usage

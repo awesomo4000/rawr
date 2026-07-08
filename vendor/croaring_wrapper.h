@@ -117,5 +117,9 @@ void roaring64_bitmap_add_range_closed(roaring64_bitmap_t *r, uint64_t min, uint
 void roaring64_bitmap_remove_range_closed(roaring64_bitmap_t *r, uint64_t min, uint64_t max);
 uint64_t roaring64_bitmap_range_closed_cardinality(const roaring64_bitmap_t *r, uint64_t min, uint64_t max);
 bool roaring64_bitmap_contains_range(const roaring64_bitmap_t *r, uint64_t min, uint64_t max);
+bool roaring64_bitmap_run_optimize(roaring64_bitmap_t *r);
+size_t roaring64_bitmap_portable_size_in_bytes(const roaring64_bitmap_t *r);
+size_t roaring64_bitmap_portable_serialize(const roaring64_bitmap_t *r, char *buf);
+roaring64_bitmap_t *roaring64_bitmap_portable_deserialize_safe(const char *buf, size_t maxbytes);
 
 #endif // CROARING_WRAPPER_H

@@ -52,6 +52,7 @@ fn validateCase(allocator: std.mem.Allocator, name: []const u8, values: []const 
 
     try assertAgreement(allocator, name, &rbm, cr, values);
     try assertPositionalAgreement(&rbm, cr, values);
+    try validateSerializationCase(allocator, name, &rbm, cr);
 }
 
 fn buildCRoaring(values: []const u64) !*c.roaring64_bitmap_t {
@@ -139,6 +140,69 @@ fn assertPositionalAgreement(
     }
 }
 
+fn validateSerializationCase(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    rbm: *const Roaring64Bitmap,
+    cr: *const c.roaring64_bitmap_t,
+) !void {
+    _ = name;
+
+    const rawr_bytes = try rbm.serialize(allocator);
+    defer allocator.free(rawr_bytes);
+    const rawr_size = try rbm.serializedSizeInBytes();
+    if (rawr_size != rawr_bytes.len) {
+        return error.SerializedSizeMismatch;
+    }
+
+    var rawr_from_rawr = try Roaring64Bitmap.deserialize(allocator, rawr_bytes);
+    defer rawr_from_rawr.deinit();
+    if (!rawr_from_rawr.equals(rbm)) return error.RawrRoundTripMismatch;
+
+    var rawr_safe = try Roaring64Bitmap.deserializeSafe(allocator, rawr_bytes);
+    defer rawr_safe.deinit();
+    if (!rawr_safe.equals(rbm)) return error.RawrSafeRoundTripMismatch;
+
+    const cr_from_rawr = c.roaring64_bitmap_portable_deserialize_safe(@ptrCast(rawr_bytes.ptr), rawr_bytes.len) orelse return error.CRoaringDeserializeFailed;
+    defer c.roaring64_bitmap_free(cr_from_rawr);
+
+    const probes = try rbm.toArrayAlloc(allocator);
+    defer allocator.free(probes);
+    try assertAgreement(allocator, "rawr_to_croaring64", rbm, cr_from_rawr, probes);
+
+    var comparable_owned: ?*c.roaring64_bitmap_t = null;
+    const rawr_has_runs = rawrHasRunContainers(rbm);
+    const comparable_cr: *const c.roaring64_bitmap_t = if (rawr_has_runs) blk: {
+        const copy = c.roaring64_bitmap_copy(cr) orelse return error.CRoaringAllocFailed;
+        _ = c.roaring64_bitmap_run_optimize(copy);
+        comparable_owned = copy;
+        break :blk copy;
+    } else cr;
+    defer if (comparable_owned) |owned| c.roaring64_bitmap_free(owned);
+
+    const cr_size = c.roaring64_bitmap_portable_size_in_bytes(comparable_cr);
+    const cr_bytes = try allocator.alloc(u8, cr_size);
+    defer allocator.free(cr_bytes);
+    const written = c.roaring64_bitmap_portable_serialize(comparable_cr, @ptrCast(cr_bytes.ptr));
+    if (written != cr_size) return error.CRoaringSerializeSizeMismatch;
+
+    var rawr_from_cr = try Roaring64Bitmap.deserialize(allocator, cr_bytes);
+    defer rawr_from_cr.deinit();
+    if (!rawr_from_cr.equals(rbm)) return error.CRoaringRoundTripMismatch;
+
+    // CRoaring run_optimize is size-driven; rawr addRange can keep tiny ranges
+    // as RUN containers even when CRoaring keeps arrays. Cross-deserialize above
+    // is the interop bar for those representation-only differences.
+    if (cr_size != rawr_bytes.len) {
+        if (rawr_has_runs) return;
+        return error.SerializedSizeMismatch;
+    }
+    if (!std.mem.eql(u8, rawr_bytes, cr_bytes)) {
+        if (rawr_has_runs) return;
+        return error.SerializedBytesMismatch;
+    }
+}
+
 fn validateRangeOps(allocator: std.mem.Allocator) !void {
     var rbm = try Roaring64Bitmap.init(allocator);
     defer rbm.deinit();
@@ -154,6 +218,7 @@ fn validateRangeOps(allocator: std.mem.Allocator) !void {
     try assertRangeAgreement(&rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
     try assertRangeAgreement(&rbm, cr, std.math.maxInt(u64), std.math.maxInt(u64));
     try assertRangeAgreement(&rbm, cr, (@as(u64, 6) << 32), (@as(u64, 6) << 32) | 10);
+    try validateSerializationCase(allocator, "range", &rbm, cr);
 
     try applyRemoveRange(allocator, &rbm, cr, (@as(u64, 3) << 32) | 12, (@as(u64, 3) << 32) | 18);
     try assertRangeAgreement(&rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
@@ -221,4 +286,13 @@ fn fillGeneratedCorpus(out: []u64) void {
         const lo: u32 = @truncate((idx * 2_654_435_761) ^ (idx << 17) ^ (idx >> 3));
         slot.* = (@as(u64, hi) << 32) | lo;
     }
+}
+
+fn rawrHasRunContainers(rbm: *const Roaring64Bitmap) bool {
+    for (rbm.buckets[0..rbm.size]) |*bucket| {
+        for (bucket.bm.containers[0..bucket.bm.size]) |container| {
+            if (container.getType() == .run) return true;
+        }
+    }
+    return false;
 }
