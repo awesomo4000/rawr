@@ -29,6 +29,7 @@ pub const container_ops = @import("container_ops.zig");
 pub const optimize = @import("optimize.zig");
 pub const test_gen = @import("test_gen.zig");
 pub const roaring64_test_gen = @import("roaring64_test_gen.zig");
+pub const roaring64_test_support = @import("roaring64_test_support.zig");
 
 test {
     _ = @import("array_container.zig");
@@ -45,5 +46,6 @@ test {
     _ = test_gen;
     _ = @import("property_tests.zig");
     _ = roaring64_test_gen;
+    _ = roaring64_test_support;
     _ = @import("roaring64_property_tests.zig");
 }

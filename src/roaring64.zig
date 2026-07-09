@@ -1,6 +1,7 @@
 const std = @import("std");
 const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
 const ser = @import("serialize.zig");
+const test_support = @import("roaring64_test_support.zig");
 
 /// A 64-bit Roaring bitmap layered over sorted 32-bit high-key buckets.
 pub const Roaring64Bitmap = struct {
@@ -1017,9 +1018,9 @@ test "Roaring64Bitmap set ops out of place and in place" {
         (@as(u64, 4) << 32) | 7,
     };
 
-    var a = try roaring64FromValues(allocator, &a_values);
+    var a = try test_support.fromValues(Roaring64Bitmap, allocator, &a_values);
     defer a.deinit();
-    var b = try roaring64FromValues(allocator, &b_values);
+    var b = try test_support.fromValues(Roaring64Bitmap, allocator, &b_values);
     defer b.deinit();
 
     const expected_or = [_]u64{
@@ -1113,11 +1114,11 @@ test "Roaring64Bitmap cardinalities and predicates" {
         (@as(u64, 3) << 32) | 5,
     };
 
-    var a = try roaring64FromValues(allocator, &a_values);
+    var a = try test_support.fromValues(Roaring64Bitmap, allocator, &a_values);
     defer a.deinit();
-    var b = try roaring64FromValues(allocator, &b_values);
+    var b = try test_support.fromValues(Roaring64Bitmap, allocator, &b_values);
     defer b.deinit();
-    var shared = try roaring64FromValues(allocator, &shared_values);
+    var shared = try test_support.fromValues(Roaring64Bitmap, allocator, &shared_values);
     defer shared.deinit();
     var a_clone = try a.clone(allocator);
     defer a_clone.deinit();
@@ -1142,9 +1143,9 @@ test "Roaring64Bitmap cardinalities and predicates" {
 test "Roaring64Bitmap set ops prune empty buckets" {
     const allocator = std.testing.allocator;
 
-    var a = try roaring64FromValues(allocator, &[_]u64{(@as(u64, 10) << 32) | 1});
+    var a = try test_support.fromValues(Roaring64Bitmap, allocator, &[_]u64{(@as(u64, 10) << 32) | 1});
     defer a.deinit();
-    var b = try roaring64FromValues(allocator, &[_]u64{(@as(u64, 10) << 32) | 2});
+    var b = try test_support.fromValues(Roaring64Bitmap, allocator, &[_]u64{(@as(u64, 10) << 32) | 2});
     defer b.deinit();
     var empty = try Roaring64Bitmap.init(allocator);
     defer empty.deinit();
@@ -1156,9 +1157,9 @@ test "Roaring64Bitmap set ops prune empty buckets" {
     try std.testing.expect(and_result.equals(&empty));
     try expectNoEmptyBuckets(&and_result);
 
-    var c = try roaring64FromValues(allocator, &[_]u64{(@as(u64, 20) << 32) | 1});
+    var c = try test_support.fromValues(Roaring64Bitmap, allocator, &[_]u64{(@as(u64, 20) << 32) | 1});
     defer c.deinit();
-    var d = try roaring64FromValues(allocator, &[_]u64{(@as(u64, 20) << 32) | 1});
+    var d = try test_support.fromValues(Roaring64Bitmap, allocator, &[_]u64{(@as(u64, 20) << 32) | 1});
     defer d.deinit();
 
     var diff_result = try c.bitwiseDifference(allocator, &d);
@@ -1183,13 +1184,13 @@ test "Roaring64Bitmap in-place self alias xor and difference empty the bitmap" {
         std.math.maxInt(u64),
     };
 
-    var xor_self = try roaring64FromValues(allocator, &values);
+    var xor_self = try test_support.fromValues(Roaring64Bitmap, allocator, &values);
     defer xor_self.deinit();
     try xor_self.bitwiseXorInPlace(&xor_self);
     try std.testing.expect(xor_self.isEmpty());
     try std.testing.expectEqual(@as(u32, 0), xor_self.size);
 
-    var diff_self = try roaring64FromValues(allocator, &values);
+    var diff_self = try test_support.fromValues(Roaring64Bitmap, allocator, &values);
     defer diff_self.deinit();
     try diff_self.bitwiseDifferenceInPlace(&diff_self);
     try std.testing.expect(diff_self.isEmpty());
@@ -1205,7 +1206,7 @@ test "Roaring64Bitmap rank select and getIndex" {
         (@as(u64, 1) << 32) | 10,
         (@as(u64, 3) << 32) | 1,
     };
-    var bm = try roaring64FromValues(allocator, &values);
+    var bm = try test_support.fromValues(Roaring64Bitmap, allocator, &values);
     defer bm.deinit();
 
     try std.testing.expectEqual(@as(u64, 1), bm.rank(0));
@@ -1305,20 +1306,20 @@ test "Roaring64Bitmap serialize round-trips empty bitmap" {
     var bm = try Roaring64Bitmap.init(allocator);
     defer bm.deinit();
 
-    try expectRoaring64SerializationRoundTrip(&bm);
+    try test_support.expectSerializationRoundTrip(allocator, &bm);
 }
 
 test "Roaring64Bitmap serialize round-trips single and many buckets" {
     const allocator = std.testing.allocator;
 
-    var single = try roaring64FromValues(allocator, &[_]u64{
+    var single = try test_support.fromValues(Roaring64Bitmap, allocator, &[_]u64{
         (@as(u64, 7) << 32) | 1,
         (@as(u64, 7) << 32) | 999,
     });
     defer single.deinit();
-    try expectRoaring64SerializationRoundTrip(&single);
+    try test_support.expectSerializationRoundTrip(allocator, &single);
 
-    var many = try roaring64FromValues(allocator, &[_]u64{
+    var many = try test_support.fromValues(Roaring64Bitmap, allocator, &[_]u64{
         0,
         1,
         std.math.maxInt(u32),
@@ -1328,7 +1329,7 @@ test "Roaring64Bitmap serialize round-trips single and many buckets" {
         std.math.maxInt(u64),
     });
     defer many.deinit();
-    try expectRoaring64SerializationRoundTrip(&many);
+    try test_support.expectSerializationRoundTrip(allocator, &many);
 }
 
 test "Roaring64Bitmap serialize round-trips run-bearing sub-bitmap" {
@@ -1340,99 +1341,20 @@ test "Roaring64Bitmap serialize round-trips run-bearing sub-bitmap" {
     try bm.addRange((@as(u64, 11) << 32) | 10, (@as(u64, 11) << 32) | 100);
     _ = try bm.add((@as(u64, 12) << 32) | 5);
 
-    try std.testing.expect(roaring64HasRunContainers(&bm));
-    try expectRoaring64SerializationRoundTrip(&bm);
+    try std.testing.expect(test_support.hasRunContainers(&bm));
+    try test_support.expectSerializationRoundTrip(allocator, &bm);
 }
 
 test "Roaring64Bitmap deserializeSafe rejects malformed frames" {
     const allocator = std.testing.allocator;
 
-    var bm = try roaring64FromValues(allocator, &[_]u64{
+    var bm = try test_support.fromValues(Roaring64Bitmap, allocator, &[_]u64{
         1,
         (@as(u64, 2) << 32) | 3,
     });
     defer bm.deinit();
 
-    const bytes = try bm.serialize(allocator);
-    defer allocator.free(bytes);
-
-    for (0..bytes.len) |len| {
-        try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, bytes[0..len]));
-    }
-
-    var overrun_count: [8]u8 = undefined;
-    {
-        var writer = std.Io.Writer.fixed(&overrun_count);
-        try writer.writeInt(u64, @as(u64, std.math.maxInt(u32)) + 1, .little);
-    }
-    try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, &overrun_count));
-
-    var sub = try RoaringBitmap.init(allocator);
-    defer sub.deinit();
-    _ = try sub.add(1);
-    const sub_bytes = try sub.serialize(allocator);
-    defer allocator.free(sub_bytes);
-
-    const non_ascending = try buildRoaring64Frame(allocator, &[_]u32{ 2, 1 }, sub_bytes);
-    defer allocator.free(non_ascending);
-    try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, non_ascending));
-
-    var empty_sub = try RoaringBitmap.init(allocator);
-    defer empty_sub.deinit();
-    const empty_sub_bytes = try empty_sub.serialize(allocator);
-    defer allocator.free(empty_sub_bytes);
-
-    const empty_bucket = try buildRoaring64Frame(allocator, &[_]u32{0}, empty_sub_bytes);
-    defer allocator.free(empty_bucket);
-    try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, empty_bucket));
-}
-
-fn roaring64FromValues(allocator: std.mem.Allocator, values: []const u64) !Roaring64Bitmap {
-    var bm = try Roaring64Bitmap.init(allocator);
-    errdefer bm.deinit();
-    try bm.addMany(values);
-    return bm;
-}
-
-fn expectRoaring64SerializationRoundTrip(bm: *const Roaring64Bitmap) !void {
-    const allocator = std.testing.allocator;
-    const bytes = try bm.serialize(allocator);
-    defer allocator.free(bytes);
-
-    try std.testing.expectEqual(bytes.len, try bm.serializedSizeInBytes());
-
-    var restored = try Roaring64Bitmap.deserialize(allocator, bytes);
-    defer restored.deinit();
-    try std.testing.expect(bm.equals(&restored));
-
-    var restored_safe = try Roaring64Bitmap.deserializeSafe(allocator, bytes);
-    defer restored_safe.deinit();
-    try std.testing.expect(bm.equals(&restored_safe));
-}
-
-fn buildRoaring64Frame(allocator: std.mem.Allocator, keys: []const u32, sub_bitmap: []const u8) ![]u8 {
-    var size = try std.math.add(usize, 8, try std.math.mul(usize, keys.len, 4));
-    size = try std.math.add(usize, size, try std.math.mul(usize, keys.len, sub_bitmap.len));
-
-    const bytes = try allocator.alloc(u8, size);
-    errdefer allocator.free(bytes);
-
-    var writer = std.Io.Writer.fixed(bytes);
-    try writer.writeInt(u64, keys.len, .little);
-    for (keys) |key| {
-        try writer.writeInt(u32, key, .little);
-        try writer.writeAll(sub_bitmap);
-    }
-    return bytes;
-}
-
-fn roaring64HasRunContainers(bm: *const Roaring64Bitmap) bool {
-    for (bm.buckets[0..bm.size]) |*bucket| {
-        for (bucket.bm.containers[0..bucket.bm.size]) |container| {
-            if (container.getType() == .run) return true;
-        }
-    }
-    return false;
+    try test_support.expectMalformedFramesRejected(allocator, &bm);
 }
 
 fn expectRoaring64Values(bm: *const Roaring64Bitmap, expected: []const u64) !void {

@@ -4,6 +4,8 @@ const c = @import("c");
 
 const Roaring64Bitmap = rawr.Roaring64Bitmap;
 const gen64 = rawr.roaring64_test_gen;
+const test_support = rawr.roaring64_test_support;
+const oracle = @import("roaring64_oracle.zig");
 const RANDOM_SEED: u64 = 0x64d1_ff64_0001;
 const RANDOM_ITERS: usize = 1000;
 const RANDOM_MAX_BUCKETS: usize = 6;
@@ -31,8 +33,9 @@ fn runPerValueAgreement(allocator: std.mem.Allocator) !void {
     const cr = c.roaring64_bitmap_create() orelse return error.CRoaringAllocFailed;
     defer c.roaring64_bitmap_free(cr);
 
-    var values: [384]u64 = undefined;
-    fillGeneratedCorpus(&values);
+    var generated = try deterministicGeneratedCorpus(allocator);
+    defer generated.deinit();
+    const values = generated.values;
     const probes = [_]u64{
         0,
         1,
@@ -43,7 +46,7 @@ fn runPerValueAgreement(allocator: std.mem.Allocator) !void {
         std.math.maxInt(u64),
     };
 
-    try assertAgreement(allocator, &rbm, cr, &probes);
+    try oracle.assertAgreement(allocator, &rbm, cr, &probes);
 
     for (values, 0..) |value, i| {
         const was_present = c.roaring64_bitmap_contains(cr, value);
@@ -52,10 +55,10 @@ fn runPerValueAgreement(allocator: std.mem.Allocator) !void {
         if (added != !was_present) return error.AddAgreementMismatch;
 
         if (i % 31 == 0) {
-            try assertAgreement(allocator, &rbm, cr, &probes);
+            try oracle.assertAgreement(allocator, &rbm, cr, &probes);
         }
     }
-    try assertAgreement(allocator, &rbm, cr, &probes);
+    try oracle.assertAgreement(allocator, &rbm, cr, &probes);
 
     for (values, 0..) |value, i| {
         if (i % 3 != 0) continue;
@@ -65,10 +68,10 @@ fn runPerValueAgreement(allocator: std.mem.Allocator) !void {
         if (removed != cr_removed) return error.RemoveAgreementMismatch;
 
         if (i % 39 == 0) {
-            try assertAgreement(allocator, &rbm, cr, &probes);
+            try oracle.assertAgreement(allocator, &rbm, cr, &probes);
         }
     }
-    try assertAgreement(allocator, &rbm, cr, &probes);
+    try oracle.assertAgreement(allocator, &rbm, cr, &probes);
 
     for (probes) |probe| {
         if (rbm.contains(probe) != c.roaring64_bitmap_contains(cr, probe)) {
@@ -100,14 +103,14 @@ fn runSetOperationMatrix(allocator: std.mem.Allocator) !void {
             const a_values = fillMatrixProfile(profile_a, &a_buf);
             const b_values = fillMatrixProfile(profile_b, &b_buf);
 
-            var a = try roaring64FromValues(allocator, a_values);
+            var a = try test_support.fromValues(Roaring64Bitmap, allocator, a_values);
             defer a.deinit();
-            var b = try roaring64FromValues(allocator, b_values);
+            var b = try test_support.fromValues(Roaring64Bitmap, allocator, b_values);
             defer b.deinit();
 
-            const cr_a = try buildCRoaring(a_values);
+            const cr_a = try oracle.buildCRoaring(a_values);
             defer c.roaring64_bitmap_free(cr_a);
-            const cr_b = try buildCRoaring(b_values);
+            const cr_b = try oracle.buildCRoaring(b_values);
             defer c.roaring64_bitmap_free(cr_b);
 
             try assertCardinalityOpsAgree(&a, &b, cr_a, cr_b);
@@ -123,13 +126,14 @@ fn runSetOperationMatrix(allocator: std.mem.Allocator) !void {
 }
 
 fn runPositionalAgreement(allocator: std.mem.Allocator) !void {
-    var values: [384]u64 = undefined;
-    fillGeneratedCorpus(&values);
+    var generated = try deterministicGeneratedCorpus(allocator);
+    defer generated.deinit();
+    const values = generated.values;
 
-    var rbm = try roaring64FromValues(allocator, &values);
+    var rbm = try gen64.toBitmap(Roaring64Bitmap, allocator, &generated);
     defer rbm.deinit();
 
-    const cr = try buildCRoaring(&values);
+    const cr = try oracle.buildCRoaring(values);
     defer c.roaring64_bitmap_free(cr);
 
     const probes = [_]u64{
@@ -142,7 +146,7 @@ fn runPositionalAgreement(allocator: std.mem.Allocator) !void {
         std.math.maxInt(u64),
     };
 
-    try assertPositionalAgreement(&rbm, cr, &probes);
+    try oracle.assertPositionalAgreement(&rbm, cr, &probes);
 
     const card = rbm.cardinality();
     const ranks = [_]u64{ 0, 1, card / 2, card - 1, card };
@@ -164,20 +168,20 @@ fn runRangeAgreement(allocator: std.mem.Allocator) !void {
     const cr = c.roaring64_bitmap_create() orelse return error.CRoaringAllocFailed;
     defer c.roaring64_bitmap_free(cr);
 
-    try applyAddRange(allocator, &rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
-    try applyAddRange(allocator, &rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
-    try applyAddRange(allocator, &rbm, cr, std.math.maxInt(u64), std.math.maxInt(u64));
+    try oracle.applyAddRange(allocator, &rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
+    try oracle.applyAddRange(allocator, &rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
+    try oracle.applyAddRange(allocator, &rbm, cr, std.math.maxInt(u64), std.math.maxInt(u64));
 
-    try assertRangeAgreement(&rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
-    try assertRangeAgreement(&rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
-    try assertRangeAgreement(&rbm, cr, (@as(u64, 6) << 32), (@as(u64, 6) << 32) | 10);
-    try assertRangeAgreement(&rbm, cr, std.math.maxInt(u64), std.math.maxInt(u64));
+    try oracle.assertRangeAgreement(&rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
+    try oracle.assertRangeAgreement(&rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
+    try oracle.assertRangeAgreement(&rbm, cr, (@as(u64, 6) << 32), (@as(u64, 6) << 32) | 10);
+    try oracle.assertRangeAgreement(&rbm, cr, std.math.maxInt(u64), std.math.maxInt(u64));
 
-    try applyRemoveRange(allocator, &rbm, cr, (@as(u64, 3) << 32) | 12, (@as(u64, 3) << 32) | 18);
-    try assertRangeAgreement(&rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
+    try oracle.applyRemoveRange(allocator, &rbm, cr, (@as(u64, 3) << 32) | 12, (@as(u64, 3) << 32) | 18);
+    try oracle.assertRangeAgreement(&rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
 
-    try applyRemoveRange(allocator, &rbm, cr, (@as(u64, 4) << 32) | 0xffff_ffff, (@as(u64, 5) << 32));
-    try assertRangeAgreement(&rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
+    try oracle.applyRemoveRange(allocator, &rbm, cr, (@as(u64, 4) << 32) | 0xffff_ffff, (@as(u64, 5) << 32));
+    try oracle.assertRangeAgreement(&rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
 }
 
 fn runRandomizedLoop(allocator: std.mem.Allocator) !void {
@@ -217,18 +221,18 @@ fn runRandomIteration(allocator: std.mem.Allocator, rng: std.Random, iteration: 
     var third = try gen64.toBitmap(Roaring64Bitmap, allocator, &gen_c);
     defer third.deinit();
 
-    const cr_a = try buildCRoaring(gen_a.values);
+    const cr_a = try oracle.buildCRoaring(gen_a.values);
     defer c.roaring64_bitmap_free(cr_a);
-    const cr_b = try buildCRoaring(gen_b.values);
+    const cr_b = try oracle.buildCRoaring(gen_b.values);
     defer c.roaring64_bitmap_free(cr_b);
-    const cr_c = try buildCRoaring(gen_c.values);
+    const cr_c = try oracle.buildCRoaring(gen_c.values);
     defer c.roaring64_bitmap_free(cr_c);
 
     const probes = randomProbes(iteration);
-    try assertAgreement(allocator, &a, cr_a, &probes);
-    try assertAgreement(allocator, &b, cr_b, &probes);
-    try assertAgreement(allocator, &third, cr_c, &probes);
-    try assertPositionalAgreement(&a, cr_a, &probes);
+    try oracle.assertAgreement(allocator, &a, cr_a, &probes);
+    try oracle.assertAgreement(allocator, &b, cr_b, &probes);
+    try oracle.assertAgreement(allocator, &third, cr_c, &probes);
+    try oracle.assertPositionalAgreement(&a, cr_a, &probes);
 
     try assertCardinalityOpsAgree(&a, &b, cr_a, cr_b);
     try assertPredicatesAgree(&a, &b, cr_a, cr_b);
@@ -263,7 +267,7 @@ fn assertTripleCompositionAgree(
     defer c.roaring64_bitmap_free(cr_result);
 
     const no_probes = [_]u64{};
-    try assertAgreement(allocator, &rawr_result, cr_result, &no_probes);
+    try oracle.assertAgreement(allocator, &rawr_result, cr_result, &no_probes);
 }
 
 fn assertRandomRangeMutationAgree(
@@ -279,11 +283,11 @@ fn assertRandomRangeMutationAgree(
     defer c.roaring64_bitmap_free(cr);
 
     const range = randomRange(iteration);
-    try applyAddRange(allocator, &rbm, cr, range.lo, range.hi);
-    try assertRangeAgreement(&rbm, cr, range.lo, range.hi);
+    try oracle.applyAddRange(allocator, &rbm, cr, range.lo, range.hi);
+    try oracle.assertRangeAgreement(&rbm, cr, range.lo, range.hi);
 
-    try applyRemoveRange(allocator, &rbm, cr, range.lo, range.hi);
-    try assertRangeAgreement(&rbm, cr, range.lo, range.hi);
+    try oracle.applyRemoveRange(allocator, &rbm, cr, range.lo, range.hi);
+    try oracle.assertRangeAgreement(&rbm, cr, range.lo, range.hi);
 }
 
 fn randomRange(iteration: usize) gen64.Range {
@@ -310,6 +314,24 @@ fn randomProbes(iteration: usize) [8]u64 {
     };
 }
 
+fn deterministicGeneratedCorpus(allocator: std.mem.Allocator) !gen64.Generated {
+    var prng = std.Random.DefaultPrng.init(0x6400_d1ff);
+    const rng = prng.random();
+    const specs = [_]gen64.BucketProfile{
+        .{ .hi = 0, .profile = .boundary },
+        .{ .hi = 1, .profile = .boundary },
+        .{ .hi = 2, .profile = .sparse },
+        .{ .hi = 17, .profile = .runs },
+        .{ .hi = 0x0001_0000, .profile = .sparse },
+        .{ .hi = 0x7fff_ffff, .profile = .boundary },
+        .{ .hi = 0x8000_0000, .profile = .sparse },
+        .{ .hi = 0xffff_fffe, .profile = .boundary },
+        .{ .hi = 0xffff_ffff, .profile = .boundary },
+    };
+
+    return gen64.build(allocator, rng, &specs);
+}
+
 fn assertCardinalityOpsAgree(
     a: *const Roaring64Bitmap,
     b: *const Roaring64Bitmap,
@@ -332,67 +354,6 @@ fn assertPredicatesAgree(
     if (a.isSubsetOf(b) != c.roaring64_bitmap_is_subset(cr_a, cr_b)) return error.SubsetMismatch;
     if (a.isStrictSubsetOf(b) != c.roaring64_bitmap_is_strict_subset(cr_a, cr_b)) return error.StrictSubsetMismatch;
     if (a.equals(b) != c.roaring64_bitmap_equals(cr_a, cr_b)) return error.EqualsMismatch;
-}
-
-fn assertPositionalAgreement(
-    rbm: *const Roaring64Bitmap,
-    cr: *const c.roaring64_bitmap_t,
-    probes: []const u64,
-) !void {
-    for (probes) |value| {
-        if (rbm.rank(value) != c.roaring64_bitmap_rank(cr, value)) return error.RankMismatch;
-
-        const rawr_index = rbm.getIndex(value);
-        var cr_index: u64 = undefined;
-        const cr_present = c.roaring64_bitmap_get_index(cr, value, &cr_index);
-        if ((rawr_index != null) != cr_present) return error.GetIndexPresenceMismatch;
-        if (rawr_index) |idx| {
-            if (idx != cr_index) return error.GetIndexMismatch;
-        }
-    }
-}
-
-fn applyAddRange(
-    allocator: std.mem.Allocator,
-    rbm: *Roaring64Bitmap,
-    cr: *c.roaring64_bitmap_t,
-    lo: u64,
-    hi: u64,
-) !void {
-    try rbm.addRange(lo, hi);
-    c.roaring64_bitmap_add_range_closed(cr, lo, hi);
-    const probes = [_]u64{ lo, hi };
-    try assertAgreement(allocator, rbm, cr, &probes);
-}
-
-fn applyRemoveRange(
-    allocator: std.mem.Allocator,
-    rbm: *Roaring64Bitmap,
-    cr: *c.roaring64_bitmap_t,
-    lo: u64,
-    hi: u64,
-) !void {
-    try rbm.removeRange(lo, hi);
-    c.roaring64_bitmap_remove_range_closed(cr, lo, hi);
-    const probes = [_]u64{ lo, hi };
-    try assertAgreement(allocator, rbm, cr, &probes);
-}
-
-fn assertRangeAgreement(rbm: *const Roaring64Bitmap, cr: *const c.roaring64_bitmap_t, lo: u64, hi: u64) !void {
-    if (rbm.rangeCardinality(lo, hi) != c.roaring64_bitmap_range_closed_cardinality(cr, lo, hi)) {
-        return error.RangeCardinalityMismatch;
-    }
-    if (rbm.containsRange(lo, hi) != cContainsRangeClosed(cr, lo, hi)) {
-        return error.ContainsRangeMismatch;
-    }
-}
-
-fn cContainsRangeClosed(cr: *const c.roaring64_bitmap_t, lo: u64, hi: u64) bool {
-    if (lo > hi) return true;
-    if (hi == std.math.maxInt(u64)) {
-        return c.roaring64_bitmap_contains_range(cr, lo, hi) and c.roaring64_bitmap_contains(cr, hi);
-    }
-    return c.roaring64_bitmap_contains_range(cr, lo, hi + 1);
 }
 
 fn assertOutOfPlaceSetOpAgree(
@@ -420,7 +381,7 @@ fn assertOutOfPlaceSetOpAgree(
     defer c.roaring64_bitmap_free(cr_result);
 
     const no_probes = [_]u64{};
-    try assertAgreement(allocator, &rawr_result, cr_result, &no_probes);
+    try oracle.assertAgreement(allocator, &rawr_result, cr_result, &no_probes);
 }
 
 fn assertInPlaceSetOpAgree(
@@ -452,123 +413,7 @@ fn assertInPlaceSetOpAgree(
     }
 
     const no_probes = [_]u64{};
-    try assertAgreement(allocator, &rawr_result, cr_result, &no_probes);
-}
-
-fn assertAgreement(
-    allocator: std.mem.Allocator,
-    rbm: *const Roaring64Bitmap,
-    cr: *const c.roaring64_bitmap_t,
-    probes: []const u64,
-) !void {
-    const cr_card = c.roaring64_bitmap_get_cardinality(cr);
-    if (rbm.cardinality() != cr_card) return error.CardinalityMismatch;
-    if (rbm.isEmpty() != c.roaring64_bitmap_is_empty(cr)) return error.EmptyMismatch;
-
-    for (probes) |value| {
-        if (rbm.contains(value) != c.roaring64_bitmap_contains(cr, value)) {
-            return error.ContainsMismatch;
-        }
-    }
-
-    if (rbm.isEmpty()) {
-        if (rbm.minimum() != null or rbm.maximum() != null) return error.EmptyMinMaxMismatch;
-    } else {
-        if (rbm.minimum() != c.roaring64_bitmap_minimum(cr)) return error.MinimumMismatch;
-        if (rbm.maximum() != c.roaring64_bitmap_maximum(cr)) return error.MaximumMismatch;
-    }
-
-    const rawr_values = try rbm.toArrayAlloc(allocator);
-    defer allocator.free(rawr_values);
-    if (rawr_values.len != cr_card) return error.ArrayCardinalityMismatch;
-
-    const cr_values = try allocator.alloc(u64, rawr_values.len);
-    defer allocator.free(cr_values);
-    if (cr_values.len != 0) {
-        c.roaring64_bitmap_to_uint64_array(cr, @ptrCast(cr_values.ptr));
-    }
-    if (!std.mem.eql(u64, rawr_values, cr_values)) return error.ArrayMismatch;
-
-    var iter = rbm.iterator();
-    for (rawr_values) |expected| {
-        if (iter.next() != expected) return error.IteratorMismatch;
-    }
-    if (iter.next() != null) return error.IteratorExtraValue;
-
-    try assertSerializationAgreement(allocator, rbm, cr);
-}
-
-fn roaring64FromValues(allocator: std.mem.Allocator, values: []const u64) !Roaring64Bitmap {
-    var bm = try Roaring64Bitmap.init(allocator);
-    errdefer bm.deinit();
-    try bm.addMany(values);
-    return bm;
-}
-
-fn buildCRoaring(values: []const u64) !*c.roaring64_bitmap_t {
-    const cr = c.roaring64_bitmap_create() orelse return error.CRoaringAllocFailed;
-    errdefer c.roaring64_bitmap_free(cr);
-
-    if (values.len != 0) {
-        c.roaring64_bitmap_add_many(cr, values.len, @ptrCast(values.ptr));
-    }
-    return cr;
-}
-
-fn assertSerializationAgreement(
-    allocator: std.mem.Allocator,
-    rbm: *const Roaring64Bitmap,
-    cr: *const c.roaring64_bitmap_t,
-) !void {
-    const rawr_bytes = try rbm.serialize(allocator);
-    defer allocator.free(rawr_bytes);
-    if (try rbm.serializedSizeInBytes() != rawr_bytes.len) return error.SerializedSizeMismatch;
-
-    var rawr_from_rawr = try Roaring64Bitmap.deserialize(allocator, rawr_bytes);
-    defer rawr_from_rawr.deinit();
-    if (!rawr_from_rawr.equals(rbm)) return error.RawrRoundTripMismatch;
-
-    const cr_from_rawr = c.roaring64_bitmap_portable_deserialize_safe(@ptrCast(rawr_bytes.ptr), rawr_bytes.len) orelse return error.CRoaringDeserializeFailed;
-    defer c.roaring64_bitmap_free(cr_from_rawr);
-    if (!c.roaring64_bitmap_equals(cr_from_rawr, cr)) return error.CRoaringRoundTripMismatch;
-
-    var comparable_owned: ?*c.roaring64_bitmap_t = null;
-    const rawr_has_runs = rawrHasRunContainers(rbm);
-    const comparable_cr: *const c.roaring64_bitmap_t = if (rawr_has_runs) blk: {
-        const copy = c.roaring64_bitmap_copy(cr) orelse return error.CRoaringAllocFailed;
-        _ = c.roaring64_bitmap_run_optimize(copy);
-        comparable_owned = copy;
-        break :blk copy;
-    } else cr;
-    defer if (comparable_owned) |owned| c.roaring64_bitmap_free(owned);
-
-    const cr_size = c.roaring64_bitmap_portable_size_in_bytes(comparable_cr);
-    const cr_bytes = try allocator.alloc(u8, cr_size);
-    defer allocator.free(cr_bytes);
-    const written = c.roaring64_bitmap_portable_serialize(comparable_cr, @ptrCast(cr_bytes.ptr));
-    if (written != cr_size) return error.CRoaringSerializeSizeMismatch;
-
-    var rawr_from_cr = try Roaring64Bitmap.deserialize(allocator, cr_bytes);
-    defer rawr_from_cr.deinit();
-    if (!rawr_from_cr.equals(rbm)) return error.RawrRoundTripMismatch;
-
-    if (cr_size != rawr_bytes.len) {
-        if (rawr_has_runs) return;
-        return error.SerializedSizeMismatch;
-    }
-    if (!std.mem.eql(u8, rawr_bytes, cr_bytes)) {
-        if (rawr_has_runs) return;
-        return error.SerializedBytesMismatch;
-    }
-}
-
-fn rawrHasRunContainers(rbm: *const Roaring64Bitmap) bool {
-    for (rbm.buckets[0..rbm.size]) |*bucket| {
-        for (bucket.bm.containers[0..bucket.bm.size]) |container| {
-            if (container.getType() == .run) return true;
-        }
-    }
-    return false;
+    try oracle.assertAgreement(allocator, &rawr_result, cr_result, &no_probes);
 }
 
 fn fillMatrixProfile(profile: MatrixProfile, out: []u64) []const u64 {
@@ -618,23 +463,4 @@ fn fillMixedProfile(out: []u64) []const u64 {
         slot.* = (@as(u64, hi) << 32) | lo;
     }
     return out[0..len];
-}
-
-fn fillGeneratedCorpus(out: []u64) void {
-    for (out, 0..) |*slot, i| {
-        const idx: u64 = @intCast(i);
-        const hi: u32 = switch (i % 9) {
-            0 => 0,
-            1 => 1,
-            2 => 2,
-            3 => 17,
-            4 => 0x0001_0000,
-            5 => 0x7fff_ffff,
-            6 => 0x8000_0000,
-            7 => 0xffff_fffe,
-            else => 0xffff_ffff,
-        };
-        const lo: u32 = @truncate((idx * 1_664_525) ^ (idx << 21) ^ (idx * 1_013_904_223));
-        slot.* = (@as(u64, hi) << 32) | lo;
-    }
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
-const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
 const Roaring64Bitmap = @import("roaring64.zig").Roaring64Bitmap;
 const gen64 = @import("roaring64_test_gen.zig");
+const test_support = @import("roaring64_test_support.zig");
 
 const PROPERTY_ITERS: usize = 120;
 const PROPERTY_COMPLEX_ITERS: usize = 80;
@@ -211,75 +211,17 @@ test "Roaring64 property laws: positional and serialization round-trips" {
         }
         try std.testing.expectEqual(@as(?u64, null), bm.select(@intCast(values.len)));
 
-        const bytes = try bm.serialize(allocator);
-        defer allocator.free(bytes);
-        try std.testing.expectEqual(bytes.len, try bm.serializedSizeInBytes());
-
-        var restored = try Roaring64Bitmap.deserialize(allocator, bytes);
-        defer restored.deinit();
-        try expectBitmapEqual(&bm, &restored);
-
-        var safe = try Roaring64Bitmap.deserializeSafe(allocator, bytes);
-        defer safe.deinit();
-        try expectBitmapEqual(&bm, &safe);
+        try test_support.expectSerializationRoundTrip(allocator, &bm);
     }
 }
 
 test "Roaring64 deserializeSafe malformed frame smoke" {
     const allocator = std.testing.allocator;
 
-    try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, ""));
-
     var bm = try Roaring64Bitmap.init(allocator);
     defer bm.deinit();
     _ = try bm.add(1);
     _ = try bm.add((@as(u64, 2) << 32) | 3);
 
-    const bytes = try bm.serialize(allocator);
-    defer allocator.free(bytes);
-    for (0..bytes.len) |len| {
-        try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, bytes[0..len]));
-    }
-
-    var overrun_count: [8]u8 = undefined;
-    {
-        var writer = std.Io.Writer.fixed(&overrun_count);
-        try writer.writeInt(u64, @as(u64, std.math.maxInt(u32)) + 1, .little);
-    }
-    try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, &overrun_count));
-
-    var sub = try RoaringBitmap.init(allocator);
-    defer sub.deinit();
-    _ = try sub.add(1);
-    const sub_bytes = try sub.serialize(allocator);
-    defer allocator.free(sub_bytes);
-
-    const non_ascending = try buildFrame(allocator, &[_]u32{ 2, 1 }, sub_bytes);
-    defer allocator.free(non_ascending);
-    try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, non_ascending));
-
-    var empty_sub = try RoaringBitmap.init(allocator);
-    defer empty_sub.deinit();
-    const empty_bytes = try empty_sub.serialize(allocator);
-    defer allocator.free(empty_bytes);
-
-    const empty_bucket = try buildFrame(allocator, &[_]u32{0}, empty_bytes);
-    defer allocator.free(empty_bucket);
-    try std.testing.expectError(error.InvalidFormat, Roaring64Bitmap.deserializeSafe(allocator, empty_bucket));
-}
-
-fn buildFrame(allocator: std.mem.Allocator, keys: []const u32, sub_bitmap: []const u8) ![]u8 {
-    var size = try std.math.add(usize, 8, try std.math.mul(usize, keys.len, 4));
-    size = try std.math.add(usize, size, try std.math.mul(usize, keys.len, sub_bitmap.len));
-
-    const bytes = try allocator.alloc(u8, size);
-    errdefer allocator.free(bytes);
-
-    var writer = std.Io.Writer.fixed(bytes);
-    try writer.writeInt(u64, keys.len, .little);
-    for (keys) |key| {
-        try writer.writeInt(u32, key, .little);
-        try writer.writeAll(sub_bitmap);
-    }
-    return bytes;
+    try test_support.expectMalformedFramesRejected(allocator, &bm);
 }
