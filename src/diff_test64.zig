@@ -3,6 +3,10 @@ const rawr = @import("rawr");
 const c = @import("c");
 
 const Roaring64Bitmap = rawr.Roaring64Bitmap;
+const gen64 = rawr.roaring64_test_gen;
+const RANDOM_SEED: u64 = 0x64d1_ff64_0001;
+const RANDOM_ITERS: usize = 1000;
+const RANDOM_MAX_BUCKETS: usize = 6;
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -13,6 +17,7 @@ pub fn main() !void {
         try runSetOperationMatrix(allocator);
         try runPositionalAgreement(allocator);
         try runRangeAgreement(allocator);
+        try runRandomizedLoop(allocator);
     }
 
     if (gpa.deinit() != .ok) return error.MemoryLeak;
@@ -173,6 +178,136 @@ fn runRangeAgreement(allocator: std.mem.Allocator) !void {
 
     try applyRemoveRange(allocator, &rbm, cr, (@as(u64, 4) << 32) | 0xffff_ffff, (@as(u64, 5) << 32));
     try assertRangeAgreement(&rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
+}
+
+fn runRandomizedLoop(allocator: std.mem.Allocator) !void {
+    std.debug.print("difftest64 random seed=0x{x}, iters={d}, max_buckets={d}\n", .{
+        RANDOM_SEED,
+        RANDOM_ITERS,
+        RANDOM_MAX_BUCKETS,
+    });
+
+    var prng = std.Random.DefaultPrng.init(RANDOM_SEED);
+    const rng = prng.random();
+
+    for (0..RANDOM_ITERS) |i| {
+        runRandomIteration(allocator, rng, i) catch |err| {
+            std.debug.print("FAIL: difftest64 random iteration {d}, seed=0x{x}: {s}\n", .{
+                i,
+                RANDOM_SEED,
+                @errorName(err),
+            });
+            return err;
+        };
+    }
+}
+
+fn runRandomIteration(allocator: std.mem.Allocator, rng: std.Random, iteration: usize) !void {
+    var gen_a = try gen64.randomMixed(allocator, rng, RANDOM_MAX_BUCKETS);
+    defer gen_a.deinit();
+    var gen_b = try gen64.randomMixed(allocator, rng, RANDOM_MAX_BUCKETS);
+    defer gen_b.deinit();
+    var gen_c = try gen64.randomMixed(allocator, rng, RANDOM_MAX_BUCKETS);
+    defer gen_c.deinit();
+
+    var a = try gen64.toBitmap(Roaring64Bitmap, allocator, &gen_a);
+    defer a.deinit();
+    var b = try gen64.toBitmap(Roaring64Bitmap, allocator, &gen_b);
+    defer b.deinit();
+    var third = try gen64.toBitmap(Roaring64Bitmap, allocator, &gen_c);
+    defer third.deinit();
+
+    const cr_a = try buildCRoaring(gen_a.values);
+    defer c.roaring64_bitmap_free(cr_a);
+    const cr_b = try buildCRoaring(gen_b.values);
+    defer c.roaring64_bitmap_free(cr_b);
+    const cr_c = try buildCRoaring(gen_c.values);
+    defer c.roaring64_bitmap_free(cr_c);
+
+    const probes = randomProbes(iteration);
+    try assertAgreement(allocator, &a, cr_a, &probes);
+    try assertAgreement(allocator, &b, cr_b, &probes);
+    try assertAgreement(allocator, &third, cr_c, &probes);
+    try assertPositionalAgreement(&a, cr_a, &probes);
+
+    try assertCardinalityOpsAgree(&a, &b, cr_a, cr_b);
+    try assertPredicatesAgree(&a, &b, cr_a, cr_b);
+
+    const ops = [_]BinarySetOp{ .bitwise_and, .bitwise_or, .bitwise_xor, .bitwise_difference };
+    for (ops) |op| {
+        try assertOutOfPlaceSetOpAgree(allocator, op, &a, &b, cr_a, cr_b);
+        try assertInPlaceSetOpAgree(allocator, op, &a, &b, cr_a, cr_b);
+    }
+
+    try assertTripleCompositionAgree(allocator, &a, &b, &third, cr_a, cr_b, cr_c);
+    try assertRandomRangeMutationAgree(allocator, iteration, &a, cr_a);
+}
+
+fn assertTripleCompositionAgree(
+    allocator: std.mem.Allocator,
+    a: *const Roaring64Bitmap,
+    b: *const Roaring64Bitmap,
+    third: *const Roaring64Bitmap,
+    cr_a: *const c.roaring64_bitmap_t,
+    cr_b: *const c.roaring64_bitmap_t,
+    cr_c: *const c.roaring64_bitmap_t,
+) !void {
+    var b_or_c = try b.bitwiseOr(allocator, third);
+    defer b_or_c.deinit();
+    var rawr_result = try a.bitwiseAnd(allocator, &b_or_c);
+    defer rawr_result.deinit();
+
+    const cr_b_or_c = c.roaring64_bitmap_or(cr_b, cr_c) orelse return error.CRoaringAllocFailed;
+    defer c.roaring64_bitmap_free(cr_b_or_c);
+    const cr_result = c.roaring64_bitmap_and(cr_a, cr_b_or_c) orelse return error.CRoaringAllocFailed;
+    defer c.roaring64_bitmap_free(cr_result);
+
+    const no_probes = [_]u64{};
+    try assertAgreement(allocator, &rawr_result, cr_result, &no_probes);
+}
+
+fn assertRandomRangeMutationAgree(
+    allocator: std.mem.Allocator,
+    iteration: usize,
+    source: *const Roaring64Bitmap,
+    source_cr: *const c.roaring64_bitmap_t,
+) !void {
+    var rbm = try source.clone(allocator);
+    defer rbm.deinit();
+
+    const cr = c.roaring64_bitmap_copy(source_cr) orelse return error.CRoaringAllocFailed;
+    defer c.roaring64_bitmap_free(cr);
+
+    const range = randomRange(iteration);
+    try applyAddRange(allocator, &rbm, cr, range.lo, range.hi);
+    try assertRangeAgreement(&rbm, cr, range.lo, range.hi);
+
+    try applyRemoveRange(allocator, &rbm, cr, range.lo, range.hi);
+    try assertRangeAgreement(&rbm, cr, range.lo, range.hi);
+}
+
+fn randomRange(iteration: usize) gen64.Range {
+    return switch (iteration % 6) {
+        0 => .{ .lo = (@as(u64, 17) << 32) | 100, .hi = (@as(u64, 17) << 32) | 160 },
+        1 => .{ .lo = (@as(u64, 18) << 32) | 0x0000_fffc, .hi = (@as(u64, 18) << 32) | 0x0001_0004 },
+        2 => .{ .lo = (@as(u64, 2) << 32) | 0xffff_fffc, .hi = (@as(u64, 3) << 32) | 4 },
+        3 => .{ .lo = std.math.maxInt(u64), .hi = std.math.maxInt(u64) },
+        4 => .{ .lo = 0, .hi = 1 },
+        else => .{ .lo = (@as(u64, 0xffff_fffe) << 32) | 0xffff_fffe, .hi = (@as(u64, 0xffff_ffff) << 32) | 1 },
+    };
+}
+
+fn randomProbes(iteration: usize) [8]u64 {
+    return .{
+        0,
+        1,
+        std.math.maxInt(u32),
+        @as(u64, 1) << 32,
+        (@as(u64, 17) << 32) | @as(u64, @intCast(iteration & 0xffff)),
+        (@as(u64, 0x8000_0000) << 32) | 9,
+        (@as(u64, 0xffff_fffe) << 32) | 0xffff_ffff,
+        std.math.maxInt(u64),
+    };
 }
 
 fn assertCardinalityOpsAgree(
@@ -359,6 +494,8 @@ fn assertAgreement(
         if (iter.next() != expected) return error.IteratorMismatch;
     }
     if (iter.next() != null) return error.IteratorExtraValue;
+
+    try assertSerializationAgreement(allocator, rbm, cr);
 }
 
 fn roaring64FromValues(allocator: std.mem.Allocator, values: []const u64) !Roaring64Bitmap {
@@ -372,10 +509,66 @@ fn buildCRoaring(values: []const u64) !*c.roaring64_bitmap_t {
     const cr = c.roaring64_bitmap_create() orelse return error.CRoaringAllocFailed;
     errdefer c.roaring64_bitmap_free(cr);
 
-    for (values) |value| {
-        c.roaring64_bitmap_add(cr, value);
+    if (values.len != 0) {
+        c.roaring64_bitmap_add_many(cr, values.len, @ptrCast(values.ptr));
     }
     return cr;
+}
+
+fn assertSerializationAgreement(
+    allocator: std.mem.Allocator,
+    rbm: *const Roaring64Bitmap,
+    cr: *const c.roaring64_bitmap_t,
+) !void {
+    const rawr_bytes = try rbm.serialize(allocator);
+    defer allocator.free(rawr_bytes);
+    if (try rbm.serializedSizeInBytes() != rawr_bytes.len) return error.SerializedSizeMismatch;
+
+    var rawr_from_rawr = try Roaring64Bitmap.deserialize(allocator, rawr_bytes);
+    defer rawr_from_rawr.deinit();
+    if (!rawr_from_rawr.equals(rbm)) return error.RawrRoundTripMismatch;
+
+    const cr_from_rawr = c.roaring64_bitmap_portable_deserialize_safe(@ptrCast(rawr_bytes.ptr), rawr_bytes.len) orelse return error.CRoaringDeserializeFailed;
+    defer c.roaring64_bitmap_free(cr_from_rawr);
+    if (!c.roaring64_bitmap_equals(cr_from_rawr, cr)) return error.CRoaringRoundTripMismatch;
+
+    var comparable_owned: ?*c.roaring64_bitmap_t = null;
+    const rawr_has_runs = rawrHasRunContainers(rbm);
+    const comparable_cr: *const c.roaring64_bitmap_t = if (rawr_has_runs) blk: {
+        const copy = c.roaring64_bitmap_copy(cr) orelse return error.CRoaringAllocFailed;
+        _ = c.roaring64_bitmap_run_optimize(copy);
+        comparable_owned = copy;
+        break :blk copy;
+    } else cr;
+    defer if (comparable_owned) |owned| c.roaring64_bitmap_free(owned);
+
+    const cr_size = c.roaring64_bitmap_portable_size_in_bytes(comparable_cr);
+    const cr_bytes = try allocator.alloc(u8, cr_size);
+    defer allocator.free(cr_bytes);
+    const written = c.roaring64_bitmap_portable_serialize(comparable_cr, @ptrCast(cr_bytes.ptr));
+    if (written != cr_size) return error.CRoaringSerializeSizeMismatch;
+
+    var rawr_from_cr = try Roaring64Bitmap.deserialize(allocator, cr_bytes);
+    defer rawr_from_cr.deinit();
+    if (!rawr_from_cr.equals(rbm)) return error.RawrRoundTripMismatch;
+
+    if (cr_size != rawr_bytes.len) {
+        if (rawr_has_runs) return;
+        return error.SerializedSizeMismatch;
+    }
+    if (!std.mem.eql(u8, rawr_bytes, cr_bytes)) {
+        if (rawr_has_runs) return;
+        return error.SerializedBytesMismatch;
+    }
+}
+
+fn rawrHasRunContainers(rbm: *const Roaring64Bitmap) bool {
+    for (rbm.buckets[0..rbm.size]) |*bucket| {
+        for (bucket.bm.containers[0..bucket.bm.size]) |container| {
+            if (container.getType() == .run) return true;
+        }
+    }
+    return false;
 }
 
 fn fillMatrixProfile(profile: MatrixProfile, out: []u64) []const u64 {

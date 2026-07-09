@@ -28,6 +28,7 @@ pub const TaggedPtr = @import("container.zig").TaggedPtr;
 pub const container_ops = @import("container_ops.zig");
 pub const optimize = @import("optimize.zig");
 pub const test_gen = @import("test_gen.zig");
+pub const roaring64_test_gen = @import("roaring64_test_gen.zig");
 
 test {
     _ = @import("array_container.zig");
@@ -43,4 +44,6 @@ test {
     _ = @import("optimize.zig");
     _ = test_gen;
     _ = @import("property_tests.zig");
+    _ = roaring64_test_gen;
+    _ = @import("roaring64_property_tests.zig");
 }
