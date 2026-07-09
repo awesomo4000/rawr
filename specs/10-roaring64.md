@@ -139,19 +139,52 @@ wrapper header — **no change to the vendored amalgam.**
 - Methods mirror the 32-bit names exactly (`add`, `contains`, `bitwiseOr`,
   `rank`, `select`, `serialize`, …) so the API reads the same at both widths.
 
-## Scope — v1 vs deferred
+## Scope — v1 (done) and Phase 2 (full CRoaring parity)
 
-**v1 (this spec, chunks 10-01 … 10-05):** core type + lifecycle; full set-op
-suite + cardinality variants + subset/intersects; rank/select/getIndex;
+**v1 (chunks 10-00 … 10-05, + 10-06 test-support): DONE.** Core type + lifecycle;
+full set-op suite + cardinality variants + subset/intersects; rank/select/getIndex;
 addRange/removeRange; CRoaring portable-64 serialize/deserialize; property +
-differential tests.
+differential tests; consolidated 64-bit test support. Everything implemented is
+validated against CRoaring `roaring64`.
 
-**Deferred to a later parity pass (not in 10):** `flip` (cross-key range flip is
-fiddly), `lazyOr`/`lazyXor`/`repairAfterLazy`, `rankMany` batch, `jaccardIndex`,
-`runOptimize` exposure (sub-bitmaps can still be run-optimized internally),
-`OwnedBitmap`/FBA variants, frozen 64-bit. Benchmarks (`bench64`).
+**Phase 2 — CRoaring parity completion (chunks 10-07 …).** Decision: finish the
+full `roaring64_bitmap_*` surface, one feature per sub-spec, *then* do the
+internals prettification. Measured against the vendored `roaring64_bitmap_*` API,
+the remaining gaps are below. **Lazy ops are NOT a gap** — CRoaring's `roaring64`
+has no `lazy_or`/`lazy_xor`/`repair` at all, so rawr's `Roaring64Bitmap` needs
+none. Likewise `rankMany` is a rawr-only 32-bit batch helper with no `roaring64`
+oracle, so it's excluded from parity.
+
+| # | feature | CRoaring | effort |
+|---|---|---|---|
+| 10-07 | **flip** (`flip`, `flipInPlace`; inclusive, cross-key) | `flip*`/`flip_closed*` | M — the substantial one |
+| 10-08 | **jaccardIndex** | `jaccard_index` | S |
+| 10-09 | **runOptimize + shrinkToFit** (representation compaction) | `run_optimize`, `shrink_to_fit` | S |
+| 10-10 | **clear** (reset, keep capacity) | `clear` | XS |
+| 10-11 | **intersectsRange** | `intersect_with_range` | S |
+| 10-12 | **fromRange** (range constructor) | `from_range` | S |
+| 10-13 | **array constructors** (`fromSortedSlice`/`fromSlice`) | `of_ptr`, `from_array` | S |
+| 10-14 | **32↔64 conversion** (build from / extract to `RoaringBitmap`) | `move_from_roaring32` | M |
+| 10-15 | **bulk ops with context** (locality-cursor add/remove/contains) | `add_bulk`/`remove_bulk`/`contains_bulk` | M |
+| 10-16 | **validate** (structural invariants) | `internal_validate` | M |
+| 10-17 | **statistics** | `statistics` | S |
+| 10-18 | **frozen-64** (zero-copy read-only view) | `frozen_serialize`/`_size_in_bytes`/`_view` | L — mirrors `FrozenBitmap` |
+
+**Deliberately excluded** (not parity, or rawr-internal only): lazy ops (absent in
+CRoaring `roaring64`), `rankMany` batch (no oracle), `OwnedBitmap`/FBA 64-bit
+variants (rawr convenience, add later if wanted). Benchmarks (`bench64`) and the
+internals refactor (key-span helper, merge-skeleton dedup) come **after** parity —
+prettification last, per the phase decision.
+
+> Grouping note for the chunk breakdown: same-feature CRoaring functions are folded
+> into one sub-spec (all `flip*` variants → 10-07; `run_optimize`+`shrink_to_fit`
+> compaction → 10-09; `of_ptr`+`from_array` → 10-13; the three `*_bulk` → 10-15).
+> Open to splitting or trimming niche ones (statistics, bulk-with-context) on
+> review.
 
 ## Chunk plan
+
+**v1 (done):**
 
 - **10-00** — harness scaffold: **empty** `Roaring64Bitmap` type
   (`init`/`deinit`/`isEmpty`), the three build steps (`test64`/`validate64`/
@@ -171,9 +204,21 @@ fiddly), `lazyOr`/`lazyXor`/`repairAfterLazy`, `rankMany` batch, `jaccardIndex`,
   `deserialize`/`deserializeSafe` + the `validate64` round-trip path.
 - **10-05** — property tests + randomized differential loop against
   `roaring64_*`, mirroring `src/property_tests.zig` / `src/diff_test.zig`.
+- **10-06** — test-support consolidation (`roaring64_test_support.zig` +
+  `roaring64_oracle.zig`); no behavior change.
+
+**Phase 2 — parity completion (10-07 … 10-18):** one feature per sub-spec, per the
+table in "Scope" above. Each sub-spec stands alone: CRoaring mapping + semantics +
+delegation approach + wrapper decls + `difftest64`/`validate64` agreement + tests.
+Sub-specs are drafted after Morty signs off on this breakdown.
 
 ## Acceptance (umbrella)
 
-All five chunks land; `zig build test test64 validate64 difftest64` is green;
-docs state the CRoaring-only serialization interop scope; the deferred list above
-is recorded for a future parity pass. No regression to the 32-bit suite.
+**v1:** chunks 10-00 … 10-06 landed; `zig build test test64 validate64 difftest64`
+green; docs state the CRoaring-only serialization interop scope. No 32-bit
+regression. ✓
+
+**Phase 2:** every gap in the parity table implemented and validated against its
+CRoaring `roaring64` oracle; the only remaining `roaring64_bitmap_*` functions
+without a rawr equivalent are the deliberately-excluded ones (lazy, rankMany, owned
+variants). Then internals refactor + `bench64` follow.
