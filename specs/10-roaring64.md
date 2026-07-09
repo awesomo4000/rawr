@@ -182,6 +182,37 @@ prettification last, per the phase decision.
 > Open to splitting or trimming niche ones (statistics, bulk-with-context) on
 > review.
 
+### Semantic notes to carry into the sub-specs (from review)
+
+CRoaring half-open/return quirks that each sub-spec must pin down explicitly —
+several diverge from rawr's inclusive-range house style:
+
+- **10-07 flip** — expose rawr's **inclusive** `flip(lo, hi)` / `flipInPlace`
+  (house style), but oracle carefully against *both* CRoaring variants: `flip` is
+  **half-open** `[min, max)`, `flip_closed` is **inclusive**. Difftest the inclusive
+  rawr op against `flip_closed`.
+- **10-09 runOptimize** — return semantics differ from intuition: CRoaring's
+  `run_optimize` returns **whether the result contains ≥1 run container**, *not*
+  whether anything changed. Decide rawr's return (match CRoaring's "has-run" bool,
+  or return "changed?") and state it; don't assume "changed".
+- **10-11 intersectsRange** — maps to CRoaring's **half-open**
+  `intersect_with_range(min, max)`. rawr's `containsRange` is already inclusive and
+  exists; keep naming/semantics explicit so the two range predicates aren't
+  conflated. Oracle the inclusive rawr call with the `+1`/max-value handling used
+  for `containsRange` in 10-03.
+- **10-12 fromRange** — CRoaring is **`from_range(min, max, step)`**: values in
+  **half-open** `[min, max)` at `min + k*step`. The sub-spec **must include the
+  `step` parameter** — it's not a plain contiguous range.
+- **10-15 bulk** — CRoaring's bulk context is **invalidated by any non-bulk
+  mutation**. rawr needs either a rawr-owned context type with the same documented
+  invalidation contract, or a safer rawr behavior (e.g. self-validating / no
+  dangling cursor). State the chosen contract explicitly.
+- **10-18 frozen-64** — if it gets hairy, promote to its **own mini-phase**.
+  CRoaring's frozen format is memory-layout-specific, whereas rawr's existing
+  `FrozenBitmap` is its own read-only view — do **not** assume byte-compatibility
+  between them; decide up front whether 64-bit frozen targets CRoaring's frozen
+  layout (interop) or rawr's own view shape (rawr-only), and document which.
+
 ## Chunk plan
 
 **v1 (done):**
