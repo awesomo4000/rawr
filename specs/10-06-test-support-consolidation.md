@@ -57,7 +57,10 @@ Moves here:
 - `buildFrame(allocator, keys, sub_bitmap) ![]u8` (the raw 64-bit frame builder).
 - `fromValues(comptime Bitmap, allocator, values)` (the `roaring64FromValues`
   helper, if not already covered by `roaring64_test_gen`).
-- `expectSerializationRoundTrip(bm)` (rawr→bytes→rawr plain+safe, size check).
+- `expectSerializationRoundTrip(allocator, bm)` (rawr→bytes→rawr plain+safe, size
+  check). **Takes an explicit `allocator`** — a shared helper called from the
+  harness executables must not depend on `std.testing.allocator` (inline/property
+  tests pass `std.testing.allocator`; harnesses pass their GPA).
 - `expectMalformedFramesRejected(allocator, bm)` — the malformed-frame battery
   (empty input, truncation sweep, count > maxInt(u32), non-ascending keys, empty
   sub-bitmap) as one callable, so `roaring64.zig` and `roaring64_property_tests`
@@ -88,25 +91,44 @@ Moves here:
    the public `roaring.zig` surface — it's harness-internal and `c`-dependent).
 2. Rewrite `validate_roaring64.zig` and `diff_test64.zig` to import both modules;
    delete their local copies of every helper listed above.
-3. Migrate `validate_roaring64.zig` onto `roaring64_test_gen` (delete its private
-   `fillGeneratedCorpus`; use `build`/`randomMixed`/edge profiles).
+3. Migrate **both** harnesses off their private `fillGeneratedCorpus` (each of
+   `validate_roaring64.zig` and `diff_test64.zig` has one — remove/replace both).
+   **Do not swap a deterministic corpus for a loose random one.** `validate64`
+   currently runs a fixed corpus with guaranteed boundary coverage; preserve that
+   by driving `roaring64_test_gen.build` with explicit `BucketProfile`s that keep
+   the edge keys (`0`, `u32` max, `2^32` straddle, `u64` max) — not `randomMixed`
+   unless the seed is fixed and logged the way `diff_test64`'s randomized loop
+   already does. **Keep** `fillSparseProfile` / `fillMixedProfile` if they remain
+   useful as deterministic matrix fixtures — the goal is removing the *duplicated*
+   `fillGeneratedCorpus`, not deleting every local fixture.
 4. Rewrite `roaring64.zig`'s serialization/malformed inline tests and
    `roaring64_property_tests.zig`'s frame/malformed tests to call the shared
    `roaring64_test_support` helpers; delete the open-coded duplicates.
-5. Confirm the wiring: `roaring64_oracle.zig` needs the same
-   `addTranslatedCImport` + `addBenchmarkPlatformShim` treatment its importers
-   already have — but since it's imported *by* the harness modules (not a separate
-   executable), it inherits their `c` import; verify it resolves `@import("c")`
-   through the importing module.
+5. If `roaring64_test_support.zig` carries its own inline tests (e.g. a
+   round-trip or malformed-battery self-test), add it to `roaring64_tests.zig`'s
+   aggregate `test {}` block so `test64` runs them — same as `roaring64_test_gen`.
+   The `c`-dependent `roaring64_oracle.zig` stays **out** of both `roaring64_tests`
+   and `roaring.zig` (it can't compile without a wired `c`); it's only reachable
+   through the harness executables.
+6. Confirm the wiring: `roaring64_oracle.zig` needs no separate
+   `addTranslatedCImport` / `addBenchmarkPlatformShim` of its own — since it's
+   imported *by* the harness root modules (not a standalone executable), it
+   inherits their `c` import. Verify it resolves `@import("c")` through the
+   importing module (Morty's note: this works as long as only the harness roots
+   import it).
 
 ## Acceptance
 
-- No `Roaring64Bitmap` source change; only test files + two new support modules.
+- **No production logic changes to `Roaring64Bitmap`.** Test-only edits inside
+  `src/roaring64.zig` (rewriting its inline tests to call shared helpers) are
+  expected and allowed; the non-test code is untouched.
 - `rawrHasRunContainers`/`roaring64HasRunContainers` exists in **one** place for
   the 64-bit code (generic `hasRunContainers`); the serialization cross-check and
   the oracle-comparison family each exist once.
-- `validate_roaring64` uses `roaring64_test_gen`; no private `fillGeneratedCorpus`
-  remains in the 64-bit harnesses.
+- **Neither** `validate_roaring64` **nor** `diff_test64` retains a private
+  `fillGeneratedCorpus`; both source their corpora from `roaring64_test_gen`
+  (deterministic profiles, or seeded/logged random). `fillSparseProfile` /
+  `fillMixedProfile` may remain as deterministic matrix fixtures.
 - The malformed-frame battery and frame builder each exist once, called from both
   the inline and property tests.
 - `zig build test test64 validate64 difftest64` all green, unchanged behavior —
