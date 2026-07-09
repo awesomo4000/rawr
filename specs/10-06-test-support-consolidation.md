@@ -103,7 +103,11 @@ Moves here:
    `fillGeneratedCorpus`, not deleting every local fixture.
 4. Rewrite `roaring64.zig`'s serialization/malformed inline tests and
    `roaring64_property_tests.zig`'s frame/malformed tests to call the shared
-   `roaring64_test_support` helpers; delete the open-coded duplicates.
+   `roaring64_test_support` helpers; delete the open-coded duplicates. **Only the
+   duplicated helpers move** — leave non-duplicated, per-test local fixtures (e.g.
+   `expectRoaring64Values` and deterministic per-test setup) exactly where they
+   are. The goal is de-duplication, not relocating every test helper into the
+   shared module.
 5. If `roaring64_test_support.zig` carries its own inline tests (e.g. a
    round-trip or malformed-battery self-test), add it to `roaring64_tests.zig`'s
    aggregate `test {}` block so `test64` runs them — same as `roaring64_test_gen`.
