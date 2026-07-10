@@ -20,12 +20,16 @@ directly comparable. At minimum:
 - `n_array_containers` / `n_run_containers` / `n_bitset_containers: u64`
 - `n_values_array_containers` / `_run_` / `_bitset_: u64` (cardinality by type)
 - `n_bytes_array_containers` / `_run_` / `_bitset_: u64` (bytes by type)
-- `n_buckets: u64` (64-bit-specific: number of high-key buckets)
+- `n_buckets: u64` — **rawr-only** (number of high-key buckets). CRoaring's
+  `roaring64_statistics_t` has **no** such field; include it for rawr introspection
+  but **do not oracle it**.
 - `cardinality: u64` (total)
 - `min_value` / `max_value: u64`
 
 Confirm the exact `roaring64_statistics_t` field set against `vendor/roaring.h`
-and match names/units where practical so `difftest64` can compare field-by-field.
+and match names/units where practical so `difftest64` can compare the shared
+fields field-by-field. `n_buckets` has no CRoaring counterpart and is excluded
+from the oracle comparison.
 
 ## Implementation
 

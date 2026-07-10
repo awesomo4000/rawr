@@ -13,10 +13,25 @@ from an arithmetic sequence over a range.
 adds `min, min+step, min+2*step, …` while `< max` (half-open). This is **not**
 the same as rawr's inclusive contiguous `addRange` — do not conflate them.
 
+## Behavior for the degenerate cases (pin before implementing)
+
+CRoaring **returns `NULL`** for both `step == 0` and `max <= min`. rawr has no
+null-bitmap concept, so choose and document the rawr behavior:
+
+- **`max <= min`** → return an **empty** `Roaring64Bitmap` (natural: the half-open
+  range is empty). Recommended.
+- **`step == 0`** → return an **empty** bitmap as well (recommended, keeps the
+  constructor total and allocation-safe), *or* return `error.InvalidStep` if we'd
+  rather make it loud. Pick one and state it in the doc comment.
+
+**Oracle normalization:** the difftest must map CRoaring's `NULL` return to
+"empty bitmap" before comparing — i.e. `from_range(...) == NULL` is treated as
+agreement with rawr's empty result. Don't dereference the `NULL`.
+
 ## Implementation
 
-- Validate: `step >= 1` (reject/return-empty on `step == 0`); `min >= max` →
-  empty bitmap.
+- Degenerate cases handled per the decision above (`max <= min` → empty;
+  `step == 0` → empty or `error.InvalidStep`).
 - **`step == 1` fast path:** contiguous `[min, max)` → build via the inclusive
   `addRange(min, max - 1)` machinery (10-03) — but guard `max == 0` /
   `max - 1` underflow, and handle `max == 0` (empty). This reuses the efficient

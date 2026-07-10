@@ -36,16 +36,19 @@ cache the `hi` + index and re-validate against `size`/version.
 
 ## Wrapper decls
 
+Exact vendored layout (from `vendor/roaring.h`):
+
 ```c
-typedef struct roaring64_bulk_context_s { /* opaque to us */ uint8_t high_bytes[8]; void *leaf; } roaring64_bulk_context_t;
+typedef struct roaring64_bulk_context_s { uint8_t high_bytes[6]; roaring64_leaf_t *leaf; } roaring64_bulk_context_t;
 void roaring64_bitmap_add_bulk(roaring64_bitmap_t *r, roaring64_bulk_context_t *ctx, uint64_t val);
 bool roaring64_bitmap_contains_bulk(const roaring64_bitmap_t *r, roaring64_bulk_context_t *ctx, uint64_t val);
 void roaring64_bitmap_remove_bulk(roaring64_bitmap_t *r, roaring64_bulk_context_t *ctx, uint64_t val);
 ```
 
-> Confirm the exact `roaring64_bulk_context_t` layout against `vendor/roaring.h`
-> when adding the wrapper decl; the oracle only needs a zero-initialized context
-> passed by pointer.
+> The oracle side only needs a zero-initialized `roaring64_bulk_context_t` passed
+> by pointer; `roaring64_leaf_t` stays opaque to us. This is CRoaring's own context
+> layout — rawr's `BulkContext` is a **separate, rawr-owned** type (see above), not
+> a mirror of this struct.
 
 ## Tests / oracle
 

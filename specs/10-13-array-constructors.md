@@ -7,12 +7,21 @@ from a `u64` array, mirroring rawr's 32-bit `fromSorted`/`fromSlice`.
 
 | rawr 64-bit (new) | CRoaring | Semantics |
 |---|---|---|
-| `fromSortedSlice(allocator, values) !Self` | `roaring64_bitmap_of_ptr` (sorted input) | build from **sorted, deduped** `[]const u64` |
-| `fromSlice(allocator, values) !Self` | `roaring64_bitmap_of_ptr` / `from_array` | build from arbitrary `[]u64` (may sort/dedupe in place) |
+| `fromSortedSlice(allocator, values) !Self` | `roaring64_bitmap_of_ptr` (sorted input) | build from **ascending** `[]const u64`; **duplicates tolerated** (deduped internally) |
+| `fromSlice(allocator, values) !Self` | `roaring64_bitmap_of_ptr` / `from_array` | build from arbitrary `[]u64`; sorts + dedupes (may reorder in place) |
 
 Match the 32-bit naming (`fromSorted`/`fromSlice`) so the API reads the same at
 both widths. CRoaring's `of_ptr(n, vals)` / `from_array` take an arbitrary array;
 the "sorted" variant is a rawr optimization.
+
+**Dedup contract (explicit):** `fromSortedSlice` **requires ascending order** but
+does **not** require the caller to pre-dedupe — equal adjacent values are
+collapsed by the builder (a repeated value adds the same bit, which is idempotent
+within a key-run, so dedup falls out naturally when handing a run's low-32 values
+to `RoaringBitmap.fromSorted`; if `fromSorted` itself rejects duplicates, dedupe
+the run first). `fromSortedSlice` on **unsorted** input is a caller contract
+violation — assert ascending in safe builds, don't silently mis-build.
+`fromSlice` makes no ordering assumption: it sorts and dedupes.
 
 ## Implementation
 
