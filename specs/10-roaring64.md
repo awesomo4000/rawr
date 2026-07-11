@@ -241,7 +241,15 @@ several diverge from rawr's inclusive-range house style:
 **Phase 2 — parity completion (10-07 … 10-18):** one feature per sub-spec, per the
 table in "Scope" above. Each sub-spec stands alone: CRoaring mapping + semantics +
 delegation approach + wrapper decls + `difftest64`/`validate64` agreement + tests.
-Sub-specs are drafted after Morty signs off on this breakdown.
+
+**Phase 3 — prettification + perf (10-19 … 10-21), after parity:**
+
+- **10-19** — `hasRunContainers` method dedup (5 open-coded copies → a method on
+  `RoaringBitmap` + `Roaring64Bitmap`). Spans 32↔64; zero behavior change.
+- **10-20** — Roaring64 internals refactor: key-span range-bounds helper (6 call
+  sites → 1) + unify the two identical merge-walk drivers. Zero behavior change.
+- **10-21** — benchmarks: `bench64` (standalone) + `bench-compare64` (vs CRoaring
+  `roaring64`), mirroring the 32-bit bench harness with the platform shim.
 
 ## Acceptance (umbrella)
 
