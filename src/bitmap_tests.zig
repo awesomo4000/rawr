@@ -161,6 +161,39 @@ test "many values triggers growth" {
     try std.testing.expect(bm.capacity >= 10);
 }
 
+test "shrinkToFit trims bitmap and array container capacity" {
+    const allocator = std.testing.allocator;
+    var bm = try RoaringBitmap.init(allocator);
+    defer bm.deinit();
+
+    for (0..9) |i| {
+        _ = try bm.add(@intCast(i * 2));
+    }
+    for (5..9) |i| {
+        try std.testing.expect(try bm.remove(@intCast(i * 2)));
+    }
+    for (1..10) |chunk| {
+        _ = try bm.add(@as(u32, @intCast(chunk)) << 16);
+    }
+
+    try std.testing.expect(bm.capacity > bm.size);
+    const ac_before = bm.containers[0].getArray();
+    try std.testing.expect(ac_before.capacity > ac_before.cardinality);
+    const old_array_cap = ac_before.capacity;
+
+    const freed = try bm.shrinkToFit();
+    try std.testing.expect(freed > 0);
+    try std.testing.expectEqual(bm.size, bm.capacity);
+
+    const ac_after = bm.containers[0].getArray();
+    try std.testing.expect(ac_after.capacity < old_array_cap);
+    try std.testing.expect(ac_after.capacity >= ac_after.cardinality);
+    try std.testing.expectEqual(@as(u64, 14), bm.cardinality());
+    try std.testing.expect(bm.contains(8));
+    try std.testing.expect(bm.contains(9 << 16));
+    try std.testing.expectEqual(@as(usize, 0), try bm.shrinkToFit());
+}
+
 // ============================================================================
 // Set Operation Tests
 // ============================================================================

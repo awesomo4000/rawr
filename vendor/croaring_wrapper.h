@@ -110,6 +110,7 @@ uint64_t roaring64_bitmap_andnot_cardinality(const roaring64_bitmap_t *r1, const
 bool roaring64_bitmap_intersect(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
 bool roaring64_bitmap_is_subset(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
 bool roaring64_bitmap_is_strict_subset(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
+double roaring64_bitmap_jaccard_index(const roaring64_bitmap_t *r1, const roaring64_bitmap_t *r2);
 uint64_t roaring64_bitmap_rank(const roaring64_bitmap_t *r, uint64_t x);
 bool roaring64_bitmap_select(const roaring64_bitmap_t *r, uint64_t rank, uint64_t *element);
 bool roaring64_bitmap_get_index(const roaring64_bitmap_t *r, uint64_t x, uint64_t *out_index);
@@ -117,7 +118,12 @@ void roaring64_bitmap_add_range_closed(roaring64_bitmap_t *r, uint64_t min, uint
 void roaring64_bitmap_remove_range_closed(roaring64_bitmap_t *r, uint64_t min, uint64_t max);
 uint64_t roaring64_bitmap_range_closed_cardinality(const roaring64_bitmap_t *r, uint64_t min, uint64_t max);
 bool roaring64_bitmap_contains_range(const roaring64_bitmap_t *r, uint64_t min, uint64_t max);
+bool roaring64_bitmap_intersect_with_range(const roaring64_bitmap_t *r, uint64_t min, uint64_t max);
+roaring64_bitmap_t *roaring64_bitmap_flip_closed(const roaring64_bitmap_t *r, uint64_t min, uint64_t max);
+void roaring64_bitmap_flip_closed_inplace(roaring64_bitmap_t *r, uint64_t min, uint64_t max);
 bool roaring64_bitmap_run_optimize(roaring64_bitmap_t *r);
+size_t roaring64_bitmap_shrink_to_fit(roaring64_bitmap_t *r);
+void roaring64_bitmap_clear(roaring64_bitmap_t *r);
 size_t roaring64_bitmap_portable_size_in_bytes(const roaring64_bitmap_t *r);
 size_t roaring64_bitmap_portable_serialize(const roaring64_bitmap_t *r, char *buf);
 roaring64_bitmap_t *roaring64_bitmap_portable_deserialize_safe(const char *buf, size_t maxbytes);

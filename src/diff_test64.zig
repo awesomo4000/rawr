@@ -19,6 +19,8 @@ pub fn main() !void {
         try runSetOperationMatrix(allocator);
         try runPositionalAgreement(allocator);
         try runRangeAgreement(allocator);
+        try runCompactionAgreement(allocator);
+        try runClearAgreement(allocator);
         try runRandomizedLoop(allocator);
     }
 
@@ -176,12 +178,76 @@ fn runRangeAgreement(allocator: std.mem.Allocator) !void {
     try oracle.assertRangeAgreement(&rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
     try oracle.assertRangeAgreement(&rbm, cr, (@as(u64, 6) << 32), (@as(u64, 6) << 32) | 10);
     try oracle.assertRangeAgreement(&rbm, cr, std.math.maxInt(u64), std.math.maxInt(u64));
+    try oracle.assertFlipAgreement(allocator, &rbm, cr, (@as(u64, 3) << 32) | 11, (@as(u64, 3) << 32) | 21);
+    try oracle.assertFlipAgreement(allocator, &rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffd, (@as(u64, 5) << 32) | 3);
+    try oracle.assertFlipAgreement(allocator, &rbm, cr, std.math.maxInt(u64), std.math.maxInt(u64));
 
     try oracle.applyRemoveRange(allocator, &rbm, cr, (@as(u64, 3) << 32) | 12, (@as(u64, 3) << 32) | 18);
     try oracle.assertRangeAgreement(&rbm, cr, (@as(u64, 3) << 32) | 10, (@as(u64, 3) << 32) | 20);
 
     try oracle.applyRemoveRange(allocator, &rbm, cr, (@as(u64, 4) << 32) | 0xffff_ffff, (@as(u64, 5) << 32));
     try oracle.assertRangeAgreement(&rbm, cr, (@as(u64, 4) << 32) | 0xffff_fffe, (@as(u64, 5) << 32) | 2);
+}
+
+fn runCompactionAgreement(allocator: std.mem.Allocator) !void {
+    var rbm = try Roaring64Bitmap.init(allocator);
+    defer rbm.deinit();
+
+    const cr = c.roaring64_bitmap_create() orelse return error.CRoaringAllocFailed;
+    defer c.roaring64_bitmap_free(cr);
+
+    try oracle.applyAddRange(allocator, &rbm, cr, (@as(u64, 7) << 32) | 100, (@as(u64, 7) << 32) | 5000);
+    try oracle.applyAddRange(allocator, &rbm, cr, (@as(u64, 8) << 32), (@as(u64, 8) << 32) | 12_000);
+    const extra_values = [_]u64{
+        (@as(u64, 9) << 32) | 3,
+        (@as(u64, 9) << 32) | 99,
+        (@as(u64, 9) << 32) | 65_535,
+    };
+    for (extra_values) |value| {
+        _ = try rbm.add(value);
+        c.roaring64_bitmap_add(cr, value);
+    }
+
+    const rawr_has_runs = try rbm.runOptimize();
+    const cr_has_runs = c.roaring64_bitmap_run_optimize(cr);
+    if (rawr_has_runs != cr_has_runs) return error.RunOptimizeMismatch;
+    if (rawr_has_runs != test_support.hasRunContainers(&rbm)) return error.RunContainerMismatch;
+    try oracle.assertAgreement(allocator, &rbm, cr, &extra_values);
+
+    const freed = try rbm.shrinkToFit();
+    _ = c.roaring64_bitmap_shrink_to_fit(cr);
+    if (freed == 0) return error.ShrinkToFitNoop;
+    try oracle.assertAgreement(allocator, &rbm, cr, &extra_values);
+
+    const second_freed = try rbm.shrinkToFit();
+    if (second_freed != 0) return error.ShrinkToFitNotIdempotent;
+}
+
+fn runClearAgreement(allocator: std.mem.Allocator) !void {
+    const values = [_]u64{
+        0,
+        (@as(u64, 1) << 32) | 3,
+        (@as(u64, 17) << 32) | 42,
+        std.math.maxInt(u64),
+    };
+
+    var rbm = try test_support.fromValues(Roaring64Bitmap, allocator, values[0..]);
+    defer rbm.deinit();
+
+    const cr = try oracle.buildCRoaring(values[0..]);
+    defer c.roaring64_bitmap_free(cr);
+
+    rbm.clear();
+    c.roaring64_bitmap_clear(cr);
+
+    const probes = [_]u64{ 0, 1, (@as(u64, 17) << 32) | 42, std.math.maxInt(u64) };
+    try oracle.assertAgreement(allocator, &rbm, cr, &probes);
+
+    const reused = (@as(u64, 99) << 32) | 1234;
+    if (!(try rbm.add(reused))) return error.ClearReuseMismatch;
+    c.roaring64_bitmap_add(cr, reused);
+    const reused_probes = [_]u64{ reused, std.math.maxInt(u64) };
+    try oracle.assertAgreement(allocator, &rbm, cr, &reused_probes);
 }
 
 fn runRandomizedLoop(allocator: std.mem.Allocator) !void {
@@ -283,6 +349,8 @@ fn assertRandomRangeMutationAgree(
     defer c.roaring64_bitmap_free(cr);
 
     const range = randomRange(iteration);
+    try oracle.assertFlipAgreement(allocator, source, source_cr, range.lo, range.hi);
+
     try oracle.applyAddRange(allocator, &rbm, cr, range.lo, range.hi);
     try oracle.assertRangeAgreement(&rbm, cr, range.lo, range.hi);
 
@@ -342,6 +410,7 @@ fn assertCardinalityOpsAgree(
     if (a.orCardinality(b) != c.roaring64_bitmap_or_cardinality(cr_a, cr_b)) return error.OrCardinalityMismatch;
     if (a.xorCardinality(b) != c.roaring64_bitmap_xor_cardinality(cr_a, cr_b)) return error.XorCardinalityMismatch;
     if (a.differenceCardinality(b) != c.roaring64_bitmap_andnot_cardinality(cr_a, cr_b)) return error.DifferenceCardinalityMismatch;
+    try oracle.assertJaccardAgreement(a, b, cr_a, cr_b);
 }
 
 fn assertPredicatesAgree(

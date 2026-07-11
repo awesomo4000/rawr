@@ -128,6 +128,9 @@ pub fn assertRangeAgreement(rbm: *const Roaring64Bitmap, cr: *const c.roaring64_
     if (rbm.containsRange(lo, hi) != cContainsRangeClosed(cr, lo, hi)) {
         return error.ContainsRangeMismatch;
     }
+    if (rbm.intersectsRange(lo, hi) != cIntersectsRangeClosed(cr, lo, hi)) {
+        return error.IntersectsRangeMismatch;
+    }
 }
 
 pub fn cContainsRangeClosed(cr: *const c.roaring64_bitmap_t, lo: u64, hi: u64) bool {
@@ -136,6 +139,56 @@ pub fn cContainsRangeClosed(cr: *const c.roaring64_bitmap_t, lo: u64, hi: u64) b
         return c.roaring64_bitmap_contains_range(cr, lo, hi) and c.roaring64_bitmap_contains(cr, hi);
     }
     return c.roaring64_bitmap_contains_range(cr, lo, hi + 1);
+}
+
+pub fn cIntersectsRangeClosed(cr: *const c.roaring64_bitmap_t, lo: u64, hi: u64) bool {
+    if (lo > hi) return false;
+    if (hi == std.math.maxInt(u64)) {
+        return c.roaring64_bitmap_intersect_with_range(cr, lo, hi) or c.roaring64_bitmap_contains(cr, hi);
+    }
+    return c.roaring64_bitmap_intersect_with_range(cr, lo, hi + 1);
+}
+
+pub fn assertJaccardAgreement(
+    a: *const Roaring64Bitmap,
+    b: *const Roaring64Bitmap,
+    cr_a: *const c.roaring64_bitmap_t,
+    cr_b: *const c.roaring64_bitmap_t,
+) !void {
+    const rawr_value = a.jaccardIndex(b);
+    const cr_value = c.roaring64_bitmap_jaccard_index(cr_a, cr_b);
+    if (std.math.isNan(rawr_value) and std.math.isNan(cr_value)) return;
+    if (rawr_value == cr_value) return;
+
+    const diff = @abs(rawr_value - cr_value);
+    if (diff <= 1e-12) return;
+    return error.JaccardMismatch;
+}
+
+pub fn assertFlipAgreement(
+    allocator: std.mem.Allocator,
+    source: *const Roaring64Bitmap,
+    source_cr: *const c.roaring64_bitmap_t,
+    lo: u64,
+    hi: u64,
+) !void {
+    var rawr_result = try source.flip(allocator, lo, hi);
+    defer rawr_result.deinit();
+
+    const cr_result = c.roaring64_bitmap_flip_closed(source_cr, lo, hi) orelse return error.CRoaringAllocFailed;
+    defer c.roaring64_bitmap_free(cr_result);
+    const probes = [_]u64{ lo, hi };
+    try assertAgreement(allocator, &rawr_result, cr_result, &probes);
+
+    var rawr_in_place = try source.clone(allocator);
+    defer rawr_in_place.deinit();
+    try rawr_in_place.flipInPlace(lo, hi);
+    if (!rawr_in_place.equals(&rawr_result)) return error.InPlaceMismatch;
+
+    const cr_in_place = c.roaring64_bitmap_copy(source_cr) orelse return error.CRoaringAllocFailed;
+    defer c.roaring64_bitmap_free(cr_in_place);
+    c.roaring64_bitmap_flip_closed_inplace(cr_in_place, lo, hi);
+    try assertAgreement(allocator, &rawr_in_place, cr_in_place, &probes);
 }
 
 pub fn assertSerializationAgreement(

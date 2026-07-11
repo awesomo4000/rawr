@@ -114,6 +114,18 @@ pub const RunContainer = struct {
         self.capacity = new_cap;
     }
 
+    /// Shrink capacity to fit current run count.
+    pub fn shrinkToFit(self: *Self, allocator: std.mem.Allocator) !void {
+        const new_cap = @max(MIN_CAPACITY, self.n_runs);
+        if (new_cap >= self.capacity) return;
+
+        const new_runs = try allocator.alloc(RunPair, new_cap);
+        @memcpy(new_runs[0..self.n_runs], self.runs[0..self.n_runs]);
+        allocator.free(self.runs[0..self.capacity]);
+        self.runs = new_runs;
+        self.capacity = new_cap;
+    }
+
     /// Add a value. Returns true if value was new.
     pub fn add(self: *Self, allocator: std.mem.Allocator, value: u16) !bool {
         if (self.n_runs == 0) {
@@ -512,4 +524,26 @@ test "contains boundary values" {
     try std.testing.expect(rc.contains(65535));
     try std.testing.expect(!rc.contains(1));
     try std.testing.expect(!rc.contains(65534));
+}
+
+test "shrink to fit" {
+    const allocator = std.testing.allocator;
+    const rc = try RunContainer.init(allocator, 0);
+    defer rc.deinit(allocator);
+
+    for (0..5) |i| {
+        _ = try rc.add(allocator, @intCast(i * 2));
+    }
+
+    try std.testing.expectEqual(@as(u16, 5), rc.n_runs);
+    try std.testing.expect(rc.capacity > rc.n_runs);
+
+    try rc.shrinkToFit(allocator);
+    try std.testing.expectEqual(@as(u16, 5), rc.n_runs);
+    try std.testing.expectEqual(@as(u16, 5), rc.capacity);
+    try std.testing.expect(rc.contains(8));
+    try std.testing.expect(!rc.contains(1));
+
+    try rc.shrinkToFit(allocator);
+    try std.testing.expectEqual(@as(u16, 5), rc.capacity);
 }

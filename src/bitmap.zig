@@ -236,6 +236,49 @@ pub const RoaringBitmap = struct {
         self.capacity = new_cap;
     }
 
+    /// Shrink internal arrays and shrinkable containers to current size.
+    /// Returns an approximate number of payload bytes released.
+    pub fn shrinkToFit(self: *Self) !usize {
+        var freed: usize = 0;
+
+        for (self.containers[0..self.size]) |tp| {
+            switch (Container.fromTagged(tp)) {
+                .array => |ac| {
+                    const old_cap = ac.capacity;
+                    try ac.shrinkToFit(self.allocator);
+                    freed += (@as(usize, old_cap) - @as(usize, ac.capacity)) * @sizeOf(u16);
+                },
+                .run => |rc| {
+                    const old_cap = rc.capacity;
+                    try rc.shrinkToFit(self.allocator);
+                    freed += (@as(usize, old_cap) - @as(usize, rc.capacity)) * @sizeOf(RunContainer.RunPair);
+                },
+                .bitset, .reserved => {},
+            }
+        }
+
+        if (self.size < self.capacity) {
+            const old_cap = self.capacity;
+            const new_keys = try self.allocator.alloc(u16, self.size);
+            errdefer self.allocator.free(new_keys);
+            const new_containers = try self.allocator.alloc(TaggedPtr, self.size);
+            errdefer self.allocator.free(new_containers);
+
+            @memcpy(new_keys[0..self.size], self.keys[0..self.size]);
+            @memcpy(new_containers[0..self.size], self.containers[0..self.size]);
+
+            self.allocator.free(self.keys[0..self.capacity]);
+            self.allocator.free(self.containers[0..self.capacity]);
+            self.keys = new_keys;
+            self.containers = new_containers;
+            self.capacity = self.size;
+
+            freed += (@as(usize, old_cap) - @as(usize, self.capacity)) * (@sizeOf(u16) + @sizeOf(TaggedPtr));
+        }
+
+        return freed;
+    }
+
     /// Check if a value is present.
     pub fn contains(self: *const Self, value: u32) bool {
         const key = highBits(value);

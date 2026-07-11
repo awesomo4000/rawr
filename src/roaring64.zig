@@ -53,6 +53,15 @@ pub const Roaring64Bitmap = struct {
         self.allocator.free(self.buckets[0..self.capacity]);
     }
 
+    /// Remove all values while retaining the bucket-array allocation.
+    pub fn clear(self: *Self) void {
+        for (self.buckets[0..self.size]) |*bucket| {
+            bucket.bm.deinit();
+        }
+        self.size = 0;
+        self.cached_cardinality = 0;
+    }
+
     /// Create a deep copy of the bitmap.
     pub fn clone(self: *const Self, allocator: std.mem.Allocator) !Self {
         var result = try Self.init(allocator);
@@ -256,6 +265,14 @@ pub const Roaring64Bitmap = struct {
     /// Compute |self \ other| without allocating a result bitmap.
     pub fn differenceCardinality(self: *const Self, other: *const Self) u64 {
         return self.twoWayCardinality(.andnot, other);
+    }
+
+    /// Compute |self ∩ other| / |self ∪ other|.
+    /// Matches CRoaring's undefined empty/empty behavior by returning NaN.
+    pub fn jaccardIndex(self: *const Self, other: *const Self) f64 {
+        const intersection = self.andCardinality(other);
+        const union_cardinality = self.orCardinality(other);
+        return @as(f64, @floatFromInt(intersection)) / @as(f64, @floatFromInt(union_cardinality));
     }
 
     /// Return true if self and other have any values in common.
@@ -519,6 +536,104 @@ pub const Roaring64Bitmap = struct {
         }
 
         return true;
+    }
+
+    /// Return whether any value in the inclusive range [lo, hi] is present.
+    pub fn intersectsRange(self: *const Self, lo: u64, hi: u64) bool {
+        if (lo > hi) return false;
+
+        const start_hi = highBits(lo);
+        const end_hi = highBits(hi);
+        const end_hi_u64: u64 = end_hi;
+        var idx = self.lowerBound(start_hi);
+
+        while (idx < self.size and @as(u64, self.buckets[idx].hi) <= end_hi_u64) : (idx += 1) {
+            const bucket = &self.buckets[idx];
+            const start_low: u32 = if (bucket.hi == start_hi) lowBits(lo) else 0;
+            const end_low: u32 = if (bucket.hi == end_hi) lowBits(hi) else std.math.maxInt(u32);
+
+            if (bucket.bm.intersectsRange(start_low, end_low)) return true;
+        }
+
+        return false;
+    }
+
+    /// Return a new bitmap with values in [lo, hi] complemented.
+    pub fn flip(self: *const Self, allocator: std.mem.Allocator, lo: u64, hi: u64) !Self {
+        var result = try self.clone(allocator);
+        errdefer result.deinit();
+        try result.flipInPlace(lo, hi);
+        return result;
+    }
+
+    /// Complement values in [lo, hi] in place.
+    pub fn flipInPlace(self: *Self, lo: u64, hi: u64) !void {
+        if (lo > hi) return;
+
+        const start_hi = highBits(lo);
+        const end_hi = highBits(hi);
+        const key_count = @as(u64, end_hi) - start_hi + 1;
+        if (key_count > std.math.maxInt(usize)) return error.Overflow;
+
+        const created_keys = try self.allocator.alloc(u32, @intCast(key_count));
+        defer self.allocator.free(created_keys);
+        var created_len: usize = 0;
+        errdefer self.dropCreatedBuckets(created_keys[0..created_len]);
+
+        self.cached_cardinality = null;
+
+        const end_hi_u64: u64 = end_hi;
+        var key: u64 = start_hi;
+        while (key <= end_hi_u64) {
+            const key_u32: u32 = @intCast(key);
+            const start_low: u32 = if (key_u32 == start_hi) lowBits(lo) else 0;
+            const end_low: u32 = if (key_u32 == end_hi) lowBits(hi) else std.math.maxInt(u32);
+
+            const found = try self.findOrCreateBucket(key_u32);
+            if (found.created) {
+                created_keys[created_len] = key_u32;
+                created_len += 1;
+            }
+
+            try found.bucket.bm.flipInplace(start_low, end_low);
+            if (found.bucket.bm.isEmpty()) {
+                self.dropBucket(found.idx);
+            }
+
+            if (key == end_hi_u64) break;
+            key += 1;
+        }
+    }
+
+    /// Convert sub-bitmaps to run encoding where it saves space.
+    /// Returns whether at least one RUN container exists after optimization.
+    pub fn runOptimize(self: *Self) !bool {
+        for (self.buckets[0..self.size]) |*bucket| {
+            _ = try bucket.bm.runOptimize();
+        }
+        return self.hasRunContainers();
+    }
+
+    /// Shrink internal arrays and shrinkable sub-bitmap storage to current size.
+    /// Returns an approximate number of payload bytes released.
+    pub fn shrinkToFit(self: *Self) !usize {
+        var freed: usize = 0;
+
+        for (self.buckets[0..self.size]) |*bucket| {
+            freed += try bucket.bm.shrinkToFit();
+        }
+
+        if (self.size < self.capacity) {
+            const old_cap = self.capacity;
+            const new_buckets = try self.allocator.alloc(Bucket, self.size);
+            @memcpy(new_buckets[0..self.size], self.buckets[0..self.size]);
+            self.allocator.free(self.buckets[0..self.capacity]);
+            self.buckets = new_buckets;
+            self.capacity = self.size;
+            freed += (@as(usize, old_cap) - @as(usize, self.capacity)) * @sizeOf(Bucket);
+        }
+
+        return freed;
     }
 
     /// Compute serialized size in bytes for CRoaring's portable 64-bit format.
@@ -851,6 +966,15 @@ pub const Roaring64Bitmap = struct {
                 self.dropBucket(idx);
             }
         }
+    }
+
+    fn hasRunContainers(self: *const Self) bool {
+        for (self.buckets[0..self.size]) |*bucket| {
+            for (bucket.bm.containers[0..bucket.bm.size]) |container| {
+                if (container.getType() == .run) return true;
+            }
+        }
+        return false;
     }
 };
 
@@ -1298,6 +1422,145 @@ test "Roaring64Bitmap rangeCardinality and containsRange across boundaries and g
     try std.testing.expect(!bm.containsRange((@as(u64, 2) << 32) | 2, (@as(u64, 4) << 32) | 10));
     try std.testing.expect(!bm.containsRange((@as(u64, 3) << 32), (@as(u64, 3) << 32) | 1));
     try std.testing.expectEqual(@as(u64, 0), bm.rangeCardinality((@as(u64, 3) << 32), (@as(u64, 3) << 32) | 1));
+}
+
+test "Roaring64Bitmap intersectsRange across boundaries and gaps" {
+    const allocator = std.testing.allocator;
+    var bm = try Roaring64Bitmap.init(allocator);
+    defer bm.deinit();
+
+    const adjacent_lo = (@as(u64, 1) << 32) | 0xffff_fffe;
+    const adjacent_hi = (@as(u64, 2) << 32) | 2;
+    try bm.addRange(adjacent_lo, adjacent_hi);
+    _ = try bm.add((@as(u64, 4) << 32) | 10);
+    _ = try bm.add(std.math.maxInt(u64));
+
+    try std.testing.expect(bm.intersectsRange(adjacent_lo, adjacent_hi));
+    try std.testing.expect(bm.intersectsRange((@as(u64, 2) << 32) | 2, (@as(u64, 4) << 32) | 10));
+    try std.testing.expect(!bm.intersectsRange((@as(u64, 3) << 32), (@as(u64, 3) << 32) | 1));
+    try std.testing.expect(bm.intersectsRange(std.math.maxInt(u64), std.math.maxInt(u64)));
+    try std.testing.expect(!bm.intersectsRange(10, 9));
+}
+
+test "Roaring64Bitmap flip single key and double flip identity" {
+    const allocator = std.testing.allocator;
+    var bm = try test_support.fromValues(Roaring64Bitmap, allocator, &[_]u64{
+        (@as(u64, 9) << 32) | 10,
+        (@as(u64, 9) << 32) | 12,
+    });
+    defer bm.deinit();
+
+    var flipped = try bm.flip(allocator, (@as(u64, 9) << 32) | 11, (@as(u64, 9) << 32) | 13);
+    defer flipped.deinit();
+    try expectRoaring64Values(&flipped, &[_]u64{
+        (@as(u64, 9) << 32) | 10,
+        (@as(u64, 9) << 32) | 11,
+        (@as(u64, 9) << 32) | 13,
+    });
+
+    try flipped.flipInPlace((@as(u64, 9) << 32) | 11, (@as(u64, 9) << 32) | 13);
+    try std.testing.expect(flipped.equals(&bm));
+}
+
+test "Roaring64Bitmap flip spans keys creates buckets and prunes emptied buckets" {
+    const allocator = std.testing.allocator;
+
+    var spanning = try Roaring64Bitmap.init(allocator);
+    defer spanning.deinit();
+    const lo = (@as(u64, 5) << 32) | 0xffff_fffe;
+    const hi = (@as(u64, 7) << 32) | 1;
+    try spanning.flipInPlace(lo, hi);
+
+    try std.testing.expectEqual(@as(u32, 3), spanning.size);
+    try std.testing.expectEqual(@as(u64, 4_294_967_300), spanning.cardinality());
+    try std.testing.expect(spanning.contains(lo));
+    try std.testing.expect(spanning.contains((@as(u64, 6) << 32) | 12345));
+    try std.testing.expect(spanning.contains(hi));
+    try std.testing.expect(!spanning.contains((@as(u64, 5) << 32) | 0xffff_fffd));
+    try expectNoEmptyBuckets(&spanning);
+
+    var emptied = try Roaring64Bitmap.init(allocator);
+    defer emptied.deinit();
+    try emptied.addRange((@as(u64, 10) << 32) | 1, (@as(u64, 10) << 32) | 3);
+    try emptied.flipInPlace((@as(u64, 10) << 32) | 1, (@as(u64, 10) << 32) | 3);
+    try std.testing.expect(emptied.isEmpty());
+    try std.testing.expectEqual(@as(u32, 0), emptied.size);
+}
+
+test "Roaring64Bitmap flip handles max value boundary" {
+    const allocator = std.testing.allocator;
+    var bm = try Roaring64Bitmap.init(allocator);
+    defer bm.deinit();
+
+    try bm.flipInPlace(std.math.maxInt(u64), std.math.maxInt(u64));
+    try std.testing.expect(bm.contains(std.math.maxInt(u64)));
+    try std.testing.expectEqual(@as(u64, 1), bm.cardinality());
+
+    try bm.flipInPlace(std.math.maxInt(u64), std.math.maxInt(u64));
+    try std.testing.expect(bm.isEmpty());
+    try expectNoEmptyBuckets(&bm);
+}
+
+test "Roaring64Bitmap jaccardIndex" {
+    const allocator = std.testing.allocator;
+    var a = try test_support.fromValues(Roaring64Bitmap, allocator, &[_]u64{ 1, 2, (@as(u64, 1) << 32) | 3 });
+    defer a.deinit();
+    var b = try test_support.fromValues(Roaring64Bitmap, allocator, &[_]u64{ (@as(u64, 1) << 32) | 3, 4 });
+    defer b.deinit();
+    var empty = try Roaring64Bitmap.init(allocator);
+    defer empty.deinit();
+
+    try std.testing.expectEqual(@as(f64, 0.25), a.jaccardIndex(&b));
+    try std.testing.expectEqual(@as(f64, 1.0), a.jaccardIndex(&a));
+    try std.testing.expectEqual(@as(f64, 0.0), a.jaccardIndex(&empty));
+    try std.testing.expect(std.math.isNan(empty.jaccardIndex(&empty)));
+}
+
+test "Roaring64Bitmap runOptimize and shrinkToFit" {
+    const allocator = std.testing.allocator;
+    var bm = try Roaring64Bitmap.init(allocator);
+    defer bm.deinit();
+
+    for (100..220) |value| {
+        _ = try bm.add((@as(u64, 12) << 32) | @as(u64, @intCast(value)));
+    }
+    _ = try bm.add((@as(u64, 30) << 32) | 1);
+    _ = try bm.add((@as(u64, 31) << 32) | 1);
+    _ = try bm.add((@as(u64, 32) << 32) | 1);
+    _ = try bm.add((@as(u64, 33) << 32) | 1);
+
+    try std.testing.expect(try bm.runOptimize());
+    try std.testing.expect(test_support.hasRunContainers(&bm));
+    try std.testing.expectEqual(@as(u64, 124), bm.cardinality());
+
+    _ = try bm.remove((@as(u64, 33) << 32) | 1);
+    try std.testing.expect(bm.capacity > bm.size);
+    _ = try bm.shrinkToFit();
+    try std.testing.expectEqual(bm.size, bm.capacity);
+    try std.testing.expectEqual(@as(usize, 0), try bm.shrinkToFit());
+    try std.testing.expectEqual(@as(u64, 123), bm.cardinality());
+    try expectNoEmptyBuckets(&bm);
+}
+
+test "Roaring64Bitmap clear retains capacity and remains reusable" {
+    const allocator = std.testing.allocator;
+    var bm = try Roaring64Bitmap.init(allocator);
+    defer bm.deinit();
+
+    _ = try bm.add(1);
+    _ = try bm.add((@as(u64, 2) << 32) | 3);
+    const capacity = bm.capacity;
+    const buckets_ptr = bm.buckets.ptr;
+
+    bm.clear();
+    try std.testing.expect(bm.isEmpty());
+    try std.testing.expectEqual(@as(u32, 0), bm.size);
+    try std.testing.expectEqual(@as(u64, 0), bm.cardinality());
+    try std.testing.expectEqual(capacity, bm.capacity);
+    try std.testing.expectEqual(buckets_ptr, bm.buckets.ptr);
+
+    _ = try bm.add((@as(u64, 4) << 32) | 5);
+    try std.testing.expect(bm.contains((@as(u64, 4) << 32) | 5));
 }
 
 test "Roaring64Bitmap serialize round-trips empty bitmap" {
