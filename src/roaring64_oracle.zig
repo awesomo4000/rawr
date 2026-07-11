@@ -3,6 +3,7 @@ const rawr = @import("rawr");
 const c = @import("c");
 
 const Roaring64Bitmap = rawr.Roaring64Bitmap;
+const Frozen64Bitmap = rawr.Frozen64Bitmap;
 const test_support = rawr.roaring64_test_support;
 
 pub fn buildCRoaring(values: []const u64) !*c.roaring64_bitmap_t {
@@ -15,12 +16,41 @@ pub fn buildCRoaring(values: []const u64) !*c.roaring64_bitmap_t {
     return cr;
 }
 
+pub fn buildCRoaringOfPtr(values: []const u64) !*c.roaring64_bitmap_t {
+    return c.roaring64_bitmap_of_ptr(values.len, @ptrCast(values.ptr)) orelse return error.CRoaringAllocFailed;
+}
+
+pub fn buildCRoaringFromRange(min: u64, max: u64, step: u64) !*c.roaring64_bitmap_t {
+    if (c.roaring64_bitmap_from_range(min, max, step)) |cr| return cr;
+    return c.roaring64_bitmap_create() orelse return error.CRoaringAllocFailed;
+}
+
+pub fn buildCRoaring32(values: []const u32) !*c.roaring_bitmap_t {
+    const cr = c.roaring_bitmap_create() orelse return error.CRoaringAllocFailed;
+    errdefer c.roaring_bitmap_free(cr);
+
+    if (values.len != 0) {
+        c.roaring_bitmap_add_many(cr, values.len, @ptrCast(values.ptr));
+    }
+    return cr;
+}
+
+pub fn buildCRoaring64From32(values: []const u32) !*c.roaring64_bitmap_t {
+    const cr32 = try buildCRoaring32(values);
+    defer c.roaring_bitmap_free(cr32);
+
+    return c.roaring64_bitmap_move_from_roaring32(cr32) orelse return error.CRoaringAllocFailed;
+}
+
 pub fn assertAgreement(
     allocator: std.mem.Allocator,
     rbm: *const Roaring64Bitmap,
     cr: *const c.roaring64_bitmap_t,
     probes: []const u64,
 ) !void {
+    try rbm.validate();
+    try assertCRoaringValid(cr);
+
     const cr_card = c.roaring64_bitmap_get_cardinality(cr);
     if (rbm.cardinality() != cr_card) return error.CardinalityMismatch;
     if (rbm.isEmpty() != c.roaring64_bitmap_is_empty(cr)) return error.EmptyMismatch;
@@ -56,6 +86,63 @@ pub fn assertAgreement(
     if (iter.next() != null) return error.IteratorExtraValue;
 
     try assertSerializationAgreement(allocator, rbm, cr);
+}
+
+pub fn assertCRoaringValid(cr: *const c.roaring64_bitmap_t) !void {
+    var reason: [*c]const u8 = null;
+    if (!c.roaring64_bitmap_internal_validate(cr, &reason)) {
+        return error.CRoaringInvalid;
+    }
+}
+
+pub fn assertStatisticsAgreement(rbm: *const Roaring64Bitmap, cr: *const c.roaring64_bitmap_t) !void {
+    const rawr_stats = rbm.statistics();
+    var cr_stats: c.roaring64_statistics_t = undefined;
+    c.roaring64_bitmap_statistics(cr, &cr_stats);
+
+    if (rawr_stats.n_containers != cr_stats.n_containers) return error.StatisticsMismatch;
+    if (rawr_stats.n_array_containers != cr_stats.n_array_containers) return error.StatisticsMismatch;
+    if (rawr_stats.n_run_containers != cr_stats.n_run_containers) return error.StatisticsMismatch;
+    if (rawr_stats.n_bitset_containers != cr_stats.n_bitset_containers) return error.StatisticsMismatch;
+    if (rawr_stats.n_values_array_containers != cr_stats.n_values_array_containers) return error.StatisticsMismatch;
+    if (rawr_stats.n_values_run_containers != cr_stats.n_values_run_containers) return error.StatisticsMismatch;
+    if (rawr_stats.n_values_bitset_containers != cr_stats.n_values_bitset_containers) return error.StatisticsMismatch;
+    if (rawr_stats.cardinality != cr_stats.cardinality) return error.StatisticsMismatch;
+
+    if (rawr_stats.cardinality != 0) {
+        if (rawr_stats.min_value != cr_stats.min_value) return error.StatisticsMismatch;
+        if (rawr_stats.max_value != cr_stats.max_value) return error.StatisticsMismatch;
+    }
+}
+
+pub fn assertFrozenAgreement(allocator: std.mem.Allocator, rbm: *const Roaring64Bitmap) !void {
+    const size = try rbm.frozenSizeInBytes();
+    const bytes = try allocator.alloc(u8, size);
+    defer allocator.free(bytes);
+
+    try rbm.frozenSerialize(bytes);
+
+    var frozen = try Frozen64Bitmap.view(bytes);
+    defer frozen.deinit();
+
+    if (frozen.cardinality() != rbm.cardinality()) return error.FrozenCardinalityMismatch;
+    if (frozen.minimum() != rbm.minimum()) return error.FrozenMinimumMismatch;
+    if (frozen.maximum() != rbm.maximum()) return error.FrozenMaximumMismatch;
+
+    const values = try rbm.toArrayAlloc(allocator);
+    defer allocator.free(values);
+
+    var iter = frozen.iterator();
+    for (values, 0..) |value, idx| {
+        const rank: u64 = @intCast(idx);
+        if (!frozen.contains(value)) return error.FrozenContainsMismatch;
+        if (frozen.rank(value) != rank + 1) return error.FrozenRankMismatch;
+        if (frozen.getIndex(value) != rank) return error.FrozenGetIndexMismatch;
+        if (frozen.select(rank) != value) return error.FrozenSelectMismatch;
+        if (iter.next() != value) return error.FrozenIteratorMismatch;
+    }
+    if (iter.next() != null) return error.FrozenIteratorExtraValue;
+    if (frozen.select(@intCast(values.len)) != null) return error.FrozenSelectMismatch;
 }
 
 pub fn assertPositionalAgreement(

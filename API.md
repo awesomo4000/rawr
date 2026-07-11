@@ -6,6 +6,7 @@ rawr's stable public API is:
 - `Roaring64Bitmap`: mutable 64-bit bitmap layered over 32-bit roaring buckets.
 - `OwnedBitmap`: arena-backed owned result for read-heavy temporary values.
 - `FrozenBitmap`: zero-copy read-only view over serialized bytes.
+- `Frozen64Bitmap`: zero-copy read-only view over rawr-native frozen64 bytes.
 - `ValidateError`: structural validation errors from `RoaringBitmap.validate()`.
 
 The module root also exposes container internals for rawr's own benchmarks,
@@ -19,6 +20,7 @@ stable API and may change.
 | `RoaringBitmap` | You need mutation or in-place operations | Call `deinit()` when done. |
 | `OwnedBitmap` | You need a read-only result and bulk-free lifetime | Returned by `*Owned` helpers. Use `asBitmap()` for the full read-only API. |
 | `FrozenBitmap` | You have serialized bytes and want zero-copy lookup | Backing bytes must outlive the view. |
+| `Frozen64Bitmap` | You have rawr frozen64 bytes and want zero-copy lookup | rawr-native format, not CRoaring frozen interop. |
 
 ```zig
 var bm = try rawr.RoaringBitmap.init(allocator);
@@ -325,6 +327,32 @@ frozen.iterator()
 
 The serialized bytes must remain alive for the lifetime of the `FrozenBitmap`.
 
+## `Frozen64Bitmap`
+
+```zig
+const size = try bm64.frozenSizeInBytes();
+const bytes = try allocator.alloc(u8, size);
+defer allocator.free(bytes);
+
+try bm64.frozenSerialize(bytes);
+
+var frozen64 = try Frozen64Bitmap.view(bytes);
+defer frozen64.deinit();
+
+frozen64.contains(value)
+frozen64.cardinality()
+frozen64.minimum()
+frozen64.maximum()
+frozen64.rank(value)
+frozen64.select(rank)
+frozen64.getIndex(value)
+frozen64.iterator()
+```
+
+`Frozen64Bitmap` uses rawr's own frozen64 image: a 64-bit bucket table plus
+rawr 32-bit frozen sub-images. It is not byte-compatible with CRoaring's frozen
+format. The backing bytes must remain alive for the lifetime of the view.
+
 ## Allocator Guide
 
 | Allocator | Use When |
@@ -338,7 +366,8 @@ The serialized bytes must remain alive for the lifetime of the `FrozenBitmap`.
 ## Quick Reference
 
 ```text
-PUBLIC TYPES      RoaringBitmap, OwnedBitmap, FrozenBitmap, ValidateError
+PUBLIC TYPES      RoaringBitmap, Roaring64Bitmap, OwnedBitmap, FrozenBitmap,
+                  Frozen64Bitmap, ValidateError
 
 CONSTRUCT         init, fromSorted, fromSlice, fromSliceOwned
                   deserialize, deserializeSafe, deserializeFromReader

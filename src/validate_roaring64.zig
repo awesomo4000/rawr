@@ -2,6 +2,7 @@ const std = @import("std");
 const rawr = @import("rawr");
 const c = @import("c");
 
+const RoaringBitmap = rawr.RoaringBitmap;
 const Roaring64Bitmap = rawr.Roaring64Bitmap;
 const gen64 = rawr.roaring64_test_gen;
 const test_support = rawr.roaring64_test_support;
@@ -29,6 +30,9 @@ pub fn main() !void {
 
         try validateGeneratedCase(allocator);
         try validateRangeOps(allocator);
+        try validateConstructorOps(allocator);
+        try validateConversionOps(allocator);
+        try validateBulkOps(allocator);
         try validateCompactionOps(allocator);
         try validateClearOps(allocator);
     }
@@ -88,6 +92,7 @@ fn validateBitmapCase(
     try oracle.assertAgreement(allocator, rbm, cr, values);
     try oracle.assertPositionalAgreement(rbm, cr, values);
     try oracle.assertJaccardAgreement(rbm, rbm, cr, cr);
+    try oracle.assertFrozenAgreement(allocator, rbm);
 }
 
 fn validateRangeOps(allocator: std.mem.Allocator) !void {
@@ -117,6 +122,105 @@ fn validateRangeOps(allocator: std.mem.Allocator) !void {
     try oracle.assertRangeAgreement(&rbm, cr, std.math.maxInt(u64), std.math.maxInt(u64));
 }
 
+fn validateConstructorOps(allocator: std.mem.Allocator) !void {
+    const RangeCase = struct {
+        min: u64,
+        max: u64,
+        step: u64,
+    };
+    const range_cases = [_]RangeCase{
+        .{ .min = 10, .max = 10, .step = 1 },
+        .{ .min = 10, .max = 20, .step = 0 },
+        .{ .min = (@as(u64, 1) << 32) - 1, .max = (@as(u64, 1) << 32) + 2, .step = 1 },
+        .{ .min = (@as(u64, 2) << 32) | 5, .max = (@as(u64, 2) << 32) | 40, .step = 7 },
+        .{ .min = std.math.maxInt(u64) - 7, .max = std.math.maxInt(u64), .step = 4 },
+    };
+
+    for (range_cases) |case| {
+        var rbm = try Roaring64Bitmap.fromRange(allocator, case.min, case.max, case.step);
+        defer rbm.deinit();
+        const cr = try oracle.buildCRoaringFromRange(case.min, case.max, case.step);
+        defer c.roaring64_bitmap_free(cr);
+        try oracle.assertAgreement(allocator, &rbm, cr, &.{ case.min, case.max });
+    }
+
+    const sorted_values = [_]u64{
+        0,
+        0,
+        1,
+        (@as(u64, 5) << 32) | 7,
+        (@as(u64, 5) << 32) | 7,
+        (@as(u64, 5) << 32) | 8,
+        std.math.maxInt(u64),
+    };
+    var from_sorted = try Roaring64Bitmap.fromSortedSlice(allocator, &sorted_values);
+    defer from_sorted.deinit();
+    const cr_sorted = try oracle.buildCRoaringOfPtr(&sorted_values);
+    defer c.roaring64_bitmap_free(cr_sorted);
+    try oracle.assertAgreement(allocator, &from_sorted, cr_sorted, &sorted_values);
+    try oracle.assertStatisticsAgreement(&from_sorted, cr_sorted);
+
+    const unsorted_values = [_]u64{
+        (@as(u64, 3) << 32) | 9,
+        1,
+        std.math.maxInt(u64),
+        1,
+        (@as(u64, 3) << 32) | 9,
+    };
+    var mutable_values = unsorted_values;
+    var from_slice = try Roaring64Bitmap.fromSlice(allocator, &mutable_values);
+    defer from_slice.deinit();
+    const cr_slice = try oracle.buildCRoaringOfPtr(&unsorted_values);
+    defer c.roaring64_bitmap_free(cr_slice);
+    try oracle.assertAgreement(allocator, &from_slice, cr_slice, &unsorted_values);
+}
+
+fn validateConversionOps(allocator: std.mem.Allocator) !void {
+    var values = [_]u32{ 0, 1, 65_535, 65_536, std.math.maxInt(u32) };
+    var r32 = try RoaringBitmap.fromSlice(allocator, &values);
+    defer r32.deinit();
+
+    var rbm = try Roaring64Bitmap.fromRoaring32(allocator, &r32);
+    defer rbm.deinit();
+    const cr = try oracle.buildCRoaring64From32(&values);
+    defer c.roaring64_bitmap_free(cr);
+
+    try oracle.assertAgreement(allocator, &rbm, cr, &.{ 0, std.math.maxInt(u32) });
+    var back = (try rbm.toRoaring32(allocator)) orelse return error.ToRoaring32Mismatch;
+    defer back.deinit();
+    if (!back.equals(&r32)) return error.ToRoaring32Mismatch;
+    if (!r32.contains(std.math.maxInt(u32))) return error.FromRoaring32ConsumedSource;
+
+    _ = try rbm.add(@as(u64, 1) << 32);
+    if (try rbm.toRoaring32(allocator) != null) return error.ToRoaring32Mismatch;
+}
+
+fn validateBulkOps(allocator: std.mem.Allocator) !void {
+    var rbm = try Roaring64Bitmap.init(allocator);
+    defer rbm.deinit();
+    const cr = c.roaring64_bitmap_create() orelse return error.CRoaringAllocFailed;
+    defer c.roaring64_bitmap_free(cr);
+
+    var ctx = Roaring64Bitmap.BulkContext.init();
+    var cr_ctx: c.roaring64_bulk_context_t = std.mem.zeroes(c.roaring64_bulk_context_t);
+    const values = [_]u64{
+        0,
+        1,
+        (@as(u64, 2) << 32) | 1,
+        (@as(u64, 2) << 32) | 2,
+        std.math.maxInt(u64),
+    };
+    for (values) |value| {
+        try rbm.addBulk(&ctx, value);
+        c.roaring64_bitmap_add_bulk(cr, &cr_ctx, value);
+    }
+
+    try rbm.removeBulk(&ctx, (@as(u64, 2) << 32) | 1);
+    c.roaring64_bitmap_remove_bulk(cr, &cr_ctx, (@as(u64, 2) << 32) | 1);
+
+    try oracle.assertAgreement(allocator, &rbm, cr, &values);
+}
+
 fn validateCompactionOps(allocator: std.mem.Allocator) !void {
     var rbm = try Roaring64Bitmap.init(allocator);
     defer rbm.deinit();
@@ -132,6 +236,7 @@ fn validateCompactionOps(allocator: std.mem.Allocator) !void {
     if (rawr_has_runs != cr_has_runs) return error.RunOptimizeMismatch;
     if (rawr_has_runs != test_support.hasRunContainers(&rbm)) return error.RunContainerMismatch;
     try oracle.assertAgreement(allocator, &rbm, cr, &.{});
+    try oracle.assertStatisticsAgreement(&rbm, cr);
 
     const freed = try rbm.shrinkToFit();
     _ = c.roaring64_bitmap_shrink_to_fit(cr);

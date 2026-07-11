@@ -11,6 +11,28 @@
 // Opaque bitmap type
 typedef struct roaring_bitmap_s roaring_bitmap_t;
 typedef struct roaring64_bitmap_s roaring64_bitmap_t;
+typedef struct roaring64_leaf_s roaring64_leaf_t;
+
+typedef struct roaring64_bulk_context_s {
+    uint8_t high_bytes[6];
+    roaring64_leaf_t *leaf;
+} roaring64_bulk_context_t;
+
+typedef struct roaring64_statistics_s {
+    uint64_t n_containers;
+    uint64_t n_array_containers;
+    uint64_t n_run_containers;
+    uint64_t n_bitset_containers;
+    uint64_t n_values_array_containers;
+    uint64_t n_values_run_containers;
+    uint64_t n_values_bitset_containers;
+    uint64_t n_bytes_array_containers;
+    uint64_t n_bytes_run_containers;
+    uint64_t n_bytes_bitset_containers;
+    uint64_t max_value;
+    uint64_t min_value;
+    uint64_t cardinality;
+} roaring64_statistics_t;
 
 // Creation and destruction
 roaring_bitmap_t *roaring_bitmap_create(void);
@@ -85,10 +107,16 @@ bool roaring_iterate(const roaring_bitmap_t *r, roaring_iterator iterator, void 
 roaring64_bitmap_t *roaring64_bitmap_create(void);
 void roaring64_bitmap_free(roaring64_bitmap_t *r);
 roaring64_bitmap_t *roaring64_bitmap_copy(const roaring64_bitmap_t *r);
+roaring64_bitmap_t *roaring64_bitmap_of_ptr(size_t n_args, const uint64_t *vals);
+roaring64_bitmap_t *roaring64_bitmap_move_from_roaring32(roaring_bitmap_t *r);
+roaring64_bitmap_t *roaring64_bitmap_from_range(uint64_t min, uint64_t max, uint64_t step);
 void roaring64_bitmap_add(roaring64_bitmap_t *r, uint64_t x);
 void roaring64_bitmap_add_many(roaring64_bitmap_t *r, size_t n, const uint64_t *vals);
+void roaring64_bitmap_add_bulk(roaring64_bitmap_t *r, roaring64_bulk_context_t *context, uint64_t val);
 bool roaring64_bitmap_remove_checked(roaring64_bitmap_t *r, uint64_t x);
+void roaring64_bitmap_remove_bulk(roaring64_bitmap_t *r, roaring64_bulk_context_t *context, uint64_t val);
 bool roaring64_bitmap_contains(const roaring64_bitmap_t *r, uint64_t x);
+bool roaring64_bitmap_contains_bulk(const roaring64_bitmap_t *r, roaring64_bulk_context_t *context, uint64_t val);
 uint64_t roaring64_bitmap_get_cardinality(const roaring64_bitmap_t *r);
 bool roaring64_bitmap_is_empty(const roaring64_bitmap_t *r);
 uint64_t roaring64_bitmap_minimum(const roaring64_bitmap_t *r);
@@ -124,6 +152,8 @@ void roaring64_bitmap_flip_closed_inplace(roaring64_bitmap_t *r, uint64_t min, u
 bool roaring64_bitmap_run_optimize(roaring64_bitmap_t *r);
 size_t roaring64_bitmap_shrink_to_fit(roaring64_bitmap_t *r);
 void roaring64_bitmap_clear(roaring64_bitmap_t *r);
+void roaring64_bitmap_statistics(const roaring64_bitmap_t *r, roaring64_statistics_t *stat);
+bool roaring64_bitmap_internal_validate(const roaring64_bitmap_t *r, const char **reason);
 size_t roaring64_bitmap_portable_size_in_bytes(const roaring64_bitmap_t *r);
 size_t roaring64_bitmap_portable_serialize(const roaring64_bitmap_t *r, char *buf);
 roaring64_bitmap_t *roaring64_bitmap_portable_deserialize_safe(const char *buf, size_t maxbytes);
