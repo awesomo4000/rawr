@@ -20,9 +20,10 @@ null-bitmap concept, so choose and document the rawr behavior:
 
 - **`max <= min`** → return an **empty** `Roaring64Bitmap` (natural: the half-open
   range is empty). Recommended.
-- **`step == 0`** → return an **empty** bitmap as well (recommended, keeps the
-  constructor total and allocation-safe), *or* return `error.InvalidStep` if we'd
-  rather make it loud. Pick one and state it in the doc comment.
+- **`step == 0`** → return an **empty** bitmap (decided). Keeps the constructor
+  total and allocation-safe, and the oracle normalization already maps CRoaring's
+  `NULL` (which CRoaring returns for `step == 0`) to empty, so this is a clean
+  match with no special-casing. State it in the doc comment.
 
 **Oracle normalization:** the difftest must map CRoaring's `NULL` return to
 "empty bitmap" before comparing — i.e. `from_range(...) == NULL` is treated as
@@ -30,8 +31,8 @@ agreement with rawr's empty result. Don't dereference the `NULL`.
 
 ## Implementation
 
-- Degenerate cases handled per the decision above (`max <= min` → empty;
-  `step == 0` → empty or `error.InvalidStep`).
+- Degenerate cases handled per the decision above: `max <= min` → empty;
+  `step == 0` → empty.
 - **`step == 1` fast path:** contiguous `[min, max)` → build via the inclusive
   `addRange(min, max - 1)` machinery (10-03) — but guard `max == 0` /
   `max - 1` underflow, and handle `max == 0` (empty). This reuses the efficient

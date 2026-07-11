@@ -28,23 +28,38 @@ let it block the rest of parity.
 
 | rawr 64-bit (new) | mirrors | Semantics |
 |---|---|---|
-| `frozenSizeInBytes() usize` | `FrozenBitmap` | size of the rawr frozen64 image |
+| `frozenSizeInBytes() !usize` | `FrozenBitmap` | size of the rawr frozen64 image |
 | `frozenSerialize(buf) !void` | `FrozenBitmap` | write the frozen64 image into `buf` |
-| `Frozen64Bitmap.view(bytes) !Frozen64Bitmap` | `FrozenBitmap` | zero-copy read-only view over the image |
+| `Frozen64Bitmap.view(bytes) !Frozen64Bitmap` | `FrozenBitmap` | **truly zero-copy** read-only view (no allocator) |
 | read-only ops on the view | — | `contains`, `cardinality`, `minimum`, `maximum`, `iterator`, `rank`, `select`, `getIndex` (no mutation) |
+
+**`frozenSizeInBytes` returns `!usize`** — same overflow policy as
+`serializedSizeInBytes` (10-04 / toplevel): a 64-bit frozen image can exceed
+`maxInt(usize)`; accumulate with checked arithmetic and return `error.Overflow`.
+`frozenSerialize` propagates it.
+
+**`view` takes no allocator and allocates nothing** (see layout below) — the
+signature `view(bytes) !Frozen64Bitmap` is honored literally; the only errors are
+malformed/misaligned input, not OOM.
 
 ## Implementation (option A)
 
-- Frozen64 image = frame header `{ u64 count, then per bucket: u32 hi + frozen
-  32-bit sub-image }`, where each sub-image is the existing 32-bit `FrozenBitmap`
-  layout. Respect the same alignment `FrozenBitmap` requires for its container
-  arrays (propagate per-bucket).
-- `Frozen64Bitmap` holds the borrowed byte slice + a parsed index of
-  `{ hi, FrozenBitmap-view }` per bucket (the sub-views borrow into `bytes`, no
-  copy). Read-only ops delegate to the per-bucket `FrozenBitmap` exactly as the
-  mutable type delegates to `RoaringBitmap`.
-- No allocation for the view beyond the small bucket index (or make even that a
-  borrowed slice if the layout permits an offset table).
+- Frozen64 image = frame header `{ u64 count, then an offset/key table: per bucket
+  `{ u32 hi, u64 offset }` , then the frozen 32-bit sub-images }`, where each
+  sub-image is the existing 32-bit `FrozenBitmap` layout. Respect the same
+  alignment `FrozenBitmap` requires for its container arrays (propagate per-bucket;
+  pad the offset table / sub-images so each 32-bit image starts at its required
+  alignment).
+- **The offset+key table lives *in the image*, so `view` is truly zero-copy** —
+  `Frozen64Bitmap` holds only the borrowed byte slice and locates a bucket's `hi`
+  and sub-image start by indexing into the borrowed table (binary search on `hi`).
+  It constructs a 32-bit `FrozenBitmap` sub-view on demand from the borrowed
+  bytes; **no owned bucket index, no allocation.** This is why `view` needs no
+  allocator — the "parsed index" is the in-image table, not a heap structure.
+- Read-only ops delegate to the per-bucket `FrozenBitmap` (constructed on the fly
+  from the borrowed table) exactly as the mutable type delegates to
+  `RoaringBitmap`. `view` validates the table bounds/alignment against `bytes.len`
+  and errors on malformed input — it never allocates.
 
 ## Wrapper decls (only if option B is chosen)
 
