@@ -24,7 +24,7 @@ Match `std.ArrayList` vocabulary so the API reads idiomatically:
 | method | replaces / adds | on |
 |---|---|---|
 | `initCapacity(allocator, container_capacity) !Self` | new | both |
-| `ensureTotalCapacity(container_capacity) !void` | new (public wrapper over the internal `ensureCapacity`) | both |
+| `ensureTotalCapacity(container_capacity) !void` | **rename** of the existing public `ensureCapacity`; keep `ensureCapacity` as an undocumented compat alias | both |
 | `clearRetainingCapacity() void` | **rename** `Roaring64Bitmap.clear` → this; **add** to `RoaringBitmap` | both |
 | `shrinkToFit() !usize` | already exists | both (verify) |
 
@@ -34,6 +34,19 @@ Rename `Roaring64Bitmap.clear()` → `clearRetainingCapacity()` (it just landed 
 
 `clearAndFree` (drop to minimal allocation) is **out of scope** — the issue only
 asks to retain capacity; add later if requested.
+
+**`ensureCapacity` is already public** on `RoaringBitmap` (not internal, as an
+earlier draft implied). Since external users may already call it: **rename to the
+Zig-idiomatic `ensureTotalCapacity`**, and keep `ensureCapacity` as a thin,
+undocumented compatibility alias delegating to it (migrate rawr's own internal
+callers to the new name). Same treatment on `Roaring64Bitmap` if it exposes an
+`ensureCapacity`.
+
+**Precise `clearRetainingCapacity` semantics** (an earlier draft overstated this):
+it retains **only the container index** — the top-level `keys`/`containers`
+(or `buckets`) array. It **deinitializes every live container**, so per-container
+array/run/bitset storage *is* freed. "Retaining capacity" = axis 1 only, never
+axis 2. The docs must say this exactly (see below).
 
 ## Semantics — reserve by *container count*, not element count
 
@@ -57,23 +70,56 @@ reporter):
 
 ## Implementation
 
+**Capacity rule (one rule, both types): allocate the *exact* requested capacity,
+including zero.** No `@max(cap, 1)`, no floor. `initCapacity(allocator, 0)` yields
+a valid empty bitmap with zero-length index arrays (Zig `alloc(T, 0)` is fine; the
+first insert grows via `ensureTotalCapacity`). Normal `init()` keeps requesting
+`INITIAL_CAPACITY` (4) — implement `init` as `initCapacity(allocator, INITIAL_CAPACITY)`
+so there's a single allocation path.
+
 **`RoaringBitmap`:**
-- `initCapacity(allocator, cap: u32) !Self` — like `init`, but allocate `keys` and
-  `containers` to `@max(cap, 1)` (or `INITIAL_CAPACITY` floor if you prefer a
-  minimum) instead of the hardcoded `INITIAL_CAPACITY = 4`. `size = 0`,
+- `initCapacity(allocator, cap: u32) !Self` — allocate `keys` and `containers` to
+  exactly `cap` (errdefer-free the first if the second fails). `size = 0`,
   `cached_cardinality = 0`.
-- `ensureTotalCapacity(self, cap: u32) !void` — public wrapper over the existing
-  internal `ensureCapacity` (grow the top-level arrays to hold `cap` containers;
-  no-op if already ≥). Does not touch `size` or contents.
+- `ensureTotalCapacity(self, cap: u32) !void` — the renamed `ensureCapacity`: grow
+  the top-level arrays to hold `cap` containers, no-op if already ≥. Does not touch
+  `size` or contents. **Must be OOM-safe — see below.** Keep `ensureCapacity` as a
+  compat alias calling this.
 - `clearRetainingCapacity(self) void` — deinit every live container, `size = 0`,
-  `cached_cardinality = 0`, **keep** the `keys`/`containers` allocation. (Mirror of
-  the existing `Roaring64Bitmap.clear` body.)
+  `cached_cardinality = 0`, **keep** the `keys`/`containers` allocation (container
+  index only; per-container storage is freed by the deinits).
 
 **`Roaring64Bitmap`:**
-- `initCapacity(allocator, cap: u32) !Self` — allocate the `buckets` array to `cap`.
-- `ensureTotalCapacity(self, cap: u32) !void` — public wrapper over its internal
-  `ensureCapacity`.
-- `clearRetainingCapacity` — the renamed `clear`.
+- `initCapacity(allocator, cap: u32) !Self` — allocate `buckets` to exactly `cap`;
+  `init` delegates to `initCapacity(allocator, INITIAL_CAPACITY)`.
+- `ensureTotalCapacity(self, cap: u32) !void` — renamed from its `ensureCapacity`
+  (+ compat alias), OOM-safe.
+- `clearRetainingCapacity` — the renamed `clear` (retains the bucket array; sub-
+  bitmaps are deinit'd).
+
+**OOM-safety fix (required — this is a real latent bug the public API exposes):**
+the current 32-bit growth path (`bitmap.zig:226`) frees/replaces `keys` *before*
+allocating the new `containers` array — if that second alloc fails, the bitmap is
+left inconsistent (freed `keys`, stale `containers`). Since reservation is now a
+deliberate public entry point, `ensureTotalCapacity` must **allocate both
+replacement arrays first, only mutate `self` once both succeed**, then free the old
+ones:
+
+```zig
+const new_keys = try allocator.alloc(u16, new_cap);
+errdefer allocator.free(new_keys);
+const new_containers = try allocator.alloc(TaggedPtr, new_cap);   // if THIS fails, new_keys is freed by errdefer, self untouched
+@memcpy(new_keys[0..self.size], self.keys[0..self.size]);
+@memcpy(new_containers[0..self.size], self.containers[0..self.size]);
+allocator.free(self.keys[0..self.capacity]);
+allocator.free(self.containers[0..self.capacity]);
+self.keys = new_keys; self.containers = new_containers; self.capacity = new_cap;
+```
+
+Apply the same allocate-both-before-mutate discipline to the 64-bit bucket growth
+if it has the same shape. Add an **allocation-failure test** (a failing/`checkAllPurpose`
+allocator that fails the Nth alloc) asserting the bitmap is unchanged and usable
+after a failed `ensureTotalCapacity`.
 
 All new methods `!`-return only where they allocate (`initCapacity`,
 `ensureTotalCapacity`); `clearRetainingCapacity` is infallible `void`.
@@ -112,17 +158,24 @@ the permanent project doc. Content:
 >
 > - `shrinkToFit()` releases unused capacity on both axes (returns approximate bytes
 >   freed) once you're done inserting.
-> - `clearRetainingCapacity()` empties the bitmap but keeps both axes' allocations,
->   so you can refill without re-allocating.
+> - `clearRetainingCapacity()` empties the bitmap and **keeps the container index**
+>   (axis 1) so you can refill without re-growing it. The per-container storage
+>   (axis 2) of the cleared containers is freed — retaining it would mean holding
+>   onto storage for containers that no longer exist.
 
 ## Tests
 
-- `initCapacity(n)`: construct, assert `capacity >= n` and `size == 0`; insert into
-  `n` distinct chunks and assert **no reallocation of the top-level array** occurred
-  (e.g. capture the `containers.ptr` and assert it's unchanged after the inserts).
+- `initCapacity(n)`: construct, assert `capacity == n` (exact) and `size == 0`;
+  insert into `n` distinct chunks and assert **no reallocation of the top-level
+  array** occurred (capture `containers.ptr`, assert unchanged after the inserts).
+- `initCapacity(0)`: valid empty bitmap; first insert grows cleanly; leak-free.
 - `ensureTotalCapacity`: grows to request, no-op when already large enough, contents
-  preserved.
-- `clearRetainingCapacity`: fill → clear → assert empty + capacity retained
+  preserved; `ensureCapacity` alias still compiles and behaves identically.
+- **Allocation-failure**: a failing allocator that fails the *second* index alloc
+  during a grow — assert `ensureTotalCapacity` returns `error.OutOfMemory` and the
+  bitmap is **unchanged and still usable** (old `keys`/`containers`/`size` intact,
+  subsequent ops work). This is the regression test for the OOM-safety fix.
+- `clearRetainingCapacity`: fill → clear → assert empty + index retained
   (`containers.ptr` unchanged) → refill works, leak-free under the checking GPA.
 - `shrinkToFit` after `clearRetainingCapacity` returns capacity to minimal (existing
   behavior; add a coverage test tying the two together).
@@ -130,9 +183,13 @@ the permanent project doc. Content:
 
 ## Acceptance
 
-- `initCapacity` + `ensureTotalCapacity` + `clearRetainingCapacity` on both types;
-  `Roaring64Bitmap.clear` renamed (no alias); `shrinkToFit` verified as the shrink
-  answer.
-- `API.md` carries the "How rawr bitmaps allocate" section.
+- `initCapacity` (exact cap, incl. 0) + `ensureTotalCapacity` (OOM-safe) +
+  `clearRetainingCapacity` on both types. `Roaring64Bitmap.clear` renamed (no
+  alias); `ensureCapacity` retained as an undocumented compat alias for
+  `ensureTotalCapacity`. `shrinkToFit` verified as the shrink answer.
+- `ensureTotalCapacity` allocates both replacement arrays before mutating `self`;
+  the allocation-failure test passes (bitmap unchanged on OOM).
+- `API.md` carries the "How rawr bitmaps allocate" section, with
+  `clearRetainingCapacity` documented as retaining the container index only.
 - `zig build test test64` green; no regression. No container-ABI change (independent
   of spec 11 / 11-04).
