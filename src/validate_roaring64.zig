@@ -261,7 +261,7 @@ fn validateClearOps(allocator: std.mem.Allocator) !void {
     const cr = try oracle.buildCRoaring(values[0..]);
     defer c.roaring64_bitmap_free(cr);
 
-    rbm.clear();
+    rbm.clearRetainingCapacity();
     c.roaring64_bitmap_clear(cr);
     try oracle.assertAgreement(allocator, &rbm, cr, values[0..]);
 

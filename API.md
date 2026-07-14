@@ -126,6 +126,41 @@ var owned = try RoaringBitmap.deserializeSafeOwned(backing_allocator, bytes);
 defer owned.deinit();
 ```
 
+### How rawr bitmaps allocate
+
+A Roaring bitmap is a sorted array of containers, one per distinct high-16 chunk
+of the value space, with up to 65,536 containers. There are two independent
+allocation axes:
+
+1. The container index: the top-level `keys` and `containers` arrays. These start
+   with four entries and grow geometrically as data spans more 16-bit chunks.
+2. Each container's storage: array, bitset, or run storage sized and selected
+   dynamically as values are inserted.
+
+When the expected number of chunks is known, pre-size the container index to
+avoid geometric regrowth:
+
+```zig
+// Expect values spread across about 1000 distinct high-16 chunks.
+var bm = try RoaringBitmap.initCapacity(allocator, 1000);
+defer bm.deinit();
+
+// The capacity can also be raised later without changing the contents.
+try bm.ensureTotalCapacity(2000);
+```
+
+Capacity is measured in containers, approximately the number of distinct high-16
+chunks. For `Roaring64Bitmap`, it is the number of high-32 buckets. It is not an
+element count: values map to containers unpredictably, and each container's type
+and storage are selected dynamically.
+
+`shrinkToFit()` releases unused index capacity and unused capacity in shrinkable
+containers, returning the approximate number of payload bytes freed.
+`clearRetainingCapacity()` empties the bitmap while keeping only the top-level
+container index, allowing it to be refilled without regrowing that index. Storage
+owned by the cleared containers is freed because those containers no longer
+exist.
+
 ## Mutation
 
 ```zig

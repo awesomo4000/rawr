@@ -24,6 +24,115 @@ test "init and deinit" {
     try std.testing.expectEqual(@as(u64, 0), bm.cardinality());
 }
 
+test "initCapacity reserves exact container capacity" {
+    const allocator = std.testing.allocator;
+    const requested: u32 = 8;
+    var bm = try RoaringBitmap.initCapacity(allocator, requested);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(requested, bm.capacity);
+    try std.testing.expectEqual(@as(u32, 0), bm.size);
+    const keys_ptr = bm.keys.ptr;
+    const containers_ptr = bm.containers.ptr;
+
+    for (0..requested) |chunk| {
+        _ = try bm.add(@as(u32, @intCast(chunk)) << 16);
+    }
+
+    try std.testing.expectEqual(requested, bm.size);
+    try std.testing.expectEqual(keys_ptr, bm.keys.ptr);
+    try std.testing.expectEqual(containers_ptr, bm.containers.ptr);
+}
+
+test "initCapacity zero grows on first insert" {
+    const allocator = std.testing.allocator;
+    var bm = try RoaringBitmap.initCapacity(allocator, 0);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), bm.capacity);
+    try std.testing.expect(bm.isEmpty());
+    try std.testing.expect(try bm.add(42));
+    try std.testing.expect(bm.contains(42));
+    try std.testing.expect(bm.capacity >= 1);
+}
+
+test "ensureTotalCapacity grows once and preserves contents" {
+    const allocator = std.testing.allocator;
+    var bm = try RoaringBitmap.initCapacity(allocator, 1);
+    defer bm.deinit();
+
+    _ = try bm.add(42);
+    try bm.ensureTotalCapacity(12);
+    try std.testing.expect(bm.capacity >= 12);
+    try std.testing.expect(bm.contains(42));
+
+    const keys_ptr = bm.keys.ptr;
+    const containers_ptr = bm.containers.ptr;
+    const capacity = bm.capacity;
+    try bm.ensureTotalCapacity(6);
+    try std.testing.expectEqual(capacity, bm.capacity);
+    try std.testing.expectEqual(keys_ptr, bm.keys.ptr);
+    try std.testing.expectEqual(containers_ptr, bm.containers.ptr);
+
+    try bm.ensureTotalCapacity(13);
+    try std.testing.expect(bm.capacity >= 13);
+    try std.testing.expect(bm.contains(42));
+}
+
+test "ensureTotalCapacity leaves bitmap unchanged when second allocation fails" {
+    const allocator = std.testing.allocator;
+    var bm = try RoaringBitmap.initCapacity(allocator, 2);
+    defer bm.deinit();
+
+    _ = try bm.add(1);
+    _ = try bm.add((@as(u32, 1) << 16) | 2);
+    const keys_ptr = bm.keys.ptr;
+    const containers_ptr = bm.containers.ptr;
+    const capacity = bm.capacity;
+
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 1 });
+    bm.allocator = failing.allocator();
+    try std.testing.expectError(error.OutOfMemory, bm.ensureTotalCapacity(8));
+    bm.allocator = allocator;
+
+    try std.testing.expectEqual(capacity, bm.capacity);
+    try std.testing.expectEqual(keys_ptr, bm.keys.ptr);
+    try std.testing.expectEqual(containers_ptr, bm.containers.ptr);
+    try std.testing.expectEqual(@as(u64, 2), bm.cardinality());
+    try std.testing.expect(bm.contains(1));
+    try std.testing.expect(bm.contains((@as(u32, 1) << 16) | 2));
+
+    _ = try bm.add((@as(u32, 2) << 16) | 3);
+    try std.testing.expectEqual(@as(u64, 3), bm.cardinality());
+}
+
+test "clearRetainingCapacity retains index and shrinkToFit releases it" {
+    const allocator = std.testing.allocator;
+    var bm = try RoaringBitmap.initCapacity(allocator, 8);
+    defer bm.deinit();
+
+    _ = try bm.add(1);
+    _ = try bm.add((@as(u32, 3) << 16) | 2);
+    const keys_ptr = bm.keys.ptr;
+    const containers_ptr = bm.containers.ptr;
+
+    bm.clearRetainingCapacity();
+    try std.testing.expect(bm.isEmpty());
+    try std.testing.expectEqual(@as(u64, 0), bm.cardinality());
+    try std.testing.expectEqual(@as(u32, 8), bm.capacity);
+    try std.testing.expectEqual(keys_ptr, bm.keys.ptr);
+    try std.testing.expectEqual(containers_ptr, bm.containers.ptr);
+
+    _ = try bm.add(99);
+    try std.testing.expect(bm.contains(99));
+    bm.clearRetainingCapacity();
+    try std.testing.expect((try bm.shrinkToFit()) > 0);
+    try std.testing.expectEqual(@as(u32, 0), bm.capacity);
+
+    _ = try bm.add(100);
+    try std.testing.expect(bm.contains(100));
+}
+
 test "add and contains" {
     const allocator = std.testing.allocator;
     var bm = try RoaringBitmap.init(allocator);

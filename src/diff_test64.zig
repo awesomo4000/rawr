@@ -356,7 +356,7 @@ fn runClearAgreement(allocator: std.mem.Allocator) !void {
     const cr = try oracle.buildCRoaring(values[0..]);
     defer c.roaring64_bitmap_free(cr);
 
-    rbm.clear();
+    rbm.clearRetainingCapacity();
     c.roaring64_bitmap_clear(cr);
 
     const probes = [_]u64{ 0, 1, (@as(u64, 17) << 32) | 42, std.math.maxInt(u64) };

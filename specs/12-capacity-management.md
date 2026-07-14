@@ -24,7 +24,7 @@ Match `std.ArrayList` vocabulary so the API reads idiomatically:
 | method | replaces / adds | on |
 |---|---|---|
 | `initCapacity(allocator, container_capacity) !Self` | new | both |
-| `ensureTotalCapacity(container_capacity) !void` | new public method (32-bit: rename of the already-public `ensureCapacity` + undocumented alias; 64-bit: rename of its *private* `ensureCapacity`, **no alias**) | both |
+| `ensureTotalCapacity(container_capacity) !void` | rename of the existing `ensureCapacity` (both types); **no alias — full rename** | both |
 | `clearRetainingCapacity() void` | **rename** `Roaring64Bitmap.clear` → this; **add** to `RoaringBitmap` | both |
 | `shrinkToFit() !usize` | already exists | both (verify) |
 
@@ -35,13 +35,16 @@ Rename `Roaring64Bitmap.clear()` → `clearRetainingCapacity()` (it just landed 
 `clearAndFree` (drop to minimal allocation) is **out of scope** — the issue only
 asks to retain capacity; add later if requested.
 
-**`ensureCapacity` is already public** on `RoaringBitmap` (not internal, as an
-earlier draft implied). Since external users may already call it: **rename to the
-Zig-idiomatic `ensureTotalCapacity`**, and keep `ensureCapacity` as a thin,
-undocumented compatibility alias delegating to it (migrate rawr's own internal
-callers to the new name). **`Roaring64Bitmap`'s `ensureCapacity` is *private*** —
-there's no external API to preserve, so just rename it to `ensureTotalCapacity`
-(now public) and add **no alias**. Alias lives on the 32-bit type only.
+**`ensureCapacity` → `ensureTotalCapacity`, full rename, no alias.** The 32-bit
+`ensureCapacity` was public, but it is **not referenced in any docs**, rawr has
+**no release tags** (unreleased → no compat owed), and **no code calls it** — every
+internal grow path already uses `ensureTotalCapacity`. So there's nothing to
+preserve: rename it and delete `ensureCapacity` on both types. (The 64-bit one was
+private anyway.) Migrate the one lingering caller — a test at `bitmap_tests.zig:77`
+— to `ensureTotalCapacity` and drop the alias-specific test.
+
+> Note: the `ensureCapacity(allocator, ...)` methods on `ArrayContainer` /
+> `RunContainer` are a *different*, container-level API and are untouched by this.
 
 **Precise `clearRetainingCapacity` semantics** (an earlier draft overstated this):
 it retains **only the container index** — the top-level `keys`/`containers`
@@ -84,8 +87,7 @@ so there's a single allocation path.
   `cached_cardinality = 0`.
 - `ensureTotalCapacity(self, cap: u32) !void` — the renamed `ensureCapacity`: grow
   the top-level arrays to hold `cap` containers, no-op if already ≥. Does not touch
-  `size` or contents. **Must be OOM-safe — see below.** Keep `ensureCapacity` as a
-  compat alias calling this.
+  `size` or contents. **Must be OOM-safe — see below.** No alias — full rename.
 - `clearRetainingCapacity(self) void` — deinit every live container, `size = 0`,
   `cached_cardinality = 0`, **keep** the `keys`/`containers` allocation (container
   index only; per-container storage is freed by the deinits).
@@ -93,8 +95,8 @@ so there's a single allocation path.
 **`Roaring64Bitmap`:**
 - `initCapacity(allocator, cap: u32) !Self` — allocate `buckets` to exactly `cap`;
   `init` delegates to `initCapacity(allocator, INITIAL_CAPACITY)`.
-- `ensureTotalCapacity(self, cap: u32) !void` — renamed from its **private**
-  `ensureCapacity` (no alias — nothing public to preserve), OOM-safe.
+- `ensureTotalCapacity(self, cap: u32) !void` — renamed from its `ensureCapacity`
+  (no alias), OOM-safe.
 - `clearRetainingCapacity` — the renamed `clear` (retains the bucket array; sub-
   bitmaps are deinit'd).
 
@@ -185,8 +187,7 @@ the permanent project doc. Content:
   array** occurred (capture `containers.ptr`, assert unchanged after the inserts).
 - `initCapacity(0)`: valid empty bitmap; first insert grows cleanly; leak-free.
 - `ensureTotalCapacity`: grows to request, no-op when already large enough, contents
-  preserved. On `RoaringBitmap` only, the `ensureCapacity` alias still compiles and
-  behaves identically (no alias test on `Roaring64Bitmap` — it has none).
+  preserved. (No `ensureCapacity` alias — it's a full rename; drop any alias test.)
 - Overflow-safe growth: `ensureTotalCapacity` with a very large `cap` does not
   overflow the doubling (saturates); a normal small grow is unaffected.
 - **Allocation-failure**: a failing allocator that fails the *second* index alloc
@@ -203,9 +204,9 @@ the permanent project doc. Content:
 
 - `initCapacity` (exact cap, incl. 0) + `ensureTotalCapacity` (OOM-safe) +
   `clearRetainingCapacity` on both types. `Roaring64Bitmap.clear` renamed (no
-  alias); on `RoaringBitmap` only, `ensureCapacity` retained as an undocumented
-  compat alias for `ensureTotalCapacity` (64-bit's was private → renamed, no alias).
-  `shrinkToFit` verified as the shrink answer.
+  alias); `ensureCapacity` fully renamed to `ensureTotalCapacity` on both types
+  (no alias — unreleased, undocumented, no callers). `shrinkToFit` verified as the
+  shrink answer.
 - `ensureTotalCapacity` allocates both replacement arrays before mutating `self`
   and uses saturating (`*|`) doubling; the allocation-failure test passes (bitmap
   unchanged on OOM).

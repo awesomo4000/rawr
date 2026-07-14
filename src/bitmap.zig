@@ -51,16 +51,22 @@ pub const RoaringBitmap = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator) !Self {
-        const keys = try allocator.alloc(u16, INITIAL_CAPACITY);
+        return initCapacity(allocator, INITIAL_CAPACITY);
+    }
+
+    /// Initialize an empty bitmap with space for exactly `container_capacity`
+    /// top-level containers.
+    pub fn initCapacity(allocator: std.mem.Allocator, container_capacity: u32) !Self {
+        const keys = try allocator.alloc(u16, container_capacity);
         errdefer allocator.free(keys);
 
-        const containers = try allocator.alloc(TaggedPtr, INITIAL_CAPACITY);
+        const containers = try allocator.alloc(TaggedPtr, container_capacity);
 
         return .{
             .keys = keys,
             .containers = containers,
             .size = 0,
-            .capacity = INITIAL_CAPACITY,
+            .capacity = container_capacity,
             .allocator = allocator,
             .cached_cardinality = 0,
         };
@@ -80,7 +86,7 @@ pub const RoaringBitmap = struct {
         var result = try Self.init(allocator);
         errdefer result.deinit();
 
-        try result.ensureCapacity(self.size);
+        try result.ensureTotalCapacity(self.size);
 
         for (self.containers[0..self.size], self.keys[0..self.size], 0..) |tp, key, i| {
             const cloned = try Container.fromTagged(tp).clone(allocator);
@@ -217,23 +223,38 @@ pub const RoaringBitmap = struct {
         return lo;
     }
 
-    /// Grow capacity if needed.
-    pub fn ensureCapacity(self: *Self, needed: u32) !void {
+    fn grownCapacity(current: u32, needed: u32) u32 {
+        return @max(current *| 2, needed);
+    }
+
+    /// Ensure space for at least `needed` top-level containers.
+    pub fn ensureTotalCapacity(self: *Self, needed: u32) !void {
         if (needed <= self.capacity) return;
 
-        const new_cap = @max(self.capacity * 2, needed);
+        const new_cap = grownCapacity(self.capacity, needed);
 
         const new_keys = try self.allocator.alloc(u16, new_cap);
-        @memcpy(new_keys[0..self.size], self.keys[0..self.size]);
-        self.allocator.free(self.keys[0..self.capacity]);
-        self.keys = new_keys;
+        errdefer self.allocator.free(new_keys);
 
         const new_containers = try self.allocator.alloc(TaggedPtr, new_cap);
-        @memcpy(new_containers[0..self.size], self.containers[0..self.size]);
-        self.allocator.free(self.containers[0..self.capacity]);
-        self.containers = new_containers;
 
+        @memcpy(new_keys[0..self.size], self.keys[0..self.size]);
+        @memcpy(new_containers[0..self.size], self.containers[0..self.size]);
+
+        self.allocator.free(self.keys[0..self.capacity]);
+        self.allocator.free(self.containers[0..self.capacity]);
+        self.keys = new_keys;
+        self.containers = new_containers;
         self.capacity = new_cap;
+    }
+
+    /// Remove all values while retaining the top-level container index.
+    pub fn clearRetainingCapacity(self: *Self) void {
+        for (self.containers[0..self.size]) |tp| {
+            Container.fromTagged(tp).deinit(self.allocator);
+        }
+        self.size = 0;
+        self.cached_cardinality = 0;
     }
 
     /// Shrink internal arrays and shrinkable containers to current size.
@@ -455,7 +476,7 @@ pub const RoaringBitmap = struct {
 
         // Need to create new container
         const insert_idx = self.lowerBound(key);
-        try self.ensureCapacity(self.size + 1);
+        try self.ensureTotalCapacity(self.size + 1);
 
         // Shift right to make room
         if (insert_idx < self.size) {
@@ -560,7 +581,7 @@ pub const RoaringBitmap = struct {
 
         var result = try Self.init(allocator);
         errdefer result.deinit();
-        try result.ensureCapacity(container_count);
+        try result.ensureTotalCapacity(container_count);
 
         // Process each chunk
         var chunk_start: usize = 0;
@@ -672,7 +693,7 @@ pub const RoaringBitmap = struct {
 
     /// Insert a new container at the given index.
     fn insertContainerAt(self: *Self, idx: usize, key: u16, low: u16) !void {
-        try self.ensureCapacity(self.size + 1);
+        try self.ensureTotalCapacity(self.size + 1);
 
         // Shift right to make room
         if (idx < self.size) {
@@ -1544,7 +1565,7 @@ pub const RoaringBitmap = struct {
 
     /// Insert a tagged container at the given position, shifting existing containers.
     fn insertTaggedContainerAt(self: *Self, pos: usize, key: u16, tp: TaggedPtr) !void {
-        try self.ensureCapacity(self.size + 1);
+        try self.ensureTotalCapacity(self.size + 1);
         // Shift elements right
         var k: usize = self.size;
         while (k > pos) : (k -= 1) {
@@ -1807,7 +1828,7 @@ pub const RoaringBitmap = struct {
 
     /// Append a container (assumes keys are in sorted order).
     fn appendContainer(self: *Self, key: u16, tp: TaggedPtr) !void {
-        try self.ensureCapacity(self.size + 1);
+        try self.ensureTotalCapacity(self.size + 1);
         self.keys[self.size] = key;
         self.containers[self.size] = tp;
         self.size += 1;
@@ -2333,6 +2354,14 @@ pub const RoaringBitmap = struct {
     /// - `std.heap.ArenaAllocator`: fast batch alloc, bulk free only
     pub const allocator_guidance = void;
 };
+
+test "RoaringBitmap capacity growth saturates" {
+    try std.testing.expectEqual(@as(u32, 8), RoaringBitmap.grownCapacity(4, 5));
+    try std.testing.expectEqual(
+        std.math.maxInt(u32),
+        RoaringBitmap.grownCapacity(std.math.maxInt(u32) - 1, 1),
+    );
+}
 
 /// A RoaringBitmap that owns its memory via an arena allocator.
 /// All internal allocations use bump-pointer allocation for speed.

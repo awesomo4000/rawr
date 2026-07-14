@@ -78,12 +78,18 @@ pub const Roaring64Bitmap = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator) !Self {
-        const buckets = try allocator.alloc(Bucket, INITIAL_CAPACITY);
+        return initCapacity(allocator, INITIAL_CAPACITY);
+    }
+
+    /// Initialize an empty bitmap with space for exactly `bucket_capacity`
+    /// high-32 buckets.
+    pub fn initCapacity(allocator: std.mem.Allocator, bucket_capacity: u32) !Self {
+        const buckets = try allocator.alloc(Bucket, bucket_capacity);
 
         return .{
             .buckets = buckets,
             .size = 0,
-            .capacity = INITIAL_CAPACITY,
+            .capacity = bucket_capacity,
             .allocator = allocator,
             .cached_cardinality = 0,
             .version = 0,
@@ -98,7 +104,7 @@ pub const Roaring64Bitmap = struct {
     }
 
     /// Remove all values while retaining the bucket-array allocation.
-    pub fn clear(self: *Self) void {
+    pub fn clearRetainingCapacity(self: *Self) void {
         for (self.buckets[0..self.size]) |*bucket| {
             bucket.bm.deinit();
         }
@@ -112,7 +118,7 @@ pub const Roaring64Bitmap = struct {
         var result = try Self.init(allocator);
         errdefer result.deinit();
 
-        try result.ensureCapacity(self.size);
+        try result.ensureTotalCapacity(self.size);
 
         for (self.buckets[0..self.size]) |*bucket| {
             const cloned = try bucket.bm.clone(allocator);
@@ -176,7 +182,7 @@ pub const Roaring64Bitmap = struct {
 
         var result = try Self.init(allocator);
         errdefer result.deinit();
-        try result.ensureCapacity(bucket_count);
+        try result.ensureTotalCapacity(bucket_count);
 
         var total: u64 = 0;
         var chunk_start: usize = 0;
@@ -1023,7 +1029,7 @@ pub const Roaring64Bitmap = struct {
         var result = try Self.init(allocator);
         errdefer result.deinit();
 
-        try result.ensureCapacity(@intCast(bucket_count));
+        try result.ensureTotalCapacity(@intCast(bucket_count));
 
         var offset: usize = 8;
         var total: u64 = 0;
@@ -1198,7 +1204,7 @@ pub const Roaring64Bitmap = struct {
         var owned = bm;
         errdefer owned.deinit();
 
-        try self.ensureCapacity(self.size + 1);
+        try self.ensureTotalCapacity(self.size + 1);
         self.buckets[self.size] = .{
             .hi = hi_key,
             .bm = owned,
@@ -1289,10 +1295,15 @@ pub const Roaring64Bitmap = struct {
         };
     }
 
-    fn ensureCapacity(self: *Self, needed: u32) !void {
+    fn grownCapacity(current: u32, needed: u32) u32 {
+        return @max(current *| 2, needed);
+    }
+
+    /// Ensure space for at least `needed` high-32 buckets.
+    pub fn ensureTotalCapacity(self: *Self, needed: u32) !void {
         if (needed <= self.capacity) return;
 
-        const new_cap = @max(self.capacity * 2, needed);
+        const new_cap = grownCapacity(self.capacity, needed);
         const new_buckets = try self.allocator.alloc(Bucket, new_cap);
         @memcpy(new_buckets[0..self.size], self.buckets[0..self.size]);
         self.allocator.free(self.buckets[0..self.capacity]);
@@ -1301,7 +1312,7 @@ pub const Roaring64Bitmap = struct {
     }
 
     fn insertEmptyBucketAt(self: *Self, idx: usize, hi_key: u32) !void {
-        try self.ensureCapacity(self.size + 1);
+        try self.ensureTotalCapacity(self.size + 1);
 
         var bm = try RoaringBitmap.init(self.allocator);
         errdefer bm.deinit();
@@ -1910,7 +1921,84 @@ test "Roaring64Bitmap runOptimize and shrinkToFit" {
     try expectNoEmptyBuckets(&bm);
 }
 
-test "Roaring64Bitmap clear retains capacity and remains reusable" {
+test "Roaring64Bitmap initCapacity reserves exact bucket capacity" {
+    const allocator = std.testing.allocator;
+    const requested: u32 = 4;
+    var bm = try Roaring64Bitmap.initCapacity(allocator, requested);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(requested, bm.capacity);
+    try std.testing.expectEqual(@as(u32, 0), bm.size);
+    const buckets_ptr = bm.buckets.ptr;
+
+    for (0..requested) |hi| {
+        _ = try bm.add((@as(u64, @intCast(hi)) << 32) | 1);
+    }
+
+    try std.testing.expectEqual(requested, bm.size);
+    try std.testing.expectEqual(buckets_ptr, bm.buckets.ptr);
+}
+
+test "Roaring64Bitmap initCapacity zero grows on first insert" {
+    const allocator = std.testing.allocator;
+    var bm = try Roaring64Bitmap.initCapacity(allocator, 0);
+    defer bm.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), bm.capacity);
+    try std.testing.expect(bm.isEmpty());
+    _ = try bm.add((@as(u64, 7) << 32) | 42);
+    try std.testing.expect(bm.contains((@as(u64, 7) << 32) | 42));
+    try std.testing.expect(bm.capacity >= 1);
+}
+
+test "Roaring64Bitmap ensureTotalCapacity preserves contents" {
+    const allocator = std.testing.allocator;
+    var bm = try Roaring64Bitmap.initCapacity(allocator, 1);
+    defer bm.deinit();
+
+    _ = try bm.add(42);
+    try bm.ensureTotalCapacity(12);
+    try std.testing.expect(bm.capacity >= 12);
+    try std.testing.expect(bm.contains(42));
+
+    const buckets_ptr = bm.buckets.ptr;
+    const capacity = bm.capacity;
+    try bm.ensureTotalCapacity(6);
+    try std.testing.expectEqual(capacity, bm.capacity);
+    try std.testing.expectEqual(buckets_ptr, bm.buckets.ptr);
+}
+
+test "Roaring64Bitmap ensureTotalCapacity is unchanged on allocation failure" {
+    const allocator = std.testing.allocator;
+    var bm = try Roaring64Bitmap.initCapacity(allocator, 1);
+    defer bm.deinit();
+
+    _ = try bm.add(42);
+    const buckets_ptr = bm.buckets.ptr;
+    const capacity = bm.capacity;
+
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    bm.allocator = failing.allocator();
+    try std.testing.expectError(error.OutOfMemory, bm.ensureTotalCapacity(8));
+    bm.allocator = allocator;
+
+    try std.testing.expectEqual(capacity, bm.capacity);
+    try std.testing.expectEqual(buckets_ptr, bm.buckets.ptr);
+    try std.testing.expect(bm.contains(42));
+
+    _ = try bm.add((@as(u64, 1) << 32) | 7);
+    try std.testing.expectEqual(@as(u64, 2), bm.cardinality());
+}
+
+test "Roaring64Bitmap capacity growth saturates" {
+    try std.testing.expectEqual(@as(u32, 8), Roaring64Bitmap.grownCapacity(4, 5));
+    try std.testing.expectEqual(
+        std.math.maxInt(u32),
+        Roaring64Bitmap.grownCapacity(std.math.maxInt(u32) - 1, 1),
+    );
+}
+
+test "Roaring64Bitmap clearRetainingCapacity retains capacity and remains reusable" {
     const allocator = std.testing.allocator;
     var bm = try Roaring64Bitmap.init(allocator);
     defer bm.deinit();
@@ -1920,7 +2008,7 @@ test "Roaring64Bitmap clear retains capacity and remains reusable" {
     const capacity = bm.capacity;
     const buckets_ptr = bm.buckets.ptr;
 
-    bm.clear();
+    bm.clearRetainingCapacity();
     try std.testing.expect(bm.isEmpty());
     try std.testing.expectEqual(@as(u32, 0), bm.size);
     try std.testing.expectEqual(@as(u64, 0), bm.cardinality());
@@ -1929,6 +2017,13 @@ test "Roaring64Bitmap clear retains capacity and remains reusable" {
 
     _ = try bm.add((@as(u64, 4) << 32) | 5);
     try std.testing.expect(bm.contains((@as(u64, 4) << 32) | 5));
+
+    bm.clearRetainingCapacity();
+    try std.testing.expect((try bm.shrinkToFit()) > 0);
+    try std.testing.expectEqual(@as(u32, 0), bm.capacity);
+
+    _ = try bm.add((@as(u64, 5) << 32) | 6);
+    try std.testing.expect(bm.contains((@as(u64, 5) << 32) | 6));
 }
 
 test "Roaring64Bitmap fromRange stepped half-open" {

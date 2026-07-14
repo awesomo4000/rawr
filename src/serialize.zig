@@ -309,7 +309,7 @@ pub fn deserializeFromReader(allocator: std.mem.Allocator, reader: anytype, data
     var result = try RoaringBitmap.init(allocator);
     errdefer result.deinit();
 
-    try result.ensureCapacity(size);
+    try result.ensureTotalCapacity(size);
 
     // Read descriptive header (bulk read as packed u16 pairs)
     var cardinalities = try allocator.alloc(u32, size);
