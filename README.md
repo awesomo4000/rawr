@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: MPL-2.0 -->
 
-<img src="img/rawr.png" alt="rawr" width="180" align="left">
-
 # rawr
+
+<img src="img/rawr.png" alt="rawr" width="180" align="left">
 
 Roaring bitmap library in pure Zig. Wire-compatible with CRoaring (serialized
 bitmaps interoperate across implementations). No C dependencies.
