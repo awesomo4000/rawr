@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07-10: In-place container XOR / difference (finish the in-place pattern)
 
 Post-umbrella perf fix. **Behavior-preserving** — no API/result change. Closes the

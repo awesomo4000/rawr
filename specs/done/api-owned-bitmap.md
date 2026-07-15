@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # API: OwnedBitmap for Arena-Backed Operations
 
 **Applies to:** `src/bitmap.zig`

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 // Minimal CRoaring wrapper for Zig translate-c bindings.
 // Only exposes the portable serialization API we need for interop testing.
 

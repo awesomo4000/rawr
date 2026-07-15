@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07-08: Consolidate the two-way key-merge-join (refactor)
 
 Closing piece of the [parity umbrella](07-parity-inventory.md). **Not a feature —

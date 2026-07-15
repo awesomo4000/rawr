@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-20: `Roaring64Bitmap` internals refactor
 
 **Refactor / prettification — the post-parity pass.** No behavior change, no new

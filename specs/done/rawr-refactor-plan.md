@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # rawr bitmap.zig Refactor Plan
 
 **Based on:** commit `4a4ea8a` (HEAD of `main`)

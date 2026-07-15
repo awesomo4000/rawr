@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Optimization: Branchless Merge Walk for Array Containers
 
 **Applies to:** `src/container_ops.zig`

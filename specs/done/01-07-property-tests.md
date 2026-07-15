@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 01-07: Property tests over the mixed generator + oracle-anchored identities
 
 Chunk of [`01-differential-testing.md`](01-differential-testing.md). Splits into

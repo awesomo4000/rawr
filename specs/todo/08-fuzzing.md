@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 08: Coverage-guided differential fuzzing
 
 ## Goal

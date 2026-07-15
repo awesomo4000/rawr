@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Experiment: Allocator Matrix Benchmark
 
 **File:** `src/bench_allocators.zig` (new, separate from `bench_croaring.zig`)

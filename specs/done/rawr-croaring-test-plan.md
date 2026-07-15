@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # CRoaring Interop Validation & Perf Comparison
 
 ## Prerequisites

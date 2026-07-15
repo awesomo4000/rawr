@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 06: Make `validate()` a total function (no panics)
 
 ## Goal

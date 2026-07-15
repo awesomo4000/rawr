@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07-06: Lazy union/xor + repair
 
 Sixth piece of the [CRoaring parity effort](07-parity-inventory.md). Closes the

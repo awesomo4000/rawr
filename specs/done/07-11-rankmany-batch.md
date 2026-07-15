@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07-11: Batch `rankMany` (single-sweep per container)
 
 Post-umbrella perf fix. **Behavior-preserving** — no API/result change. Closes the

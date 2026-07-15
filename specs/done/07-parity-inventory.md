@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07: CRoaring parity inventory (planning reference)
 
 **This is a living reference / menu, not an implementation spec.** It maps every

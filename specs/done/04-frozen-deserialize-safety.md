@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 04: FrozenBitmap bounds-validation (malformed-input safety)
 
 ## Goal

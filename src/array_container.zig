@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 const std = @import("std");
 
 /// Sorted array container for low-cardinality chunks (≤4096 elements).

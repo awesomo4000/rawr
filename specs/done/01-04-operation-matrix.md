@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 01-04: The differential operation matrix
 
 Chunk of [`01-differential-testing.md`](01-differential-testing.md). The breadth

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 const std = @import("std");
 const ArrayContainer = @import("array_container.zig").ArrayContainer;
 const BitsetContainer = @import("bitset_container.zig").BitsetContainer;

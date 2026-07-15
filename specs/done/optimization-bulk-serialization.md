@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Optimization: Bulk I/O for Serialize/Deserialize
 
 ## Problem

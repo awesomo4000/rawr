@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 11: Array kernel parity + container layout (umbrella)
 
 Perf work identified by kernel-level benchmarking against CRoaring.

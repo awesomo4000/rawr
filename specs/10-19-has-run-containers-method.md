@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-19: `hasRunContainers` as a bitmap method (dedup)
 
 **Refactor / cleanup — parked for the post-parity refactoring pass**, not part of

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Review: Cardinality Caching + fromSorted Bug
 
 ## Cardinality Cache Review

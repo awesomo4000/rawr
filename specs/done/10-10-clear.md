@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-10: `Roaring64Bitmap` clear
 
 Phase-2 parity chunk of [64-bit Roaring](10-roaring64.md). Reset a bitmap to

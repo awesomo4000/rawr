@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 const std = @import("std");
 const FrozenBitmap = @import("frozen.zig").FrozenBitmap;
 

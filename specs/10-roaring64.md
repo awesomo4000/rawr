@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10: 64-bit Roaring bitmaps (`Roaring64Bitmap`)
 
 A new public type that extends the value domain from `u32` to `u64`. It is an
@@ -116,7 +118,7 @@ loops (generated-case round-trips, seconds); bench/perf are the slow ones.
 | step | when | speed | notes |
 |---|---|---|---|
 | `test64` | 10-00 | fast | focused subset during bring-up; folds into `test` automatically once `roaring64.zig` is imported from `roaring.zig` |
-| `validate64` | 10-00 (stub) → real from 10-01 | fast | needs `roaring64_*` decls added to `vendor/croaring_wrapper.h` (already compiled in the amalgam — no amalgam change) |
+| `validate64` | 10-00 (stub) → real from 10-01 | fast | needs `roaring64_*` decls added to `tools/croaring_wrapper.h` (already compiled in the amalgam — no amalgam change) |
 | `difftest64` | 10-00 (stub) → real from 10-01 | fast | parallel to `difftest`, separate program |
 | `bench64` / `bench-compare64` | **deferred, post-parity** | slow | correctness-first; no point benchmarking before parity |
 
@@ -128,7 +130,7 @@ imported from `roaring.zig`, its inline `test {}` blocks run under the default
 
 The vendored `vendor/roaring.c` amalgam already compiles the full
 `roaring64_bitmap_*` API (declared in `vendor/roaring.h`). Our minimal
-`vendor/croaring_wrapper.h` only exposes the 32-bit subset, so `validate64` /
+`tools/croaring_wrapper.h` only exposes the 32-bit subset, so `validate64` /
 `difftest64` just need the relevant `roaring64_*` declarations added to the
 wrapper header — **no change to the vendored amalgam.**
 

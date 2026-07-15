@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 05: `deserialize` hardening + semantic `validate()`
 
 ## Goal

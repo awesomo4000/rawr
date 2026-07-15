@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-08: `Roaring64Bitmap` jaccardIndex
 
 Phase-2 parity chunk of [64-bit Roaring](10-roaring64.md). The Jaccard similarity

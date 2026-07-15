@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-01: `Roaring64Bitmap` core per-value operations
 
 First feature piece of [64-bit Roaring](10-roaring64.md). Builds on the

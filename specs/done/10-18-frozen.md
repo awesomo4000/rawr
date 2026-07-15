@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-18: `Roaring64Bitmap` frozen (zero-copy read-only view)
 
 Final Phase-2 parity chunk of [64-bit Roaring](10-roaring64.md), and the **large**

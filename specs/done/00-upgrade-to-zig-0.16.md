@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec: Upgrade rawr to Zig 0.16.0
 
 ## Goal

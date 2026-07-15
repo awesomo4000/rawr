@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-06: Roaring64 test-support consolidation
 
 Cleanup chunk. By the end of v1 (10-00 … 10-05) the 64-bit test code accumulated

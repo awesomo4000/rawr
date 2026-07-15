@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Cache Cardinality at Bitmap Level
 
 ## Problem

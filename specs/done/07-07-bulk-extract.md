@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07-07: Bulk add/remove + array extract
 
 Seventh piece of the [CRoaring parity effort](07-parity-inventory.md). Batch

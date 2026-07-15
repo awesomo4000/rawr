@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Rawr: A high-performance Roaring Bitmap implementation in Zig.
 //!
 //! Roaring bitmaps partition 32-bit integers into chunks of 2^16 values.

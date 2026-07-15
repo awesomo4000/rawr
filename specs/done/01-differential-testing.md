@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec: Differential Test Suite for `rawr` (CRoaring Parity)
 
 ## Goal

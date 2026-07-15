@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Refactor: bitmap.zig (2700 → ~1500 lines)
 
 Two commits, each independently testable.

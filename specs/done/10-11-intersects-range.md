@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-11: `Roaring64Bitmap` intersectsRange
 
 Phase-2 parity chunk of [64-bit Roaring](10-roaring64.md). Whether the bitmap has

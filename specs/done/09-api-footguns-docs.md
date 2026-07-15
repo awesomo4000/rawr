@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 09: API footguns + documentation completeness
 
 First concrete piece of the API/ergonomics work (see

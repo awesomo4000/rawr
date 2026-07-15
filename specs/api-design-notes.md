@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # API-design pass — running notes
 
 Scratchpad of topics for the upcoming ergonomics/clarity pass: making rawr's API

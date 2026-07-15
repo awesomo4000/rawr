@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # OwnedBitmap: Switch deserializeOwned to FBA
 
 **Based on:** Allocator matrix experiment (`bench_allocators.zig --matrix`, 5 runs)

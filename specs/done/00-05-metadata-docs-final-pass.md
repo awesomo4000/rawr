@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 00-05: Metadata, Docs, And Final Validation
 
 ## Goal

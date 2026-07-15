@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -66,8 +68,6 @@ pub fn build(b: *std.Build) void {
         .name = "bench",
         .root_module = bench_mod,
     });
-    b.installArtifact(bench_exe);
-
     const bench_step = b.step("bench", "Build benchmarks");
     bench_step.dependOn(&b.addInstallArtifact(bench_exe, .{}).step);
 
@@ -80,7 +80,7 @@ pub fn build(b: *std.Build) void {
     validate_mod.addImport("rawr", bench_lib_mod);
     addBenchmarkPlatformShim(b, validate_mod, target);
     addTranslatedCImport(b, validate_mod, .{
-        .header = "vendor/croaring_wrapper.h",
+        .header = "tools/croaring_wrapper.h",
         .include_dir = "vendor/",
         .c_source = "vendor/roaring.c",
         .croaring_avx512 = croaring_avx512,
@@ -92,8 +92,6 @@ pub fn build(b: *std.Build) void {
         .name = "validate_croaring",
         .root_module = validate_mod,
     });
-    b.installArtifact(validate_exe);
-
     const validate_step = b.step("validate", "Run CRoaring interop validation");
     const run_validate = b.addRunArtifact(validate_exe);
     validate_step.dependOn(&run_validate.step);
@@ -106,7 +104,7 @@ pub fn build(b: *std.Build) void {
     validate64_mod.addImport("rawr", bench_lib_mod);
     addBenchmarkPlatformShim(b, validate64_mod, target);
     addTranslatedCImport(b, validate64_mod, .{
-        .header = "vendor/croaring_wrapper.h",
+        .header = "tools/croaring_wrapper.h",
         .include_dir = "vendor/",
         .c_source = "vendor/roaring.c",
         .croaring_avx512 = croaring_avx512,
@@ -118,8 +116,6 @@ pub fn build(b: *std.Build) void {
         .name = "validate_roaring64",
         .root_module = validate64_mod,
     });
-    b.installArtifact(validate64_exe);
-
     const validate64_step = b.step("validate64", "Run CRoaring roaring64 interop validation");
     const run_validate64 = b.addRunArtifact(validate64_exe);
     validate64_step.dependOn(&run_validate64.step);
@@ -133,7 +129,7 @@ pub fn build(b: *std.Build) void {
     difftest_mod.addImport("rawr", bench_lib_mod);
     addBenchmarkPlatformShim(b, difftest_mod, target);
     addTranslatedCImport(b, difftest_mod, .{
-        .header = "vendor/croaring_wrapper.h",
+        .header = "tools/croaring_wrapper.h",
         .include_dir = "vendor/",
         .c_source = "vendor/roaring.c",
         .croaring_avx512 = croaring_avx512,
@@ -145,8 +141,6 @@ pub fn build(b: *std.Build) void {
         .name = "diff_test",
         .root_module = difftest_mod,
     });
-    b.installArtifact(difftest_exe);
-
     const difftest_step = b.step("difftest", "Differential tests vs CRoaring");
     const run_difftest = b.addRunArtifact(difftest_exe);
     difftest_step.dependOn(&run_difftest.step);
@@ -159,7 +153,7 @@ pub fn build(b: *std.Build) void {
     difftest64_mod.addImport("rawr", bench_lib_mod);
     addBenchmarkPlatformShim(b, difftest64_mod, target);
     addTranslatedCImport(b, difftest64_mod, .{
-        .header = "vendor/croaring_wrapper.h",
+        .header = "tools/croaring_wrapper.h",
         .include_dir = "vendor/",
         .c_source = "vendor/roaring.c",
         .croaring_avx512 = croaring_avx512,
@@ -171,8 +165,6 @@ pub fn build(b: *std.Build) void {
         .name = "diff_test64",
         .root_module = difftest64_mod,
     });
-    b.installArtifact(difftest64_exe);
-
     const difftest64_step = b.step("difftest64", "Differential tests vs CRoaring roaring64");
     const run_difftest64 = b.addRunArtifact(difftest64_exe);
     difftest64_step.dependOn(&run_difftest64.step);
@@ -186,7 +178,7 @@ pub fn build(b: *std.Build) void {
     bench_cr_mod.addImport("rawr", bench_lib_mod);
     addBenchmarkPlatformShim(b, bench_cr_mod, target);
     addTranslatedCImport(b, bench_cr_mod, .{
-        .header = "vendor/croaring_wrapper.h",
+        .header = "tools/croaring_wrapper.h",
         .include_dir = "vendor/",
         .c_source = "vendor/roaring.c",
         .croaring_avx512 = croaring_avx512,
@@ -198,8 +190,6 @@ pub fn build(b: *std.Build) void {
         .name = "bench_croaring",
         .root_module = bench_cr_mod,
     });
-    b.installArtifact(bench_cr_exe);
-
     const bench_cr_step = b.step("bench-compare", "Build CRoaring comparison benchmarks");
     bench_cr_step.dependOn(&b.addInstallArtifact(bench_cr_exe, .{}).step);
 
@@ -217,8 +207,6 @@ pub fn build(b: *std.Build) void {
         .name = "bench_alloc",
         .root_module = bench_alloc_mod,
     });
-    b.installArtifact(bench_alloc_exe);
-
     const bench_alloc_step = b.step("bench-alloc", "Build allocator matrix benchmark");
     bench_alloc_step.dependOn(&b.addInstallArtifact(bench_alloc_exe, .{}).step);
 

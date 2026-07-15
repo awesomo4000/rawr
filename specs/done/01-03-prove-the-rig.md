@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 01-03: Prove the rig — wiring, oracle, comparator, one passing case
 
 Chunk of [`01-differential-testing.md`](01-differential-testing.md). This is the

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-13: `Roaring64Bitmap` array constructors
 
 Phase-2 parity chunk of [64-bit Roaring](10-roaring64.md). Efficient construction

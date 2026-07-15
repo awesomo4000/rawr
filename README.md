@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # rawr
 
 Roaring bitmap library in pure Zig. Wire-compatible with CRoaring (serialized
@@ -208,10 +210,25 @@ src/
   bench_allocators.zig# allocator matrix experiment
   validate_croaring.zig# CRoaring interop validation
   property_tests.zig  # randomized property tests
+tools/
+  croaring_wrapper.h  # rawr-owned translate-c adapter for development tools
 vendor/
   roaring.c, roaring.h # CRoaring amalgamation (for benchmarks/validation only)
+  LICENSE-CRoaring     # upstream Apache-2.0/MIT license text
 ```
+
+The downstream Zig package contains the library and its unit-test sources. The
+CRoaring amalgamation, translate-C adapter, validation executables, differential
+tests, and benchmark drivers are repository-only development tooling.
 
 ## License
 
-TODO
+Original rawr code is licensed under the [Mozilla Public License 2.0](LICENSE).
+When MPL-covered rawr files are distributed with modifications, those files and
+their modifications must remain available under MPL-2.0. Separate applications
+and source files that merely import, link to, or use rawr may remain proprietary
+or use another license.
+
+Third-party files under `vendor/` retain their upstream licenses and are not
+covered by rawr's MPL-2.0 license. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+for details.

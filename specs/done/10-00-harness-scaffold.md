@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-00: `Roaring64Bitmap` harness scaffold
 
 Zeroth piece of [64-bit Roaring](10-roaring64.md). Pure plumbing: stand up an

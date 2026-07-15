@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Optimization: Arena Allocator for Set Operations
 
 **Applies to:** `src/bench_croaring.zig`

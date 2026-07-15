@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 const std = @import("std");
 const Roaring64Bitmap = @import("roaring64.zig").Roaring64Bitmap;
 const gen64 = @import("roaring64_test_gen.zig");

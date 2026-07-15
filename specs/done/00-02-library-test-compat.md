@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 00-02: Library And Unit Test Compatibility
 
 ## Goal

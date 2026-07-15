@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # rawr API Guide
 
 rawr's stable public API is:

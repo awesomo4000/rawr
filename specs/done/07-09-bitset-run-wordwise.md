@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07-09: Word-wise bitset×run container ops (perf)
 
 Post-umbrella perf fix. **Behavior-preserving** — no API change, no result change.

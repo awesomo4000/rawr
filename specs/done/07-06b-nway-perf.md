@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07-06b: Close the n-way `orMany` perf gap (+ heap variants)
 
 Follow-on to [`07-06`](07-parity-inventory.md). Lazy fold brought `orMany` to

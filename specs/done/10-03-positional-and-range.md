@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-03: `Roaring64Bitmap` positional + range ops
 
 Third piece of [64-bit Roaring](10-roaring64.md). The two operation families

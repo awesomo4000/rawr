@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 01-08: Round-trip and addRange coverage (extend existing)
 
 Chunk of [`01-differential-testing.md`](01-differential-testing.md). Extends the

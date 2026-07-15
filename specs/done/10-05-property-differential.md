@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-05: `Roaring64Bitmap` property + differential tests
 
 Final piece of [64-bit Roaring](10-roaring64.md). Hardens the layer with

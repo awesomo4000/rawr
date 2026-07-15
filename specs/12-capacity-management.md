@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 12: Capacity management API (issue #3)
 
 Small, self-contained, user-requested ([issue #3](https://github.com/awesomo4000/rawr/issues/3)):

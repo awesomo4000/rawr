@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Optimization: Arena Allocator for Deserialize and Set Operations
 
 ## Context

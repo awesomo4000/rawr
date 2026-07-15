@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-15: `Roaring64Bitmap` bulk ops with locality context
 
 Phase-2 parity chunk of [64-bit Roaring](10-roaring64.md). Throughput variants of

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 01-09: Malformed input smoke test (optional)
 
 Chunk of [`01-differential-testing.md`](01-differential-testing.md). **Optional,

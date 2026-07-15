@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-04: `Roaring64Bitmap` serialization (CRoaring portable-64)
 
 Fourth piece of [64-bit Roaring](10-roaring64.md). Portable serialize /

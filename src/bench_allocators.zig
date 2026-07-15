@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 const std = @import("std");
 const RoaringBitmap = @import("rawr").RoaringBitmap;
 const bench_time = @import("bench_time.zig");

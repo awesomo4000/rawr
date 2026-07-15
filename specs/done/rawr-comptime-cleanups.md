@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # rawr comptime cleanups
 
 Three changes to `src/bitset_container.zig`. No API changes. No behavioral changes.

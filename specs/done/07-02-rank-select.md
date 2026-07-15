@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07-02: rank / select / get_index
 
 Second piece of the [CRoaring parity effort](07-parity-inventory.md). The marquee

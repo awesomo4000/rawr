@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07-01: Cardinality variants + jaccard + strict subset
 
 First piece of the [CRoaring parity effort](07-parity-inventory.md) (pick #1).

@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 07-05: N-way unions (`orMany` / `xorMany`)
 
 Fifth piece of the [CRoaring parity effort](07-parity-inventory.md). Combine an

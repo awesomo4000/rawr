@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # ZigRoar: A High-Performance Roaring Bitmap Implementation in Zig
 
 ## Architecture Design Document

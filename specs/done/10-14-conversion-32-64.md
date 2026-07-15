@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Spec 10-14: `Roaring64Bitmap` ↔ `RoaringBitmap` conversion
 
 Phase-2 parity chunk of [64-bit Roaring](10-roaring64.md). Bridge between the

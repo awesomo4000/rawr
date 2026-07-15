@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 /// RoaringFormatSpec serialization constants.
 /// These are shared between RoaringBitmap and FrozenBitmap.
 

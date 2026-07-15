@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: MPL-2.0 -->
+
 # Final Rawr Features: Galloping, andCardinality, intersects, xorInPlace
 
 Four additions to call rawr complete for Datalog evaluation use.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 const std = @import("std");
 
 /// Fixed 8KB bitset container for high-cardinality chunks (>4096 elements).
