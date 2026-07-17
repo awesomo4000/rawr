@@ -8,11 +8,11 @@
 
 ## 1. Executive Summary
 
-This document architects a native Zig implementation of Roaring Bitmaps, informed by deep analysis of the CRoaring C library (the current state-of-the-art). The design exploits Zig's unique strengths — comptime generics, first-class allocator support, `@Vector` SIMD, tagged unions, and zero-cost abstractions — to achieve performance parity or superiority with CRoaring while providing a dramatically better API.
+This document architects a native Zig implementation of Roaring Bitmaps, informed by deep analysis of the CRoaring C library (the reference implementation). The design uses Zig's strengths — comptime generics, first-class allocator support, `@Vector` SIMD, tagged unions, and zero-cost abstractions. CRoaring's performance is the target to match: it's the yardstick that keeps us from regressing below the design the original authors established. An idiomatic, allocator-explicit Zig API is a separate goal of the port.
 
 **Key design departures from CRoaring:**
 
-- **Tagged pointers** for container type discrimination (CRoaring issue #5, never implemented — we do it)
+- **Tagged pointers** for container type discrimination (2-bit type tag in the pointer)
 - **Arena-first allocation** with user-supplied `std.mem.Allocator`
 - **Comptime container dispatch** instead of C's runtime typecode switch tables
 - **`@Vector` portable SIMD** instead of platform-specific intrinsics with `#ifdef` forests

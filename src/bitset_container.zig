@@ -190,6 +190,24 @@ pub const BitsetContainer = struct {
         self.cardinality = -1;
     }
 
+    /// Set a sorted list of unique values without per-value cardinality tracking.
+    /// Caller must assign or compute cardinality before normal container use.
+    pub fn setList(self: *Self, values: []const u16) void {
+        for (values) |value| {
+            self.words[value >> 6] |= @as(u64, 1) << @as(u6, @truncate(value));
+        }
+        self.invalidateCardinality();
+    }
+
+    /// Toggle a sorted list of unique values without per-value cardinality tracking.
+    /// Caller must compute cardinality before normal container use.
+    pub fn toggleList(self: *Self, values: []const u16) void {
+        for (values) |value| {
+            self.words[value >> 6] ^= @as(u64, 1) << @as(u6, @truncate(value));
+        }
+        self.invalidateCardinality();
+    }
+
     const BitwiseOp = enum { bor, band, xor, andnot };
 
     fn simdBitsetOp(comptime op: BitwiseOp, dst: *Self, src: *const Self) void {
@@ -325,6 +343,24 @@ test "init and deinit" {
     try std.testing.expectEqual(@as(i32, 0), bs.cardinality);
     try std.testing.expect(!bs.contains(0));
     try std.testing.expect(!bs.contains(65535));
+}
+
+test "bulk list mutation repairs cardinality once" {
+    const allocator = std.testing.allocator;
+    const bs = try BitsetContainer.init(allocator);
+    defer bs.deinit(allocator);
+
+    const initial = [_]u16{ 1, 63, 64, 4096, 65535 };
+    bs.setList(&initial);
+    try std.testing.expectEqual(@as(i32, -1), bs.cardinality);
+    try std.testing.expectEqual(@as(u32, initial.len), bs.computeCardinality());
+
+    const toggled = [_]u16{ 63, 100 };
+    bs.toggleList(&toggled);
+    try std.testing.expectEqual(@as(i32, -1), bs.cardinality);
+    try std.testing.expectEqual(@as(u32, initial.len), bs.computeCardinality());
+    try std.testing.expect(!bs.contains(63));
+    try std.testing.expect(bs.contains(100));
 }
 
 test "add and contains" {

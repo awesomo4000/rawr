@@ -55,6 +55,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = .ReleaseFast,
     });
+    const validation_optimize = if (optimize == .Debug) .ReleaseFast else optimize;
+    const validation_lib_mod = b.createModule(.{
+        .root_source_file = b.path("src/roaring.zig"),
+        .target = target,
+        .optimize = validation_optimize,
+    });
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("src/bench.zig"),
         .target = target,
@@ -71,13 +77,29 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Build benchmarks");
     bench_step.dependOn(&b.addInstallArtifact(bench_exe, .{}).step);
 
+    // Standalone array-intersection kernel benchmark.
+    const bench_aa_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_aa.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_aa_mod.link_libc = true;
+    addBenchmarkPlatformShim(b, bench_aa_mod, target);
+
+    const bench_aa_exe = b.addExecutable(.{
+        .name = "bench_aa",
+        .root_module = bench_aa_mod,
+    });
+    const bench_aa_step = b.step("bench-aa", "Build array-intersection kernel benchmarks");
+    bench_aa_step.dependOn(&b.addInstallArtifact(bench_aa_exe, .{}).step);
+
     // CRoaring validation executable
     const validate_mod = b.createModule(.{
         .root_source_file = b.path("src/validate_croaring.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = validation_optimize,
     });
-    validate_mod.addImport("rawr", bench_lib_mod);
+    validate_mod.addImport("rawr", validation_lib_mod);
     addBenchmarkPlatformShim(b, validate_mod, target);
     addTranslatedCImport(b, validate_mod, .{
         .header = "tools/croaring_wrapper.h",
@@ -85,7 +107,7 @@ pub fn build(b: *std.Build) void {
         .c_source = "vendor/roaring.c",
         .croaring_avx512 = croaring_avx512,
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = validation_optimize,
     });
 
     const validate_exe = b.addExecutable(.{
@@ -99,9 +121,9 @@ pub fn build(b: *std.Build) void {
     const validate64_mod = b.createModule(.{
         .root_source_file = b.path("src/validate_roaring64.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = validation_optimize,
     });
-    validate64_mod.addImport("rawr", bench_lib_mod);
+    validate64_mod.addImport("rawr", validation_lib_mod);
     addBenchmarkPlatformShim(b, validate64_mod, target);
     addTranslatedCImport(b, validate64_mod, .{
         .header = "tools/croaring_wrapper.h",
@@ -109,7 +131,7 @@ pub fn build(b: *std.Build) void {
         .c_source = "vendor/roaring.c",
         .croaring_avx512 = croaring_avx512,
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = validation_optimize,
     });
 
     const validate64_exe = b.addExecutable(.{
@@ -124,9 +146,9 @@ pub fn build(b: *std.Build) void {
     const difftest_mod = b.createModule(.{
         .root_source_file = b.path("src/diff_test.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = validation_optimize,
     });
-    difftest_mod.addImport("rawr", bench_lib_mod);
+    difftest_mod.addImport("rawr", validation_lib_mod);
     addBenchmarkPlatformShim(b, difftest_mod, target);
     addTranslatedCImport(b, difftest_mod, .{
         .header = "tools/croaring_wrapper.h",
@@ -134,7 +156,7 @@ pub fn build(b: *std.Build) void {
         .c_source = "vendor/roaring.c",
         .croaring_avx512 = croaring_avx512,
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = validation_optimize,
     });
 
     const difftest_exe = b.addExecutable(.{
@@ -148,9 +170,9 @@ pub fn build(b: *std.Build) void {
     const difftest64_mod = b.createModule(.{
         .root_source_file = b.path("src/diff_test64.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = validation_optimize,
     });
-    difftest64_mod.addImport("rawr", bench_lib_mod);
+    difftest64_mod.addImport("rawr", validation_lib_mod);
     addBenchmarkPlatformShim(b, difftest64_mod, target);
     addTranslatedCImport(b, difftest64_mod, .{
         .header = "tools/croaring_wrapper.h",
@@ -158,7 +180,7 @@ pub fn build(b: *std.Build) void {
         .c_source = "vendor/roaring.c",
         .croaring_avx512 = croaring_avx512,
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = validation_optimize,
     });
 
     const difftest64_exe = b.addExecutable(.{

@@ -4,6 +4,7 @@ const std = @import("std");
 const ArrayContainer = @import("array_container.zig").ArrayContainer;
 const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
 const RunContainer = @import("run_container.zig").RunContainer;
+const array_kernels = @import("array_kernels.zig");
 const container_mod = @import("container.zig");
 const Container = container_mod.Container;
 
@@ -13,37 +14,6 @@ const Container = container_mod.Container;
 // ============================================================================
 // Helpers
 // ============================================================================
-
-/// Exponential search for `target` in sorted `arr[start..]`.
-/// Returns the index of the first element >= target.
-/// O(log(distance_to_target)) — fast when target is nearby, degrades
-/// gracefully to O(log n) when target is far.
-fn gallopSearch(arr: []const u16, target: u16, start: usize) usize {
-    if (start >= arr.len) return arr.len;
-
-    // Phase 1: exponential gallop to find bracket
-    var step: usize = 1;
-    var hi = start;
-    while (hi < arr.len and arr[hi] < target) {
-        hi += step;
-        step *= 2;
-    }
-    // Clamp hi
-    if (hi > arr.len) hi = arr.len;
-
-    // Phase 2: binary search within [lo, hi)
-    var lo = if (step > 2) hi -| (step / 2) else start;
-
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        if (arr[mid] < target) {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    return lo;
-}
 
 /// Count values <= `low` in a container.
 pub fn containerRank(c: Container, low: u16) u32 {
@@ -299,7 +269,7 @@ fn runContainsRange(rc: *const RunContainer, start: u16, end: u16) bool {
 }
 
 fn arrayIntersectsRange(ac: *const ArrayContainer, start: u16, end: u16) bool {
-    const idx = gallopSearch(ac.values[0..ac.cardinality], start, 0);
+    const idx = array_kernels.gallopSearch(ac.values[0..ac.cardinality], start, 0);
     return idx < ac.cardinality and ac.values[idx] <= end;
 }
 
@@ -404,24 +374,20 @@ fn arrayUnionArrayInPlace(allocator: std.mem.Allocator, a: *ArrayContainer, b: *
     return .{ .array = a };
 }
 
+/// Non-lazy union; the returned bitset always has a valid cardinality.
 fn arrayUnionBitsetInPlace(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *BitsetContainer) !Container {
-    // Result is always a bitset - must allocate new one and copy
     const result = try BitsetContainer.init(allocator);
     errdefer result.deinit(allocator);
     @memcpy(result.words, bc.words);
-    for (ac.values[0..ac.cardinality]) |v| {
-        _ = result.add(v);
-    }
+    result.setList(ac.values[0..ac.cardinality]);
     _ = result.computeCardinality();
     return .{ .bitset = result };
 }
 
+/// Non-lazy union; repairs the destination cardinality before returning.
 fn bitsetUnionArrayInPlace(bc: *BitsetContainer, ac: *ArrayContainer) Container {
-    // Add array elements to existing bitset - no allocation
-    // bc.add() already maintains cardinality correctly
-    for (ac.values[0..ac.cardinality]) |v| {
-        _ = bc.add(v);
-    }
+    bc.setList(ac.values[0..ac.cardinality]);
+    _ = bc.computeCardinality();
     return .{ .bitset = bc };
 }
 
@@ -488,10 +454,9 @@ pub fn containerXorInPlace(allocator: std.mem.Allocator, a: Container, b: Contai
     };
 }
 
+/// Non-lazy XOR; repairs cardinality before demotion or return.
 fn bitsetXorArrayInPlace(allocator: std.mem.Allocator, bc: *BitsetContainer, ac: *ArrayContainer) !Container {
-    for (ac.values[0..ac.cardinality]) |value| {
-        bc.lazyToggle(value);
-    }
+    bc.toggleList(ac.values[0..ac.cardinality]);
     _ = bc.computeCardinality();
     return demoteBitsetIfSmall(allocator, bc);
 }
@@ -540,6 +505,7 @@ pub fn containerUnion(allocator: std.mem.Allocator, a: Container, b: Container) 
     };
 }
 
+/// Non-lazy union; computes the actual cardinality and demotes small results.
 fn arrayUnionArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayContainer) !Container {
     const max_card = @as(u32, a.cardinality) + b.cardinality;
 
@@ -547,8 +513,14 @@ fn arrayUnionArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayCo
     if (max_card > ArrayContainer.MAX_CARDINALITY) {
         const bc = try BitsetContainer.init(allocator);
         errdefer bc.deinit(allocator);
-        for (a.values[0..a.cardinality]) |v| _ = bc.add(v);
-        for (b.values[0..b.cardinality]) |v| _ = bc.add(v);
+        bc.setList(a.values[0..a.cardinality]);
+        bc.setList(b.values[0..b.cardinality]);
+        const actual_cardinality = bc.computeCardinality();
+        if (actual_cardinality <= ArrayContainer.MAX_CARDINALITY) {
+            const arr = try bitsetToArray(allocator, bc);
+            bc.deinit(allocator);
+            return .{ .array = arr };
+        }
         return .{ .bitset = bc };
     }
 
@@ -587,42 +559,29 @@ fn arrayUnionArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayCo
     return arrayToArrayOrRun(allocator, result);
 }
 
+/// Non-lazy union; the returned bitset always has a valid cardinality.
 fn arrayUnionBitset(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *BitsetContainer) !Container {
-    // Result is always a bitset (bitset cardinality >= array threshold)
     const result = try BitsetContainer.init(allocator);
     errdefer result.deinit(allocator);
 
     // Copy bitset
     @memcpy(result.words, bc.words);
 
-    // Add array elements
-    for (ac.values[0..ac.cardinality]) |v| {
-        _ = result.add(v);
-    }
+    result.setList(ac.values[0..ac.cardinality]);
     _ = result.computeCardinality();
     return .{ .bitset = result };
 }
 
+/// Non-lazy union; repairs cardinality before representation selection.
 fn arrayUnionRun(allocator: std.mem.Allocator, ac: *ArrayContainer, rc: *RunContainer) !Container {
-    // Convert both to bitset for simplicity, then optimize
     const result = try BitsetContainer.init(allocator);
     errdefer result.deinit(allocator);
 
-    // Add run elements
     for (rc.runs[0..rc.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            _ = result.add(@intCast(v));
-        }
+        result.setRange(run.start, run.end());
     }
-
-    // Add array elements
-    for (ac.values[0..ac.cardinality]) |v| {
-        _ = result.add(v);
-    }
-
-    const card = result.computeCardinality();
-    _ = card;
+    result.setList(ac.values[0..ac.cardinality]);
+    _ = result.computeCardinality();
     return bitsetToArrayOrRun(allocator, result);
 }
 
@@ -710,30 +669,11 @@ fn arrayIntersectArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *Arr
     const result = try ArrayContainer.init(allocator, @min(a.cardinality, b.cardinality));
     errdefer result.deinit(allocator);
 
-    // Walk the smaller array, gallop into the larger.
-    // O(small × log big) — much faster than O(n+m) when sizes differ significantly.
-    const small = if (a.cardinality <= b.cardinality)
-        a.values[0..a.cardinality]
-    else
-        b.values[0..b.cardinality];
-    const big = if (a.cardinality <= b.cardinality)
-        b.values[0..b.cardinality]
-    else
-        a.values[0..a.cardinality];
-
-    var k: usize = 0;
-    var lo: usize = 0; // search start in big, advances monotonically
-
-    for (small) |val| {
-        lo = gallopSearch(big, val, lo);
-        if (lo < big.len and big[lo] == val) {
-            result.values[k] = val;
-            k += 1;
-            lo += 1; // past this match for next search
-        }
-    }
-
-    result.cardinality = @intCast(k);
+    result.cardinality = @intCast(array_kernels.intersectWrite(
+        a.values[0..a.cardinality],
+        b.values[0..b.cardinality],
+        result.values,
+    ));
     return .{ .array = result };
 }
 
@@ -889,25 +829,10 @@ pub fn containerIntersects(a: Container, b: Container) bool {
 }
 
 fn arrayIntersectArrayCard(a: *ArrayContainer, b: *ArrayContainer) u64 {
-    const small = if (a.cardinality <= b.cardinality)
-        a.values[0..a.cardinality]
-    else
-        b.values[0..b.cardinality];
-    const big = if (a.cardinality <= b.cardinality)
-        b.values[0..b.cardinality]
-    else
-        a.values[0..a.cardinality];
-
-    var count: u64 = 0;
-    var lo: usize = 0;
-    for (small) |val| {
-        lo = gallopSearch(big, val, lo);
-        if (lo < big.len and big[lo] == val) {
-            count += 1;
-            lo += 1;
-        }
-    }
-    return count;
+    return array_kernels.intersectCard(
+        a.values[0..a.cardinality],
+        b.values[0..b.cardinality],
+    );
 }
 
 fn arrayIntersectBitsetCard(ac: *ArrayContainer, bc: *BitsetContainer) u64 {
@@ -976,23 +901,10 @@ fn runIntersectRunCard(a: *RunContainer, b: *RunContainer) u64 {
 // Intersects (early-exit) implementations
 
 fn arrayIntersectsArray(a: *ArrayContainer, b: *ArrayContainer) bool {
-    const small = if (a.cardinality <= b.cardinality)
-        a.values[0..a.cardinality]
-    else
-        b.values[0..b.cardinality];
-    const big = if (a.cardinality <= b.cardinality)
-        b.values[0..b.cardinality]
-    else
-        a.values[0..a.cardinality];
-
-    var lo: usize = 0;
-    for (small) |val| {
-        lo = gallopSearch(big, val, lo);
-        if (lo < big.len and big[lo] == val) {
-            return true;
-        }
-    }
-    return false;
+    return array_kernels.intersectBool(
+        a.values[0..a.cardinality],
+        b.values[0..b.cardinality],
+    );
 }
 
 fn arrayIntersectsBitset(ac: *ArrayContainer, bc: *BitsetContainer) bool {
@@ -1314,6 +1226,7 @@ pub fn containerXor(allocator: std.mem.Allocator, a: Container, b: Container) !C
     };
 }
 
+/// Non-lazy XOR; repairs cardinality before demotion or return.
 fn arrayXorArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayContainer) !Container {
     const max_card = @as(u32, a.cardinality) + b.cardinality;
 
@@ -1321,14 +1234,8 @@ fn arrayXorArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayCont
         // Use bitset
         const result = try BitsetContainer.init(allocator);
         errdefer result.deinit(allocator);
-        for (a.values[0..a.cardinality]) |v| _ = result.add(v);
-        for (b.values[0..b.cardinality]) |v| {
-            if (result.contains(v)) {
-                _ = result.remove(v);
-            } else {
-                _ = result.add(v);
-            }
-        }
+        result.setList(a.values[0..a.cardinality]);
+        result.toggleList(b.values[0..b.cardinality]);
         const card = result.computeCardinality();
         if (card <= ArrayContainer.MAX_CARDINALITY) {
             const arr = try bitsetToArray(allocator, result);
@@ -1375,19 +1282,13 @@ fn arrayXorArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayCont
     return .{ .array = result };
 }
 
+/// Non-lazy XOR; repairs cardinality before demotion or return.
 fn arrayXorBitset(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *BitsetContainer) !Container {
     const result = try BitsetContainer.init(allocator);
     errdefer result.deinit(allocator);
     @memcpy(result.words, bc.words);
 
-    for (ac.values[0..ac.cardinality]) |v| {
-        if (result.contains(v)) {
-            _ = result.remove(v);
-        } else {
-            _ = result.add(v);
-        }
-    }
-
+    result.toggleList(ac.values[0..ac.cardinality]);
     const card = result.computeCardinality();
     if (card <= ArrayContainer.MAX_CARDINALITY) {
         const arr = try bitsetToArray(allocator, result);
@@ -1397,28 +1298,16 @@ fn arrayXorBitset(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *Bitset
     return .{ .bitset = result };
 }
 
+/// Non-lazy XOR; repairs cardinality before representation selection.
 fn arrayXorRun(allocator: std.mem.Allocator, ac: *ArrayContainer, rc: *RunContainer) !Container {
-    // Convert to bitset and XOR
     const result = try BitsetContainer.init(allocator);
     errdefer result.deinit(allocator);
 
     for (rc.runs[0..rc.n_runs]) |run| {
-        var v: u32 = run.start;
-        while (v <= run.end()) : (v += 1) {
-            _ = result.add(@intCast(v));
-        }
+        result.setRange(run.start, run.end());
     }
-
-    for (ac.values[0..ac.cardinality]) |v| {
-        if (result.contains(v)) {
-            _ = result.remove(v);
-        } else {
-            _ = result.add(v);
-        }
-    }
-
-    const card = result.computeCardinality();
-    _ = card;
+    result.toggleList(ac.values[0..ac.cardinality]);
+    _ = result.computeCardinality();
     return bitsetToArrayOrRun(allocator, result);
 }
 
@@ -1521,11 +1410,11 @@ pub fn bitsetToArray(allocator: std.mem.Allocator, bc: *BitsetContainer) !*Array
     return result;
 }
 
+/// Exact conversion from a unique array; assigns cardinality without rescanning.
 pub fn arrayToBitset(allocator: std.mem.Allocator, ac: *ArrayContainer) !*BitsetContainer {
     const result = try BitsetContainer.init(allocator);
-    for (ac.values[0..ac.cardinality]) |v| {
-        _ = result.add(v);
-    }
+    result.setList(ac.values[0..ac.cardinality]);
+    result.cardinality = @intCast(ac.cardinality);
     return result;
 }
 

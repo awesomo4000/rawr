@@ -14,6 +14,7 @@ const BENCH_RUNS = 21;
 const N_VALUES = 1_000_000;
 const N_RANK_MANY_PROBES = 200_000;
 const N_MANY_BITMAPS = 32;
+const N_ARRAY_BENCH_CONTAINERS = 200;
 
 const BenchResult = struct {
     median_ns: u64,
@@ -190,6 +191,10 @@ fn benchRawrContainsMiss() void {
 
 var rawr_sparse_a: ?RoaringBitmap = null;
 var rawr_sparse_b: ?RoaringBitmap = null;
+var rawr_array_balanced_a: ?RoaringBitmap = null;
+var rawr_array_balanced_b: ?RoaringBitmap = null;
+var rawr_array_skewed_a: ?RoaringBitmap = null;
+var rawr_array_skewed_b: ?RoaringBitmap = null;
 var rawr_many_bms: [N_MANY_BITMAPS]?RoaringBitmap = [_]?RoaringBitmap{null} ** N_MANY_BITMAPS;
 var rawr_many_inputs: [N_MANY_BITMAPS]*const RoaringBitmap = undefined;
 
@@ -209,6 +214,34 @@ fn initRawrSparseBitmaps() void {
 
     rawr_sparse_a = a;
     rawr_sparse_b = b;
+}
+
+fn initRawrArrayBitmaps() void {
+    if (rawr_array_balanced_a != null) return;
+
+    var balanced_a = RoaringBitmap.init(allocator) catch unreachable;
+    var balanced_b = RoaringBitmap.init(allocator) catch unreachable;
+    var skewed_a = RoaringBitmap.init(allocator) catch unreachable;
+    var skewed_b = RoaringBitmap.init(allocator) catch unreachable;
+
+    addArrayContainersRawr(&balanced_a, 0, 0, 2048);
+    addArrayContainersRawr(&balanced_b, 20, 1024, 2048);
+    addArrayContainersRawr(&skewed_a, 0, 2048, 32);
+    addArrayContainersRawr(&skewed_b, 20, 0, 4096);
+
+    rawr_array_balanced_a = balanced_a;
+    rawr_array_balanced_b = balanced_b;
+    rawr_array_skewed_a = skewed_a;
+    rawr_array_skewed_b = skewed_b;
+}
+
+fn addArrayContainersRawr(bm: *RoaringBitmap, first_key: usize, first_low: usize, cardinality: usize) void {
+    for (first_key..first_key + N_ARRAY_BENCH_CONTAINERS) |key| {
+        const base = @as(u32, @intCast(key)) << 16;
+        for (first_low..first_low + cardinality) |low| {
+            _ = bm.add(base | @as(u32, @intCast(low))) catch unreachable;
+        }
+    }
 }
 
 fn initRawrManyBitmaps() void {
@@ -261,6 +294,34 @@ fn benchRawrAndSparse() void {
     var result = a.bitwiseAnd(allocator, b) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
+}
+
+fn benchRawrAndArrayBalanced() void {
+    var result = rawr_array_balanced_a.?.bitwiseAnd(allocator, &rawr_array_balanced_b.?) catch unreachable;
+    defer result.deinit();
+    std.mem.doNotOptimizeAway(&result);
+}
+
+fn benchRawrAndCardinalityArrayBalanced() void {
+    const cardinality = rawr_array_balanced_a.?.andCardinality(&rawr_array_balanced_b.?);
+    std.mem.doNotOptimizeAway(cardinality);
+}
+
+fn benchRawrXorArrayBalanced() void {
+    var result = rawr_array_balanced_a.?.bitwiseXor(allocator, &rawr_array_balanced_b.?) catch unreachable;
+    defer result.deinit();
+    std.mem.doNotOptimizeAway(&result);
+}
+
+fn benchRawrAndArraySkewed() void {
+    var result = rawr_array_skewed_a.?.bitwiseAnd(allocator, &rawr_array_skewed_b.?) catch unreachable;
+    defer result.deinit();
+    std.mem.doNotOptimizeAway(&result);
+}
+
+fn benchRawrAndCardinalityArraySkewed() void {
+    const cardinality = rawr_array_skewed_a.?.andCardinality(&rawr_array_skewed_b.?);
+    std.mem.doNotOptimizeAway(cardinality);
 }
 
 fn benchRawrOrSparse() void {
@@ -584,6 +645,10 @@ fn benchCRoaringContainsMiss() void {
 
 var cr_sparse_a: ?*c.roaring_bitmap_t = null;
 var cr_sparse_b: ?*c.roaring_bitmap_t = null;
+var cr_array_balanced_a: ?*c.roaring_bitmap_t = null;
+var cr_array_balanced_b: ?*c.roaring_bitmap_t = null;
+var cr_array_skewed_a: ?*c.roaring_bitmap_t = null;
+var cr_array_skewed_b: ?*c.roaring_bitmap_t = null;
 var cr_many_bms: [N_MANY_BITMAPS]?*c.roaring_bitmap_t = [_]?*c.roaring_bitmap_t{null} ** N_MANY_BITMAPS;
 var cr_many_inputs: [N_MANY_BITMAPS]*c.roaring_bitmap_t = undefined;
 
@@ -603,6 +668,34 @@ fn initCRoaringSparseBitmaps() void {
 
     cr_sparse_a = a;
     cr_sparse_b = b_bm;
+}
+
+fn initCRoaringArrayBitmaps() void {
+    if (cr_array_balanced_a != null) return;
+
+    const balanced_a = c.roaring_bitmap_create() orelse unreachable;
+    const balanced_b = c.roaring_bitmap_create() orelse unreachable;
+    const skewed_a = c.roaring_bitmap_create() orelse unreachable;
+    const skewed_b = c.roaring_bitmap_create() orelse unreachable;
+
+    addArrayContainersCRoaring(balanced_a, 0, 0, 2048);
+    addArrayContainersCRoaring(balanced_b, 20, 1024, 2048);
+    addArrayContainersCRoaring(skewed_a, 0, 2048, 32);
+    addArrayContainersCRoaring(skewed_b, 20, 0, 4096);
+
+    cr_array_balanced_a = balanced_a;
+    cr_array_balanced_b = balanced_b;
+    cr_array_skewed_a = skewed_a;
+    cr_array_skewed_b = skewed_b;
+}
+
+fn addArrayContainersCRoaring(bm: *c.roaring_bitmap_t, first_key: usize, first_low: usize, cardinality: usize) void {
+    for (first_key..first_key + N_ARRAY_BENCH_CONTAINERS) |key| {
+        const base = @as(u32, @intCast(key)) << 16;
+        for (first_low..first_low + cardinality) |low| {
+            c.roaring_bitmap_add(bm, base | @as(u32, @intCast(low)));
+        }
+    }
 }
 
 fn initCRoaringManyBitmaps() void {
@@ -655,6 +748,34 @@ fn benchCRoaringAndSparse() void {
     const result = c.roaring_bitmap_and(a, b_bm) orelse unreachable;
     defer c.roaring_bitmap_free(result);
     std.mem.doNotOptimizeAway(result);
+}
+
+fn benchCRoaringAndArrayBalanced() void {
+    const result = c.roaring_bitmap_and(cr_array_balanced_a.?, cr_array_balanced_b.?) orelse unreachable;
+    defer c.roaring_bitmap_free(result);
+    std.mem.doNotOptimizeAway(result);
+}
+
+fn benchCRoaringAndCardinalityArrayBalanced() void {
+    const cardinality = c.roaring_bitmap_and_cardinality(cr_array_balanced_a.?, cr_array_balanced_b.?);
+    std.mem.doNotOptimizeAway(cardinality);
+}
+
+fn benchCRoaringXorArrayBalanced() void {
+    const result = c.roaring_bitmap_xor(cr_array_balanced_a.?, cr_array_balanced_b.?) orelse unreachable;
+    defer c.roaring_bitmap_free(result);
+    std.mem.doNotOptimizeAway(result);
+}
+
+fn benchCRoaringAndArraySkewed() void {
+    const result = c.roaring_bitmap_and(cr_array_skewed_a.?, cr_array_skewed_b.?) orelse unreachable;
+    defer c.roaring_bitmap_free(result);
+    std.mem.doNotOptimizeAway(result);
+}
+
+fn benchCRoaringAndCardinalityArraySkewed() void {
+    const cardinality = c.roaring_bitmap_and_cardinality(cr_array_skewed_a.?, cr_array_skewed_b.?);
+    std.mem.doNotOptimizeAway(cardinality);
 }
 
 fn benchCRoaringOrSparse() void {
@@ -918,6 +1039,8 @@ noinline fn runSetBenchmarks() void {
     bench_time.print("\nSET OPERATIONS (new bitmap)\n", .{});
     initRawrSparseBitmaps();
     initCRoaringSparseBitmaps();
+    initRawrArrayBitmaps();
+    initCRoaringArrayBitmaps();
     initRawrDenseBitmaps();
     initCRoaringDenseBitmaps();
     initRawrManyBitmaps();
@@ -960,6 +1083,26 @@ noinline fn runSetBenchmarks() void {
     r = benchmark(benchRawrXorMany, .{});
     cr = benchmark(benchCRoaringXorMany, .{});
     printResult("xorMany (32 mixed)", r.median_ns, cr.median_ns);
+
+    r = benchmark(benchRawrAndArrayBalanced, .{});
+    cr = benchmark(benchCRoaringAndArrayBalanced, .{});
+    printResult("bitwiseAnd (array balanced)", r.median_ns, cr.median_ns);
+
+    r = benchmark(benchRawrAndCardinalityArrayBalanced, .{});
+    cr = benchmark(benchCRoaringAndCardinalityArrayBalanced, .{});
+    printResult("andCardinality (array balanced)", r.median_ns, cr.median_ns);
+
+    r = benchmark(benchRawrXorArrayBalanced, .{});
+    cr = benchmark(benchCRoaringXorArrayBalanced, .{});
+    printResult("bitwiseXor (array balanced)", r.median_ns, cr.median_ns);
+
+    r = benchmark(benchRawrAndArraySkewed, .{});
+    cr = benchmark(benchCRoaringAndArraySkewed, .{});
+    printResult("bitwiseAnd (array skewed)", r.median_ns, cr.median_ns);
+
+    r = benchmark(benchRawrAndCardinalityArraySkewed, .{});
+    cr = benchmark(benchCRoaringAndCardinalityArraySkewed, .{});
+    printResult("andCardinality (array skewed)", r.median_ns, cr.median_ns);
 }
 
 noinline fn runIterationBenchmarks() void {
@@ -1046,6 +1189,10 @@ noinline fn cleanupBenchmarks() void {
     if (rawr_contains_bm) |*bm| bm.deinit();
     if (rawr_sparse_a) |*bm| bm.deinit();
     if (rawr_sparse_b) |*bm| bm.deinit();
+    if (rawr_array_balanced_a) |*bm| bm.deinit();
+    if (rawr_array_balanced_b) |*bm| bm.deinit();
+    if (rawr_array_skewed_a) |*bm| bm.deinit();
+    if (rawr_array_skewed_b) |*bm| bm.deinit();
     if (rawr_dense_a) |*bm| bm.deinit();
     if (rawr_dense_b) |*bm| bm.deinit();
     if (rawr_bitset_range_bm) |*bm| bm.deinit();
@@ -1059,6 +1206,10 @@ noinline fn cleanupBenchmarks() void {
     if (cr_contains_bm) |bm| c.roaring_bitmap_free(bm);
     if (cr_sparse_a) |bm| c.roaring_bitmap_free(bm);
     if (cr_sparse_b) |bm| c.roaring_bitmap_free(bm);
+    if (cr_array_balanced_a) |bm| c.roaring_bitmap_free(bm);
+    if (cr_array_balanced_b) |bm| c.roaring_bitmap_free(bm);
+    if (cr_array_skewed_a) |bm| c.roaring_bitmap_free(bm);
+    if (cr_array_skewed_b) |bm| c.roaring_bitmap_free(bm);
     if (cr_dense_a) |bm| c.roaring_bitmap_free(bm);
     if (cr_dense_b) |bm| c.roaring_bitmap_free(bm);
     if (cr_bitset_range_bm) |bm| c.roaring_bitmap_free(bm);

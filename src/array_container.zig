@@ -207,8 +207,25 @@ pub const ArrayContainer = struct {
         if (max_card > MAX_CARDINALITY) {
             const bc = try BitsetContainer.init(allocator);
             errdefer bc.deinit(allocator);
-            for (self.values[0..self.cardinality]) |v| _ = bc.add(v);
-            for (other.values[0..other.cardinality]) |v| _ = bc.add(v);
+            bc.setList(self.values[0..self.cardinality]);
+            bc.setList(other.values[0..other.cardinality]);
+            const actual_cardinality = bc.computeCardinality();
+            if (actual_cardinality <= MAX_CARDINALITY) {
+                try self.ensureCapacity(allocator, @intCast(actual_cardinality));
+
+                var out: usize = 0;
+                for (bc.words, 0..) |word, word_idx| {
+                    var remaining = word;
+                    while (remaining != 0) {
+                        self.values[out] = @intCast(word_idx * 64 + @ctz(remaining));
+                        out += 1;
+                        remaining &= remaining - 1;
+                    }
+                }
+                self.cardinality = @intCast(out);
+                bc.deinit(allocator);
+                return null;
+            }
             return bc;
         }
 

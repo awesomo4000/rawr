@@ -11,6 +11,7 @@ const ops = @import("container_ops.zig");
 const compare = @import("compare.zig");
 const opt = @import("optimize.zig");
 const ser = @import("serialize.zig");
+const array_kernels = @import("array_kernels.zig");
 const fmt = @import("format.zig");
 
 /// A Roaring Bitmap: an efficient compressed bitmap for 32-bit integers.
@@ -211,18 +212,7 @@ pub const RoaringBitmap = struct {
 
     /// Binary search returning insertion point if not found.
     fn lowerBound(self: *const Self, key: u16) usize {
-        var lo: usize = 0;
-        var hi: usize = self.size;
-
-        while (lo < hi) {
-            const mid = lo + (hi - lo) / 2;
-            if (self.keys[mid] < key) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        return lo;
+        return array_kernels.lowerBound(self.keys[0..self.size], key);
     }
 
     fn grownCapacity(current: u32, needed: u32) u32 {
@@ -1280,10 +1270,26 @@ pub const RoaringBitmap = struct {
 
                 // Try scratch allocator first, fall back to real allocator
                 const scratch_alloc = scratch.allocator();
-                const intersected = ops.containerIntersection(scratch_alloc, self_container, other_container) catch
-                    try ops.containerIntersection(self.allocator, self_container, other_container);
+                const IntersectionResult = struct {
+                    container: Container,
+                    used_scratch: bool,
+                };
+                const intersection: IntersectionResult = blk: {
+                    const scratch_container = ops.containerIntersection(scratch_alloc, self_container, other_container) catch {
+                        scratch.reset();
+                        break :blk .{
+                            .container = try ops.containerIntersection(self.allocator, self_container, other_container),
+                            .used_scratch = false,
+                        };
+                    };
+                    break :blk .{
+                        .container = scratch_container,
+                        .used_scratch = true,
+                    };
+                };
 
-                const used_scratch = scratch.end_index > 0;
+                const intersected = intersection.container;
+                const used_scratch = intersection.used_scratch;
                 self_container.deinit(self.allocator);
 
                 if (intersected.getCardinality() > 0) {

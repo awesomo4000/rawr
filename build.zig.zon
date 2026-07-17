@@ -13,6 +13,8 @@
         "build.zig",
         "build.zig.zon",
         "src/array_container.zig",
+        "src/array_kernels.zig",
+        "src/array_simd.zig",
         "src/bitmap.zig",
         "src/bitmap_tests.zig",
         "src/bitset_container.zig",

@@ -642,6 +642,100 @@ test "bitwiseOrInPlace" {
     try std.testing.expect(a.contains(5));
 }
 
+test "duplicate-heavy array union remains a valid array" {
+    const allocator = std.testing.allocator;
+
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+    for (0..3000) |value| {
+        _ = try a.add(@intCast(value));
+        _ = try b.add(@intCast(value));
+    }
+
+    var result = try a.bitwiseOr(allocator, &b);
+    defer result.deinit();
+    try std.testing.expectEqual(@as(u64, 3000), result.cardinality());
+    try std.testing.expectEqual(.array, result.containers[0].getType());
+    try result.validate();
+
+    const bytes = try result.serialize(allocator);
+    defer allocator.free(bytes);
+    var restored = try RoaringBitmap.deserializeSafe(allocator, bytes);
+    defer restored.deinit();
+    try std.testing.expect(result.equals(&restored));
+}
+
+test "overlapping array union remains a valid array" {
+    const allocator = std.testing.allocator;
+
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+    for (0..3000) |value| _ = try a.add(@intCast(value));
+    for (1000..4000) |value| _ = try b.add(@intCast(value));
+
+    var result = try a.bitwiseOr(allocator, &b);
+    defer result.deinit();
+    try std.testing.expectEqual(@as(u64, 4000), result.cardinality());
+    try std.testing.expectEqual(.array, result.containers[0].getType());
+    try result.validate();
+
+    const bytes = try result.serialize(allocator);
+    defer allocator.free(bytes);
+    var restored = try RoaringBitmap.deserializeSafe(allocator, bytes);
+    defer restored.deinit();
+    try std.testing.expect(result.equals(&restored));
+}
+
+test "duplicate-heavy array union in place remains a valid array" {
+    const allocator = std.testing.allocator;
+
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+    for (0..3000) |value| {
+        _ = try a.add(@intCast(value));
+        _ = try b.add(@intCast(value));
+    }
+
+    try a.bitwiseOrInPlace(&b);
+    try std.testing.expectEqual(@as(u64, 3000), a.cardinality());
+    try std.testing.expectEqual(.array, a.containers[0].getType());
+    try a.validate();
+
+    const bytes = try a.serialize(allocator);
+    defer allocator.free(bytes);
+    var restored = try RoaringBitmap.deserializeSafe(allocator, bytes);
+    defer restored.deinit();
+    try std.testing.expect(a.equals(&restored));
+}
+
+test "overlapping array union in place remains a valid array" {
+    const allocator = std.testing.allocator;
+
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+    for (0..3000) |value| _ = try a.add(@intCast(value));
+    for (1000..4000) |value| _ = try b.add(@intCast(value));
+
+    try a.bitwiseOrInPlace(&b);
+    try std.testing.expectEqual(@as(u64, 4000), a.cardinality());
+    try std.testing.expectEqual(.array, a.containers[0].getType());
+    try a.validate();
+
+    const bytes = try a.serialize(allocator);
+    defer allocator.free(bytes);
+    var restored = try RoaringBitmap.deserializeSafe(allocator, bytes);
+    defer restored.deinit();
+    try std.testing.expect(a.equals(&restored));
+}
+
 test "bitwiseOrInPlace with new chunk" {
     const allocator = std.testing.allocator;
 
@@ -684,6 +778,29 @@ test "bitwiseAndInPlace" {
     try std.testing.expect(a.contains(3));
     try std.testing.expect(!a.contains(1));
     try std.testing.expect(!a.contains(4));
+}
+
+test "bitwiseAndInPlace owns fallback result after scratch exhaustion" {
+    const allocator = std.testing.allocator;
+
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    for (0..5000) |value| _ = try a.add(@intCast(value));
+
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+    for (3000..8000) |value| _ = try b.add(@intCast(value));
+
+    try std.testing.expectEqual(.bitset, a.containers[0].getType());
+    try std.testing.expectEqual(.bitset, b.containers[0].getType());
+
+    try a.bitwiseAndInPlace(&b);
+
+    try std.testing.expectEqual(@as(u64, 2000), a.cardinality());
+    try std.testing.expectEqual(.array, a.containers[0].getType());
+    try std.testing.expect(a.contains(3000));
+    try std.testing.expect(a.contains(4999));
+    try a.validate();
 }
 
 test "bitwiseAndInPlace with empty other" {
