@@ -972,6 +972,8 @@ fn benchCRoaringRangeCardinalityBitsetLarge() void {
 // ============================================================================
 
 pub fn main() !void {
+    bench_time.printBenchEnvironment();
+
     bench_time.print("Rawr vs CRoaring Benchmark Comparison\n", .{});
     bench_time.print("======================================\n", .{});
     bench_time.printRunTimestamp();

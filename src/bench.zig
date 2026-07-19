@@ -417,6 +417,8 @@ fn benchRunOptimize(allocator: std.mem.Allocator) void {
 // ============================================================================
 
 pub fn main() !void {
+    bench_time.printBenchEnvironment();
+
     // Use the C allocator for benchmarks where it is safe; OpenBSD routes
     // through a C shim to avoid Zig 0.16 direct libc-call crashes.
     const allocator = bench_time.cAllocator();

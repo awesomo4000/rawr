@@ -3,6 +3,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// Keep these gates aligned with array_simd without importing a file owned by the rawr module.
+const has_x86_array_simd = builtin.cpu.arch == .x86_64 and
+    std.Target.x86.featureSetHas(builtin.cpu.features, .avx) and
+    std.Target.x86.featureSetHas(builtin.cpu.features, .ssse3);
+const has_neon_array_simd = builtin.cpu.arch == .aarch64 and
+    std.Target.aarch64.featureSetHas(builtin.cpu.features, .neon);
+
 pub fn monotonicNanos() u64 {
     if (builtin.os.tag == .windows) {
         return windowsPerformanceNanos();
@@ -52,6 +59,46 @@ pub fn printRunTimestamp() void {
         day_seconds.getMinutesIntoHour(),
         day_seconds.getSecondsIntoMinute(),
     });
+}
+
+pub fn printBenchEnvironment() void {
+    const features = comptime relevantCpuFeatures();
+    const kernel = if (has_x86_array_simd)
+        "x86-simd"
+    else if (has_neon_array_simd)
+        "neon"
+    else
+        "scalar";
+
+    print("# rawr bench env (compiled target)\n", .{});
+    print("# zig {s} | {s} | {s} {s}\n", .{
+        builtin.zig_version_string,
+        @tagName(builtin.mode),
+        @tagName(builtin.os.tag),
+        @tagName(builtin.cpu.arch),
+    });
+    print("# cpu: {s} | features: {s}\n", .{ builtin.cpu.model.name, features });
+    print("# array-intersect kernel: {s}\n\n", .{kernel});
+}
+
+fn relevantCpuFeatures() []const u8 {
+    comptime var names: []const u8 = "";
+
+    if (builtin.cpu.arch == .x86_64) {
+        if (std.Target.x86.featureSetHas(builtin.cpu.features, .sse2)) names = appendFeature(names, "sse2");
+        if (std.Target.x86.featureSetHas(builtin.cpu.features, .ssse3)) names = appendFeature(names, "ssse3");
+        if (std.Target.x86.featureSetHas(builtin.cpu.features, .sse4_2)) names = appendFeature(names, "sse4_2");
+        if (std.Target.x86.featureSetHas(builtin.cpu.features, .avx)) names = appendFeature(names, "avx");
+        if (std.Target.x86.featureSetHas(builtin.cpu.features, .avx2)) names = appendFeature(names, "avx2");
+    } else if (builtin.cpu.arch == .aarch64) {
+        if (std.Target.aarch64.featureSetHas(builtin.cpu.features, .neon)) names = appendFeature(names, "neon");
+    }
+
+    return if (names.len == 0) "none" else names;
+}
+
+fn appendFeature(comptime names: []const u8, comptime name: []const u8) []const u8 {
+    return if (names.len == 0) name else names ++ " " ++ name;
 }
 
 pub fn cAllocator() std.mem.Allocator {

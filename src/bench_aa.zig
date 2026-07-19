@@ -7,7 +7,6 @@
 //!   ./zig-out/bin/bench_aa
 
 const std = @import("std");
-const builtin = @import("builtin");
 const kernels = @import("array_kernels.zig");
 const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
 const bench_time = @import("bench_time.zig");
@@ -52,14 +51,11 @@ var lookup_keys: [1024]u16 = undefined;
 const BenchError = error{KernelMismatch};
 
 pub fn main() !void {
+    bench_time.printBenchEnvironment();
+
     bench_time.print("Array intersection kernel benchmark\n", .{});
     bench_time.print("===================================\n", .{});
-    bench_time.print("seed=0x{x} target={s}-{s} cpu={s}\n", .{
-        seed,
-        @tagName(builtin.cpu.arch),
-        @tagName(builtin.os.tag),
-        builtin.cpu.model.name,
-    });
+    bench_time.print("seed=0x{x}\n", .{seed});
     bench_time.print("case | shape | kernel | ns/op | ratio vs reference\n", .{});
 
     var prng = std.Random.DefaultPrng.init(seed);

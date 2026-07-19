@@ -272,6 +272,8 @@ fn printMatrixRow(input_name: []const u8, values: [4]f64) void {
 // --- Main ---
 
 pub fn main(init: std.process.Init) !void {
+    bench_time.printBenchEnvironment();
+
     var args = try init.minimal.args.iterateAllocator(std.heap.smp_allocator);
     defer args.deinit();
     _ = args.skip(); // program name
