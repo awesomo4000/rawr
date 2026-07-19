@@ -25,7 +25,7 @@ boolean), add a dispatch entry point in `array_kernels.zig` that picks gallop vs
 merge by the skew threshold, and point `container_ops.zig` at it:
 
 ```zig
-const SKEW_THRESHOLD = 64; // CRoaring's value; "subject to tuning"
+const SKEW_THRESHOLD = 64; // CRoaring's value; "subject to tuning" *
 
 if (@as(u32, small.len) * SKEW_THRESHOLD <= big.len) {   // NOTE: inclusive — see below
     // gallop (existing kernel)
@@ -33,6 +33,11 @@ if (@as(u32, small.len) * SKEW_THRESHOLD <= big.len) {   // NOTE: inclusive — 
     // merge (the branchless walk added in 11-00; same shape as arrayDifferenceArray)
 }
 ```
+
+\* This 64 is the scalar merge-vs-gallop crossover and is what shipped for the
+boolean path. When SIMD landed (11-05/11-06), the write/cardinality dispatch got a
+distinct, measured *SIMD-vs-gallop* crossover per arch — **x86 SIMD 12, AArch64 NEON
+40** — see the umbrella's threshold footnote.
 
 **Inclusive boundary (`<=`, not `<`).** At exactly 1:64 the evidence table has
 merge at ~13.0 µs vs gallop ~2.6 µs — merge is ~5× *slower* there. A `<` boundary

@@ -73,7 +73,7 @@ Findings, confirmed against vendored CRoaring (`vendor/roaring.c:6930`,
    gallop the only path (`container_ops.zig:707`), losing ~1.7× to a branchless merge
    at balanced ratios **everywhere**, and 5–10× to the SIMD kernel on x86. Rule:
    **balanced → merge; highly skewed → gallop.**
-2. CRoaring's kernel algorithms (shuffle-table compaction, threshold=64) are the
+2. CRoaring's kernel algorithms (shuffle-table compaction, threshold=64 *) are the
    reference to port — no better-known alternative.
 3. CRoaring's non-x64 balanced path is plain scalar — there's no NEON array kernel
    to port from, so 11-06 is a from-scratch kernel for ARM targets.
@@ -108,4 +108,14 @@ API" goal.
   feature-detection issues that motivated disabling CRoaring's AVX512 in the compare
   bench.
 - Container-layout / single-allocation changes — a separate track.
-- `SKEW_THRESHOLD` tuning beyond confirming 64 is sane on the board.
+- `SKEW_THRESHOLD` tuning beyond confirming 64 is sane on the board. *
+
+---
+
+\* **Threshold outcome (as implemented).** The scalar merge-vs-gallop crossover
+stayed 64, but 11-05/11-06 introduced a *new* decision — SIMD-vs-gallop — with a
+different, measured crossover per architecture. As shipped: **scalar 64, x86 SIMD
+12, AArch64 NEON 40** (`array_kernels.zig`). The write/cardinality dispatch uses the
+arch-appropriate SIMD threshold; the boolean path (no SIMD) keeps 64. This is the
+"record the crossover" outcome the SIMD chunks' acceptance asked for, not a change to
+the scalar-64 baseline.
