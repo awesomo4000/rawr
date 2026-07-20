@@ -98,8 +98,9 @@ header, changing `HEADER_SIZE` and every offset.
   So growth **and** shrink reset the stored slice's **pointer *and* length** after
   both the in-place-resize and the move paths. Every capacity-changing site re-derives
   the slice from `dataOffset()` + the new capacity.
-- **Derived accessors** (`fn values(self) [*]Elem` = `self + HEADER_SIZE`, never
-  stored) — small header (cardinality/capacity only), no stored pointer, no
+- **Derived accessors** (`fn values(self) [*]Elem` = `self + dataOffset()` — the
+  padded offset, not raw `@sizeOf(Header)`; never stored) — small header
+  (cardinality/capacity only), no stored pointer, no
   reset-after-move hazard. But it's a **repo-wide refactor**: a grep counts ~**207
   `.values` / ~160 `.runs`** — a rough upper bound, since `.values` also matches
   unrelated fields; 13-00 produces the real accessor-migration count. That migration
