@@ -87,10 +87,17 @@ header, changing `HEADER_SIZE` and every offset.
   (`Header { cardinality, capacity, values: []Elem }`), pointing into the same block.
   Larger header, larger `HEADER_SIZE`. Preserves every current call site verbatim,
   but does **not** eliminate the pointer chase (the slice ptr still indirects — now
-  to the same cache line). **Hazard:** after any move, the stored slice pointer must
-  be **reset** to the new block — a `memcpy` of the old header into the new block
-  carries a **dangling pointer** into freed memory. Every move site re-derives the
-  slice.
+  to the same cache line). **Hazard — refresh the slice after *every* capacity change,
+  not just a move:**
+  - On a **move** (relocate): the stored pointer dangles into freed memory unless
+    reset to the new block. (A `memcpy` of the old header into the new block would
+    carry the stale pointer along — reset explicitly.)
+  - On an **in-place `allocator.resize`** (pointer stays valid): the pointer is fine
+    but the stored slice's **length still reflects the old capacity** — it must be
+    updated too.
+  So growth **and** shrink reset the stored slice's **pointer *and* length** after
+  both the in-place-resize and the move paths. Every capacity-changing site re-derives
+  the slice from `dataOffset()` + the new capacity.
 - **Derived accessors** (`fn values(self) [*]Elem` = `self + HEADER_SIZE`, never
   stored) — small header (cardinality/capacity only), no stored pointer, no
   reset-after-move hazard. But it's a **repo-wide refactor**: a grep counts ~**207
@@ -223,15 +230,18 @@ corruption.
 
 ```zig
 fn allocBlock(allocator: Allocator, cap: u16) ![]align(A) u8 {
-    const bytes = std.math.add(usize, HEADER_SIZE,
+    // NB: dataOffset(), NOT @sizeOf(Header) — the header is padded up to A, so a
+    // 24-byte header at A=32 needs a 32-byte offset; using 24 underallocates by 8.
+    const bytes = std.math.add(usize, dataOffset(),
         std.math.mul(usize, cap, @sizeOf(Elem)) catch return error.Overflow) catch return error.Overflow;
     return allocator.alignedAlloc(u8, .fromByteUnits(A), bytes);
     // Elem = u16 for array, RunPair (4 bytes) for run
 }
 ```
 
-**Overflow-safe arithmetic (required):** block size (`HEADER_SIZE + cap*@sizeOf(Elem)`)
-and any capacity-growth doubling must use checked/saturating math (as in spec 12's
+**Overflow-safe arithmetic (required):** block size (`dataOffset() + cap*@sizeOf(Elem)`
+— **always the padded offset, never the raw `@sizeOf(Header)`**) and any
+capacity-growth doubling must use checked/saturating math (as in spec 12's
 `ensureTotalCapacity`) — `cap` is bounded (≤ 4096 for arrays before promotion) but
 the arithmetic must be total regardless of what a caller passes.
 
@@ -242,7 +252,8 @@ of bug `DebugAllocator` exists to catch). Provide shared, private helpers used
 everywhere:
 - `dataOffset()` — `alignForward(@sizeOf(Header), A)` (header size rounded up to `A`;
   **not** just `A` — the header may be larger).
-- `blockSize(cap)` — checked `HEADER_SIZE + cap*@sizeOf(Elem)` (overflow-safe, below).
+- `blockSize(cap)` — checked `dataOffset() + cap*@sizeOf(Elem)` (overflow-safe, below;
+  the padded offset, **not** raw `@sizeOf(Header)`).
 - a `*Self → []align(A) u8` reconstruction that yields the **exact** aligned
   allocation slice to hand back to `allocator.free`.
 - `moveBlock` / `freeBlock` — the single alloc-new+memcpy+free-old and free paths.
@@ -309,8 +320,9 @@ changes, revisit the array block sizing here.
 - Chosen ABI implemented for **array and run; bitset excluded** (D1); growth **and
   shrink** both update slots; aliasing rule enforced and tested; overflow-safe
   block/growth math; block alignment ≥ 4 with the tag-bit/offset compile asserts (D5).
-- Full call-site audit complete across both trees; differential suites green under a
-  **`DebugAllocator`-backed** harness; allocation-failure and aliasing tests pass.
+- Full call-site audit complete across both trees; the **existing `DebugAllocator`-backed
+  suites** (`diff_test`, `validate_roaring64`, `diff_test64`) pass; allocation-failure
+  and aliasing tests pass.
 - Counting-allocator workloads show the **allocation-count reduction** (numbers, both
   trees) and a net time win on allocation-heavy scenarios — per the "own
   measurements" bar.
