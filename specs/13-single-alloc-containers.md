@@ -27,7 +27,7 @@ chunk; stored slices → none).
 - **13-01 — aliasing + ownership rules** under the *current* layout (define and test
   the D4 rules before the layout changes, so the invariant is pinned independently).
 - **13-02 — accessor migration** — **only if D2 selects derived accessors** (the
-  ~207 `.values` / ~160 `.runs` field accesses → calls). Skipped entirely if D2
+  rough grep ~207 `.values` / ~160 `.runs` → calls, exact count from 13-00). Skipped entirely if D2
   picks stored slices.
 - **13-03 — array single-block layout** — the moving ABI, full caller migration, OOM
   tests.
@@ -93,9 +93,10 @@ header, changing `HEADER_SIZE` and every offset.
   slice.
 - **Derived accessors** (`fn values(self) [*]Elem` = `self + HEADER_SIZE`, never
   stored) — small header (cardinality/capacity only), no stored pointer, no
-  reset-after-move hazard. But it's a **repo-wide refactor**: roughly **207 `.values`
-  and 160 `.runs`** field accesses become calls. That migration is chunk 13-02, and
-  it only exists if this option wins.
+  reset-after-move hazard. But it's a **repo-wide refactor**: a grep counts ~**207
+  `.values` / ~160 `.runs`** — a rough upper bound, since `.values` also matches
+  unrelated fields; 13-00 produces the real accessor-migration count. That migration
+  is chunk 13-02, and it only exists if this option wins.
 
 **DECIDED: settle this in a `13-00` prototype/measurement chunk** (see chunk list).
 Prototype both; **start with stored slices if the derived-accessor result is
@@ -130,8 +131,10 @@ result struct carrying it + values like `added: bool`):
 - `ArrayContainer`: `add`, `unionInPlace`, `ensureCapacity`, `shrinkToFit`.
 - `RunContainer`: `add`, `addRange`, **`remove`** (a run split can grow the array),
   `ensureCapacity`, `shrinkToFit`.
-- **Conversion cases** where an array becomes a bitset (or vice versa) — the return
-  must carry the new container of a possibly-different type + tag.
+- **Conversion cases** where an array becomes a bitset (or vice versa) — return a
+  **typed local union/result** (the new container of a possibly-different type), **not
+  a `TaggedPtr`**. Per D3 the container layer stays tag-ignorant; the owning
+  bitmap / `container_ops` layer builds the tag from the returned type.
 - **Ownership: state who frees the old pointer** after a relocation or a conversion
   — the container method (which allocated the new block) frees the old block before
   returning, and the caller only rewrites the tagged slot; define this once so no
@@ -142,31 +145,34 @@ pointer-update audit) — it's in the same ABI and audit as growth.
 
 ### D4 — Aliasing rule for moving containers
 
-A self-operation — `unionInPlace(a, a)` or any op where two arguments alias the
-same container — can **relocate and free the block while the other argument still
-points at the old one** (use-after-free). **DECIDED: special-case pointer equality
-*before* any growth or relocation**, and define ownership per operation — identity
-ops must **avoid growth/relocation entirely** (there is no "self-aliased grow path"
-to reach; alias detection happens first):
+A self-operation — `unionInPlace(a, a)`, or any op where two arguments alias the same
+container — can **relocate and free the block while the other argument still points at
+the old one** (use-after-free). **DECIDED: special-case pointer equality *before* any
+growth or relocation** so identity ops never reach a grow/relocate path. The handling
+**differs by API shape — an *allocating* op must not mutate its input:**
 
-- **self-union / self-intersection** → the result equals the input; return it
-  **unchanged** (no alloc, no free).
-- **self-XOR / self-difference** → the result is **empty**; replace with an empty
-  container and **deinitialize the old container exactly once** (no double-free, no
+- **Allocating** (`a.bitwiseXor(allocator, &a)`, etc.) — returns a **new** result and
+  leaves `a` **unchanged** (never frees `a`'s containers): self-union / self-intersection
+  → a fresh clone of `a`; self-XOR / self-difference → a fresh **empty** bitmap.
+- **In-place** (`a.bitwiseXorInPlace(&a)`, etc.) — may mutate `a`: self-union /
+  self-intersection → **no-op** (leave `a` as-is); self-XOR / self-difference →
+  **clear** `a`, deinitializing its containers **exactly once** (no double-free, no
   leak).
 
-**Aliasing scope — state exactly what's supported:**
-- **`self == other` at the bitmap API boundary** (e.g. `a.bitwiseXor(a)`) — supported
-  via the pointer-equality short-circuit above.
-- **Equal container pointers reached through two different bitmaps** — supported (same
-  short-circuit at the container-op layer, keyed on container pointer, not bitmap).
-- **Shallow-copied bitmap structs sharing container arrays** — **unsupported** (that
-  aliases the whole index, not a container; it already breaks the current model).
-  Document as out of scope.
+**Aliasing scope — what's supported:**
+- **`self == other` at the bitmap API boundary** (e.g. `a.bitwiseXorInPlace(&a)`) —
+  supported via the pointer-equality short-circuit above.
+- **Transient container-op aliases with exactly one owner** (two arguments of a single
+  op resolving to the same container pointer) — supported; the short-circuit keys on
+  container pointer within that one operation.
+- **Two *owning* bitmaps sharing a container** — **unsupported.** Without reference
+  counting or copy-on-write, one owner's mutation invalidates the other and deinit
+  eventually double-frees. Out of scope — rawr has no COW (the API-gap audit records
+  COW as a deliberate omission).
 
-Note there is **no "self-aliased shrink"** — `shrinkToFit` takes one argument, so
-aliasing can't arise there; what matters on the shrink path is simply **updating the
-owning tagged slot after the block relocates** (D3), not alias detection.
+There is **no "self-aliased shrink"** — `shrinkToFit` takes one argument, so aliasing
+can't arise; what matters on the shrink path is **updating the owning tagged slot after
+the block relocates** (D3), not alias detection.
 
 Tests must verify (a) **alias detection fires before any relocation** for the two
 supported cases, and (b) **correct empty-result ownership** for self-XOR/difference
@@ -201,10 +207,19 @@ A = max(header alignment, payload alignment, 4)   // 4 = TaggedPtr's 2 tag bits
   2-byte-aligned block would collide with the tag bits.
 - **Bitset**: words → **A = 64** (if in scope, per D1).
 
+**Data offset — align the header size *up* to `A` (the header can be larger than
+`A`):** the stored-slice header (D2) likely exceeds 16 bytes, so `dataOffset` is not
+simply `A`:
+
+```zig
+const data_offset = std.mem.alignForward(usize, @sizeOf(Header), A);
+```
+
 **Compile-time assertions (required):** `comptime` assert, per container type, that
-(1) `A >= 4` (tag bits available), (2) the data offset is a multiple of `A`, and (3)
-`@sizeOf(Header)` fits the padding to `A`. These catch a mis-sized header or a
-too-small alignment at build time rather than as a runtime tag corruption.
+(1) `A >= 4` (tag bits available), (2) `data_offset % A == 0`, and (3) `data_offset >=
+@sizeOf(Header)` — **not** that the header fits *within* `A` (it needn't). These catch
+a too-small alignment or a bad offset at build time rather than as runtime tag/data
+corruption.
 
 ```zig
 fn allocBlock(allocator: Allocator, cap: u16) ![]align(A) u8 {
@@ -225,7 +240,8 @@ the arithmetic must be total regardless of what a caller passes.
 data offset **the same way**, or they'll free/copy mismatched sizes (the exact class
 of bug `DebugAllocator` exists to catch). Provide shared, private helpers used
 everywhere:
-- `dataOffset()` — the padded header size (= `A`).
+- `dataOffset()` — `alignForward(@sizeOf(Header), A)` (header size rounded up to `A`;
+  **not** just `A` — the header may be larger).
 - `blockSize(cap)` — checked `HEADER_SIZE + cap*@sizeOf(Elem)` (overflow-safe, below).
 - a `*Self → []align(A) u8` reconstruction that yields the **exact** aligned
   allocation slice to hand back to `allocator.free`.
@@ -262,7 +278,9 @@ grows a result container. Starting set (verify exhaustiveness by grepping
   three suites. **Decide** whether `validate_croaring` also needs switching (likely
   not — three suites already exercise the checking). **Do not** add a vague build
   flag; the checking is already in place.
-- **Aliasing tests** (D4): self-aliased grow/shrink under `DebugAllocator`.
+- **Aliasing tests** (D4): the supported self-aliased cases — allocating vs in-place
+  self-XOR/difference/union/intersection at the bitmap boundary — under
+  `DebugAllocator` (there is no self-aliased *shrink*; shrink is a slot-update check).
 - **Allocation-failure tests**: a failing allocator on the alloc-new-then-move path
   leaves the container and its slot unchanged and usable.
 - **Allocation-count proof, not just time — with fixed workloads.** The existing
@@ -302,4 +320,5 @@ changes, revisit the array block sizing here.
 **L (multi-week), not M.** The earlier `M` was optimistic given: pointer-moving
 APIs, direct `.values`/`.runs` field usage (D2), shrink-also-moves handling,
 aliasing rules, and the dual 32/64-bit call-site audit. Scope depends heavily on
-D2 (derived accessors → repo-wide refactor) and D1 (bitset in/out).
+D2 (derived accessors → repo-wide refactor). D1 is settled (array + run; bitset
+excluded), so it no longer swings the estimate.
