@@ -174,9 +174,11 @@ then hand-filter to the actual `ArrayContainer`/`RunContainer` field accesses (t
 **Noise floor `ε` — per workload, as a percentage.** One absolute value can't span
 operations of different durations, so establish **`ε_w` per workload `w`** as a
 percent: do **K = 5 complete benchmark reruns** (the whole variant×workload matrix,
-fresh process each time), and for each workload take `ε_w` = the max relative spread of
-its per-variant medians across the 5 reruns (report every `ε_w`). All "win/regression"
-judgments below are **relative** (percent) against that workload's own `ε_w`.
+fresh process each time). For each workload and variant, relative spread is
+`(maximum median - minimum median) / median of the five medians`. The workload noise
+floor `ε_w` is the maximum relative spread among its four variants (report every
+`ε_w`). All "win/regression" judgments below are **relative** (percent) against that
+workload's own `ε_w`.
 
 - **Q1 go/no-go (whole spec):** GO requires **all** of:
   1. reserved-capacity build allocation count drops to ≈ N (from ≈ 2N) — deterministic,
