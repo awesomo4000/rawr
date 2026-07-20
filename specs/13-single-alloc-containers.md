@@ -110,8 +110,8 @@ header, changing `HEADER_SIZE` and every offset.
 Prototype both; **start with stored slices if the derived-accessor result is
 marginal** — the allocation-count win is real regardless, the pointer-chase win only
 materializes with derived accessors, and it may not justify the repo-wide refactor.
-If slices stay, the reset-after-move rule above is mandatory. This choice gates the
-size of the whole spec, so it's resolved *first*, with numbers.
+If slices stay, the refresh-after-capacity-change rule above is mandatory. This
+choice gates the size of the whole spec, so it's resolved *first*, with numbers.
 
 ### D3 — The pointer-update ABI (choose one)
 
