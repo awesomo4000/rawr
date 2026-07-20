@@ -16,15 +16,26 @@ layout implementation is written. So the next step is `13-00`, not the full layo
 
 ## Chunk plan
 
-- **13-00 — prototype + measurement (D2).** Build a throwaway prototype of both
-  `values`/`runs` forms (stored slice vs derived accessor) on `ArrayContainer`,
-  measure the pointer-chase win in isolation with the counting allocator + the
-  workloads below, and **pick slices or accessors** with numbers. Also confirm the
-  allocation-count reduction is real before committing to the full audit. Output:
-  D2 decided, recorded here; go/no-go on the whole spec.
-- **13-01+ — layout implementation** (array, then run), the pointer-return ABI,
-  the aliasing rule, growth+shrink slot updates, and the dual-tree call-site audit.
-  Written only after 13-00 lands.
+Only **13-00 is ready to chunk now**; the `13-01+` specs are written *after* 13-00
+because D2 deliberately changes their scope (derived accessors → an accessor-migration
+chunk; stored slices → none).
+
+- **13-00 — prototype + D2 decision.** Prototype **both** D2 layouts (stored-slice
+  and derived-accessor) on `ArrayContainer`; stand up the counting harness + fixed
+  workloads (see Testing); record the baseline; **decide D2 with numbers** and the
+  go/no-go on the whole spec.
+- **13-01 — aliasing + ownership rules** under the *current* layout (define and test
+  the D4 rules before the layout changes, so the invariant is pinned independently).
+- **13-02 — accessor migration** — **only if D2 selects derived accessors** (the
+  ~207 `.values` / ~160 `.runs` field accesses → calls). Skipped entirely if D2
+  picks stored slices.
+- **13-03 — array single-block layout** — the moving ABI, full caller migration, OOM
+  tests.
+- **13-04 — run single-block layout** — same, for `RunContainer`.
+- **13-05 — shrink / slot audit** across the 32-bit and 64-bit trees + the full
+  differential matrix.
+- **13-06 — results** — allocation-count + timing numbers, cross-platform builds,
+  final docs.
 
 ## Goal / evidence
 
@@ -67,17 +78,24 @@ block) but adds nothing structurally and forces the 64-byte-alignment question.
 
 ### D2 — Stored slices vs derived accessors
 
-- **Keep stored `values`/`runs` slices** (a field on the header pointing into the
-  same block): preserves every current call site verbatim, but does **not**
-  eliminate the pointer chase the redesign is partly justified by (the slice ptr
-  still indirects — though now to the same cache line). **Hazard if slices stay:**
-  after any move (realloc/relocate), the stored slice pointer must be **reset** to
-  the new block — a `memcpy` of the old header into the new block would carry a
-  **dangling pointer** into freed memory. Every move site re-derives the slice.
-- **Derived accessors** (`fn values(self) [*]u16` computed as `self + HEADER_SIZE`,
-  never stored): actually removes the stored pointer *and* the reset-after-move
-  hazard, but requires a **repo-wide refactor** of every `.values` / `.runs` field
-  access into a call.
+The two forms have **different headers and offset math — define both explicitly in
+13-00**, because the target layout sketch below (header = cardinality/capacity only)
+is the *derived-accessor* layout; the stored-slice form needs the slice in the
+header, changing `HEADER_SIZE` and every offset.
+
+- **Keep stored `values`/`runs` slices** — the slice lives *in the header*
+  (`Header { cardinality, capacity, values: []Elem }`), pointing into the same block.
+  Larger header, larger `HEADER_SIZE`. Preserves every current call site verbatim,
+  but does **not** eliminate the pointer chase (the slice ptr still indirects — now
+  to the same cache line). **Hazard:** after any move, the stored slice pointer must
+  be **reset** to the new block — a `memcpy` of the old header into the new block
+  carries a **dangling pointer** into freed memory. Every move site re-derives the
+  slice.
+- **Derived accessors** (`fn values(self) [*]Elem` = `self + HEADER_SIZE`, never
+  stored) — small header (cardinality/capacity only), no stored pointer, no
+  reset-after-move hazard. But it's a **repo-wide refactor**: roughly **207 `.values`
+  and 160 `.runs`** field accesses become calls. That migration is chunk 13-02, and
+  it only exists if this option wins.
 
 **DECIDED: settle this in a `13-00` prototype/measurement chunk** (see chunk list).
 Prototype both; **start with stored slices if the derived-accessor result is
@@ -105,11 +123,22 @@ pointer + any result value (a small result struct carrying e.g. `added: bool`), 
 the layer that *owns* the slot (bitmap / `container_ops` helpers) writes the tagged
 slot.
 
-**Signatures to define once (b) or (a) is chosen** — at minimum:
-`add`, `addRange`, `unionInPlace` (and the other in-place set ops that can grow a
-result), `ensureCapacity`, and **`shrinkToFit`**. Shrinking **also moves the
-block** and was missing from the earlier pointer-update audit — it must be in the
-same ABI and audit as growth.
+**Exact return contracts to define before implementation** (13-03/13-04) — each
+grow/shrink/convert-capable method returns the possibly-relocated `*Self` (or a
+result struct carrying it + values like `added: bool`):
+
+- `ArrayContainer`: `add`, `unionInPlace`, `ensureCapacity`, `shrinkToFit`.
+- `RunContainer`: `add`, `addRange`, **`remove`** (a run split can grow the array),
+  `ensureCapacity`, `shrinkToFit`.
+- **Conversion cases** where an array becomes a bitset (or vice versa) — the return
+  must carry the new container of a possibly-different type + tag.
+- **Ownership: state who frees the old pointer** after a relocation or a conversion
+  — the container method (which allocated the new block) frees the old block before
+  returning, and the caller only rewrites the tagged slot; define this once so no
+  path double-frees or leaks.
+
+Shrinking **also moves the block** (it was missing from an earlier draft's
+pointer-update audit) — it's in the same ABI and audit as growth.
 
 ### D4 — Aliasing rule for moving containers
 
@@ -126,9 +155,22 @@ to reach; alias detection happens first):
   container and **deinitialize the old container exactly once** (no double-free, no
   leak).
 
-Tests must verify (a) **alias detection fires before any relocation**, and (b)
-**correct empty-result ownership** for self-XOR/difference (exactly-once free),
-under `DebugAllocator`.
+**Aliasing scope — state exactly what's supported:**
+- **`self == other` at the bitmap API boundary** (e.g. `a.bitwiseXor(a)`) — supported
+  via the pointer-equality short-circuit above.
+- **Equal container pointers reached through two different bitmaps** — supported (same
+  short-circuit at the container-op layer, keyed on container pointer, not bitmap).
+- **Shallow-copied bitmap structs sharing container arrays** — **unsupported** (that
+  aliases the whole index, not a container; it already breaks the current model).
+  Document as out of scope.
+
+Note there is **no "self-aliased shrink"** — `shrinkToFit` takes one argument, so
+aliasing can't arise there; what matters on the shrink path is simply **updating the
+owning tagged slot after the block relocates** (D3), not alias detection.
+
+Tests must verify (a) **alias detection fires before any relocation** for the two
+supported cases, and (b) **correct empty-result ownership** for self-XOR/difference
+(exactly-once free), under `DebugAllocator`.
 
 ## Target layout sketch (array; run analogous with the 4-byte `RunPair` + cached card)
 
@@ -137,15 +179,32 @@ offset 0:   Header { cardinality: u16, capacity: u16 }   padded to data alignmen
 offset A:   data...                                        (A = data alignment; see D5)
 ```
 
-**D5 — per-type data alignment. DECIDED: array 16, run natural alignment, bitset 64
-(if in scope).** The shipped 11-05/11-06 array kernels are **128-bit** (`@Vector(8,
-u16)` = 16-byte loads), so **16-byte** data alignment is exactly what keeps those
-loads aligned. An earlier draft said 32; that is over-aligned — 32 would only matter
-for a 256-bit kernel, and there deliberately isn't one (a 256-bit AVX2 array-intersect
-doesn't compact cleanly — `vpshufb` is lane-restricted — which is why the wide path is
-AVX-512, out of scope in spec 11). Over-aligning wastes header padding per container,
-which cuts against the allocation-size goal for no load-speed benefit. Run data has no
-SIMD kernel → `@alignOf(RunPair)`. Bitset words → 64 (if in scope, per D1).
+**D5 — per-type *block* alignment. DECIDED: array 16, run 4, bitset 64 (if in scope).**
+
+**Tag-bit invariant (correctness, not just SIMD):** `TaggedPtr` consumes the **two
+low address bits** of the block pointer to encode the container type, so **every
+block must be aligned to at least 4** regardless of payload needs. The block
+alignment is:
+
+```
+A = max(header alignment, payload alignment, 4)   // 4 = TaggedPtr's 2 tag bits
+```
+
+- **Array**: the shipped 11-05/11-06 kernels are **128-bit** (`@Vector(8, u16)` =
+  16-byte loads), so 16-byte alignment keeps those loads aligned → **A = 16** (≥ 4,
+  tag bits fine). (An earlier draft said 32; over-aligned — 32 only matters for a
+  256-bit kernel, which deliberately doesn't exist: 256-bit AVX2 array-intersect
+  can't compact cleanly (`vpshufb` is lane-restricted), so the wide path is AVX-512,
+  out of scope. Extra alignment wastes header padding for no load benefit.)
+- **Run**: `@alignOf(RunPair)` is only **2** — **insufficient for the 2-bit tag** — so
+  run blocks must be bumped to **A = 4**. Do **not** use natural RunPair alignment; a
+  2-byte-aligned block would collide with the tag bits.
+- **Bitset**: words → **A = 64** (if in scope, per D1).
+
+**Compile-time assertions (required):** `comptime` assert, per container type, that
+(1) `A >= 4` (tag bits available), (2) the data offset is a multiple of `A`, and (3)
+`@sizeOf(Header)` fits the padding to `A`. These catch a mis-sized header or a
+too-small alignment at build time rather than as a runtime tag corruption.
 
 ```zig
 fn allocBlock(allocator: Allocator, cap: u16) ![]align(A) u8 {
@@ -161,13 +220,24 @@ and any capacity-growth doubling must use checked/saturating math (as in spec 12
 `ensureTotalCapacity`) — `cap` is bounded (≤ 4096 for arrays before promotion) but
 the arithmetic must be total regardless of what a caller passes.
 
+**Canonical block reconstruction (required — one implementation, not per-call-site).**
+`deinit`, `clone`, resize, and the OOM/move paths must all compute block size and the
+data offset **the same way**, or they'll free/copy mismatched sizes (the exact class
+of bug `DebugAllocator` exists to catch). Provide shared, private helpers used
+everywhere:
+- `dataOffset()` — the padded header size (= `A`).
+- `blockSize(cap)` — checked `HEADER_SIZE + cap*@sizeOf(Elem)` (overflow-safe, below).
+- a `*Self → []align(A) u8` reconstruction that yields the **exact** aligned
+  allocation slice to hand back to `allocator.free`.
+- `moveBlock` / `freeBlock` — the single alloc-new+memcpy+free-old and free paths.
+
 Growth: try `allocator.resize` first (in-place keeps the pointer — common with
-power-of-two caps); on failure, alloc-new + memcpy + free-old, then update the slot
-per D3. `clone` / `deinit` free/copy `HEADER_SIZE + cap*@sizeOf(Elem)` as one block,
-not two. (The **serialized wire size** is a *separate* computation — it is the
-portable-format byte length, unrelated to the allocation-block size, and is
-unchanged by this spec.) `TaggedPtr` scheme unchanged — tag bits still discriminate
-type; only what the pointer points at changes.
+power-of-two caps); on failure, `moveBlock` (alloc-new + memcpy + free-old), then
+update the slot per D3. `clone` / `deinit` go through the same helpers — free/copy one
+block, not two. (The **serialized wire size** is a *separate* computation — the
+portable-format byte length, unrelated to the allocation-block size, unchanged by this
+spec.) `TaggedPtr` scheme unchanged — tag bits still discriminate type; only what the
+pointer points at changes.
 
 ## Call-site audit (both trees, growth **and** shrink)
 
@@ -184,25 +254,30 @@ grows a result container. Starting set (verify exhaustiveness by grepping
 
 ## Testing
 
-- **`DebugAllocator` must actually back the differential executables.** They do
-  **not** use it today (unit `test`/`test64` use `std.testing.allocator`, but the
-  `validate*`/`difftest*` exes use their own GPA/`ReleaseFast` config). This
-  redesign's core risks — freeing the wrong block size, double-free on a moved block
-  — are exactly what `DebugAllocator` catches, so wire it in: either build the
-  `validate*`/`difftest*` modules with `DebugAllocator` as the harness allocator (a
-  build flag/param), or add dedicated `DebugAllocator`-backed harness runs. Specify
-  which in the implementation chunk; "green under DebugAllocator" is otherwise not a
-  real check.
+- **`DebugAllocator` coverage already mostly exists** (corrected — an earlier draft
+  wrongly said the differential exes don't use it). In fact `diff_test`,
+  `validate_roaring64`, and `diff_test64` **already run under `DebugAllocator`**; only
+  `validate_croaring` uses the C allocator. That's the coverage this redesign needs
+  — freeing the wrong block size / double-free on a moved block will surface in those
+  three suites. **Decide** whether `validate_croaring` also needs switching (likely
+  not — three suites already exercise the checking). **Do not** add a vague build
+  flag; the checking is already in place.
 - **Aliasing tests** (D4): self-aliased grow/shrink under `DebugAllocator`.
 - **Allocation-failure tests**: a failing allocator on the alloc-new-then-move path
   leaves the container and its slot unchanged and usable.
-- **Allocation-count proof, not just time.** The existing allocator-matrix bench
-  reports *time*, not allocation counts — it can't prove the "fewer allocations"
-  claim. Add a **counting allocator** wrapper (tallies alloc/free calls + bytes) and
-  run concrete workloads on **both trees**: build-N-containers, clone, and
-  deserialize a large bitmap for 32-bit; the same over a many-bucket
-  `Roaring64Bitmap`. Record before/after **allocation counts** (expect ~½ the
-  per-container allocs) alongside the time deltas.
+- **Allocation-count proof, not just time — with fixed workloads.** The existing
+  allocator-matrix bench reports *time*, not allocation counts. Add a **counting
+  allocator** (tallies alloc/free calls + bytes) and run **fixed, specified**
+  workloads on both trees — pin **N, container shapes, seeds, and the target/CPU**, and
+  state the **go/no-go criterion**, so the result is reproducible and decisive:
+  - build-N-containers, clone, and deserialize a large bitmap (32-bit); the same over
+    a many-bucket `Roaring64Bitmap`.
+  - Record before/after allocation counts + time deltas.
+  - **"~½ the allocations" is per array/run container** (two allocs → one). It is
+    **not** ½ of total bitmap construction or deserialization — those also allocate
+    the top-level index and any bitset containers (bitset is unchanged, per D1). State
+    the expected reduction against the *per-container* baseline, not the whole
+    workload, so the go/no-go isn't measured against an impossible target.
 
 **Coordination with spec 11:** spec 11's SIMD kernels now compact through a local
 stack scratch (not container over-allocation), so **this spec's layout carries no
@@ -213,8 +288,9 @@ changes, revisit the array block sizing here.
 
 - D1/D3/D4/D5 ratified; **D2 decided by `13-00` with numbers** before any layout
   chunk (13-01+) is written.
-- Chosen ABI implemented for array (+ run; bitset per D1); growth **and shrink** both
-  update slots; aliasing rule enforced and tested; overflow-safe block/growth math.
+- Chosen ABI implemented for **array and run; bitset excluded** (D1); growth **and
+  shrink** both update slots; aliasing rule enforced and tested; overflow-safe
+  block/growth math; block alignment ≥ 4 with the tag-bit/offset compile asserts (D5).
 - Full call-site audit complete across both trees; differential suites green under a
   **`DebugAllocator`-backed** harness; allocation-failure and aliasing tests pass.
 - Counting-allocator workloads show the **allocation-count reduction** (numbers, both
