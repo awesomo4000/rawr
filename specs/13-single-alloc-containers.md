@@ -31,9 +31,11 @@ layout implementation is written. So the next step is `13-00`, not the full layo
 `ArrayContainer.init` = `allocator.create(Self)` **plus** `alignedAlloc` for values
 — two allocations, two pointer chases, header and data on different cache lines
 (`RunContainer` is the same shape). Co-locating the header with the data in one
-aligned block removes an allocation and a pointer chase per container. This is the
-one structural improvement that goes **beyond** CRoaring (which has the same
-two-malloc flaw), not a port of it.
+aligned block removes an allocation and a pointer chase per container. Unlike the
+kernel work (which ports CRoaring's algorithms), this is a layout choice rawr makes
+on its own terms: CRoaring, like the current rawr, allocates two blocks per
+container — a header and a separate payload — so the single-block layout is a
+structural change here, not a port of an existing design.
 
 The payoff is amplified on the 64-bit tree: `Roaring64Bitmap` multiplies container
 counts (many small containers under high-32 buckets), so per-container allocation
