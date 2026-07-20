@@ -221,3 +221,56 @@ workload's own `ε_w`.
   stated.**
 - The counting allocator and `bench-proto` land **committed** (reusable util +
   reproducible measurement).
+
+## Results (07/20/2026)
+
+Authoritative host: `AARHODES-M-P120`, Apple M4 (`aarch64-macos`), Zig 0.16.0,
+`ReleaseFast`, `-Dcpu=native`, counting wrapper over `std.heap.smp_allocator`.
+Each number below is the median of the five fresh-process medians; each process used
+one warmup and nine timed trials. All `remap` counts were zero as required.
+
+| Variant | Workload | ms | alloc | free | resize ok/fail | requested B | live B | peak B |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline-32 | build-reserved | 15.082 | 20000 | 0 | 0/0 | 18935408 | 18935408 | 18935408 |
+| baseline-32 | build-growth | 17.063 | 77261 | 57261 | 0/0 | 37550816 | 18935408 | 18939504 |
+| baseline-32 | clone | 0.986 | 20000 | 0 | 0/0 | 18935408 | 37870816 | 37870816 |
+| baseline-32 | deinit | 0.164 | 0 | 20000 | 0/0 | 0 | 0 | 18935408 |
+| baseline-32 | membership | 2.342 | 0 | 0 | 0/0 | 0 | 18935408 | 18935408 |
+| baseline-32 | iterate | 2.323 | 0 | 0 | 0/0 | 0 | 18935408 | 18935408 |
+| baseline-32 | cardinality | 0.006 | 0 | 0 | 0/0 | 0 | 18935408 | 18935408 |
+| control-16 | build-reserved | 15.075 | 20000 | 0 | 0/0 | 18935408 | 18935408 | 18935408 |
+| control-16 | build-growth | 17.524 | 77261 | 57261 | 0/0 | 37550816 | 18935408 | 18939504 |
+| control-16 | clone | 0.942 | 20000 | 0 | 0/0 | 18935408 | 37870816 | 37870816 |
+| control-16 | deinit | 0.170 | 0 | 20000 | 0/0 | 0 | 0 | 18935408 |
+| control-16 | membership | 2.352 | 0 | 0 | 0/0 | 0 | 18935408 | 18935408 |
+| control-16 | iterate | 2.330 | 0 | 0 | 0/0 | 0 | 18935408 | 18935408 |
+| control-16 | cardinality | 0.006 | 0 | 0 | 0/0 | 0 | 18935408 | 18935408 |
+| single-stored | build-reserved | 15.518 | 10000 | 0 | 0/0 | 19015408 | 19015408 | 19015408 |
+| single-stored | build-growth | 19.468 | 48129 | 38129 | 19132/38129 | 77457376 | 19015408 | 19019536 |
+| single-stored | clone | 1.545 | 10000 | 0 | 0/0 | 19015408 | 38030816 | 38030816 |
+| single-stored | deinit | 0.096 | 0 | 10000 | 0/0 | 0 | 0 | 19015408 |
+| single-stored | membership | 3.104 | 0 | 0 | 0/0 | 0 | 19015408 | 19015408 |
+| single-stored | iterate | 2.478 | 0 | 0 | 0/0 | 0 | 19015408 | 19015408 |
+| single-stored | cardinality | 0.020 | 0 | 0 | 0/0 | 0 | 19015408 | 19015408 |
+| single-derived | build-reserved | 15.540 | 10000 | 0 | 0/0 | 18855408 | 18855408 | 18855408 |
+| single-derived | build-growth | 19.258 | 57543 | 47543 | 9718/47543 | 76223008 | 18855408 | 18859520 |
+| single-derived | clone | 1.233 | 10000 | 0 | 0/0 | 18855408 | 37710816 | 37710816 |
+| single-derived | deinit | 0.091 | 0 | 10000 | 0/0 | 0 | 0 | 18855408 |
+| single-derived | membership | 3.201 | 0 | 0 | 0/0 | 0 | 18855408 | 18855408 |
+| single-derived | iterate | 2.507 | 0 | 0 | 0/0 | 0 | 18855408 | 18855408 |
+| single-derived | cardinality | 0.019 | 0 | 0 | 0/0 | 0 | 18855408 | 18855408 |
+
+Per-workload noise floors: build-reserved 3.30%, build-growth 4.59%, clone
+31.74%, deinit 46.88%, membership 9.86%, iterate 6.90%, cardinality 25.00%.
+
+**Q1: NO-GO / PARK.** Reserved construction did halve allocation calls from 20,000
+to 10,000, but the chosen stored-slice layout was 2.89% slower on build-reserved and
+56.69% slower on clone, rather than winning by `2*epsilon_w`. It also regressed
+build-growth by 14.09% and membership by 32.54%, both beyond their noise floors.
+The allocation reduction does not justify the moving internal ABI on this evidence.
+
+**Q2: stored slices.** Derived accessors were 3.12% slower than stored slices for
+membership and 1.17% slower for iteration; they missed the respective 19.73% and
+13.80% (`2*epsilon_w`) win thresholds. The hand-filtered migration audit found **147
+real `.values` references and 132 real `.runs` references** in container-owned code,
+so the default stored-slice choice also avoids 279 unnecessary call-site changes.

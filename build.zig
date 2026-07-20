@@ -93,6 +93,22 @@ pub fn build(b: *std.Build) void {
     const bench_aa_step = b.step("bench-aa", "Build array-intersection kernel benchmarks");
     bench_aa_step.dependOn(&b.addInstallArtifact(bench_aa_exe, .{}).step);
 
+    // Isolated single-allocation container prototype benchmark.
+    const bench_proto_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_single_alloc.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_proto_mod.link_libc = true;
+    addBenchmarkPlatformShim(b, bench_proto_mod, target);
+
+    const bench_proto_exe = b.addExecutable(.{
+        .name = "bench_single_alloc",
+        .root_module = bench_proto_mod,
+    });
+    const bench_proto_step = b.step("bench-proto", "Build single-allocation prototype benchmark");
+    bench_proto_step.dependOn(&b.addInstallArtifact(bench_proto_exe, .{}).step);
+
     // CRoaring validation executable
     const validate_mod = b.createModule(.{
         .root_source_file = b.path("src/validate_croaring.zig"),

@@ -9,16 +9,15 @@ results, and wire format stay identical, but container *internal* signatures cha
 64-bit trees. Highest complexity and regression risk of the perf work — it gets its
 own review/testing bar and its own measurements proving the win.
 
-**Design round → prototype → implement.** D1, D3, D4, D5 are now **ratified**
-(marked DECIDED below). The one open variable — D2 (stored slices vs derived
-accessors) — is resolved by a **`13-00` prototype/measurement chunk** before any
-layout implementation is written. So the next step is `13-00`, not the full layout.
+**Design round → prototype → implement.** D1, D3, D4, D5 are **ratified** and D2
+is resolved as stored slices. The `13-00` prototype halved per-container allocation
+calls but failed the required timing gate, so this initiative is **NO-GO / PARKED**.
+Do not write or execute `13-01+` unless new evidence justifies reopening it.
 
 ## Chunk plan
 
-Only **13-00 is ready to chunk now**; the `13-01+` specs are written *after* 13-00
-because D2 deliberately changes their scope (derived accessors → an accessor-migration
-chunk; stored slices → none).
+`13-00` completed the measurement gate. The `13-01+` work below is parked because
+the proposed layout did not produce the required build/clone time win.
 
 - **13-00 — prototype + D2 decision.** Prototype **both** D2 layouts (stored-slice
   and derived-accessor) on `ArrayContainer`; stand up the counting harness + fixed
@@ -106,12 +105,12 @@ header, changing `HEADER_SIZE` and every offset.
   unrelated fields; 13-00 produces the real accessor-migration count. That migration
   is chunk 13-02, and it only exists if this option wins.
 
-**DECIDED: settle this in a `13-00` prototype/measurement chunk** (see chunk list).
-Prototype both; **start with stored slices if the derived-accessor result is
-marginal** — the allocation-count win is real regardless, the pointer-chase win only
-materializes with derived accessors, and it may not justify the repo-wide refactor.
-If slices stay, the refresh-after-capacity-change rule above is mandatory. This
-choice gates the size of the whole spec, so it's resolved *first*, with numbers.
+**RESOLVED by `13-00`: stored slices.** Derived accessors were 3.12% slower than
+stored slices for membership and 1.17% slower for iteration, missing the respective
+19.73% and 13.80% (`2*epsilon_w`) win thresholds. The hand-filtered migration count
+was 147 real `.values` references plus 132 real `.runs` references, so there is no
+performance case for that 279-reference migration. If this initiative is reopened,
+the refresh-after-capacity-change rule above remains mandatory.
 
 ### D3 — The pointer-update ABI (choose one)
 
