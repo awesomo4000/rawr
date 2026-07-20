@@ -57,26 +57,63 @@ Attribution: `(3 or 4) − (2)` = pure single-alloc effect; `(3 or 4) − (1)` =
 **complete proposed change** (what ships) — that difference is the Q1 headline.
 
 Each variant needs just enough to run the workloads: `init`, `initCapacity` (reserve
-up front), `add` (grow via `resize`-then-move), membership, iterate, cardinality,
-`clone`, `deinit`. Block alignment ≥ 4 (trivially satisfied at 16). Use the shared
-`dataOffset()`/`blockSize()` math from the umbrella.
+up front), `add`, membership, iterate, cardinality, `clone`, `deinit`. Block
+alignment ≥ 4 (trivially satisfied at 16). Use the shared `dataOffset()`/`blockSize()`
+math from the umbrella.
+
+**Growth mechanism differs by design — do not force one path on all variants:**
+- **Baseline (1) and control (2)** keep the **current shipped growth**: alloc-new +
+  copy + free-old, **no `allocator.resize`** (the two-alloc `ArrayContainer` never
+  tries resize). Control is baseline's growth path, just at 16-byte alignment.
+- **Single-alloc (3, 4)** grow via **`resize`-then-move** (try in-place `resize`
+  first, alloc-new+copy+free-old on failure), per the umbrella D3/growth rule.
+
+This asymmetry is *part of the proposed change* (trying resize is new), so the
+build-growth workload measures shipped-growth vs proposed-growth honestly — but it's
+exactly why build-growth is reported separately from the reserved-capacity headline.
 
 ## Counting-allocator harness (keep this — reused in 13-06)
 
-A real, reusable `std.mem.Allocator` wrapper over a **fixed backing allocator**
-(`std.heap.page_allocator` or a GPA — state which; use the same one for every
-variant). It tallies, distinctly:
+A real, reusable `std.mem.Allocator` wrapper over the **authoritative backing
+allocator `std.heap.smp_allocator`** (same one for every variant). It tallies,
+distinctly:
 
 - **`alloc` calls** and **`free` calls** (the headline count — a two-alloc container
   is 2 `alloc`, single-alloc is 1).
 - **`resize` calls**, split into **in-place successes vs failures**. **An in-place
   `resize` is NOT a new allocation** — count it separately, never as an `alloc`. (A
   failed resize that falls back to alloc-new+free *does* increment `alloc`+`free`.)
+- **`remap` calls** — Zig 0.16's `Allocator` vtable has **four** ops (`alloc`,
+  `resize`, `free`, `remap`); the wrapper **must implement all four** even though this
+  prototype's containers don't call `remap`. Forward `remap` to the backing and count
+  it like `resize`: in-place success is **not** a new alloc; a relocation counts as one
+  move (not alloc+free). Assert `remap` is unused in the prototype (count stays 0) so a
+  stray call is caught.
 - **cumulative bytes** requested, **live bytes** (outstanding), and **peak live
   bytes**.
 
+**`resetStats` semantics (matters for clone/deinit, which run on already-live
+containers):** reset zeros the **per-region call counters** (`alloc`/`free`/`resize`/
+`remap` counts and cumulative bytes) but **must not touch the live-bytes gauge** —
+those allocations are still outstanding and clone/deinit legitimately act on them.
+`free` calls during the deinit region are counted in that region even though the
+matching `alloc` happened earlier. **peak** is tracked per region (reset to the current
+live-bytes value at region start).
+
 Report all of these per workload. Make it a proper reusable test util, not throwaway
 (13-06 reuses it).
+
+## Benchmark environment (pinned)
+
+Not just printed — **pinned**, and stated in the recorded result:
+
+- **Optimize mode:** `ReleaseFast`.
+- **CPU target:** `-Dcpu=native` (the prototype has no comptime-gated SIMD, but pin it
+  so the block/copy codegen is the host's).
+- **Allocator:** `std.heap.smp_allocator` (the counting wrapper's backing, above).
+- **Machine(s):** the authoritative host is named in the result (spec 14's env header
+  stamps zig/mode/os/arch/cpu automatically). If run on more than one machine, each
+  table names its host; the go/no-go is judged on the authoritative one.
 
 ## Corpus (pinned — identical input for every variant)
 
@@ -120,7 +157,9 @@ Workloads:
   reserved case so the headline isn't conflated with growth cost.
 - **clone** — clone all N (sources built outside timing).
 - **deinit** — free all N (its own line).
-- **read: membership** — probe hits + misses across all N. Reported **separately**.
+- **read: membership** — **16 probes per container** (fixed), **50% hit / 50% miss**,
+  all drawn from the seeded PRNG so every variant probes the identical values. Reported
+  **separately**.
 - **read: iterate** — full iteration over all N. Reported **separately**.
 - **read: cardinality** — cardinality sum. Reported separately, and treated as
   *secondary* for the D2 comparison — it barely touches `values`/`runs`, so it dilutes
@@ -132,34 +171,40 @@ then hand-filter to the actual `ArrayContainer`/`RunContainer` field accesses (t
 
 ## Decision criteria
 
-First establish the **noise floor**: run the *baseline against itself* (or one variant
-twice) and take the max run-to-run median spread as `ε` (report it). Every comparison
-below is judged against `ε`, so "faster/slower" has a concrete meaning.
+**Noise floor `ε` — per workload, as a percentage.** One absolute value can't span
+operations of different durations, so establish **`ε_w` per workload `w`** as a
+percent: do **K = 5 complete benchmark reruns** (the whole variant×workload matrix,
+fresh process each time), and for each workload take `ε_w` = the max relative spread of
+its per-variant medians across the 5 reruns (report every `ε_w`). All "win/regression"
+judgments below are **relative** (percent) against that workload's own `ε_w`.
 
-- **Q1 go/no-go (whole spec):** GO requires **both**:
+- **Q1 go/no-go (whole spec):** GO requires **all** of:
   1. reserved-capacity build allocation count drops to ≈ N (from ≈ 2N) — deterministic,
-     just confirm; **and**
-  2. the **complete proposed change** ((3 or 4) − baseline) is a **time win of ≥ 2×ε**
-     on at least the build and clone workloads, and **no worse than −ε** (i.e. not a
-     regression beyond noise) on any workload.
-  If the single-alloc time is within ±ε of baseline everywhere (allocation savings
-  don't translate to time), that's **no-go / park the spec** — record it and stop.
-- **Q2 (D2):** pick **derived-accessor only if** its advantage over stored-slice on the
-  **membership + iterate** reads is **≥ 2×ε** (repeatable across the trials, not a
-  single run) *and* the team judges it worth the measured migration count. Otherwise
-  **default to stored-slice** (keeps every call site, no repo-wide refactor). Record
-  the chosen option, the numbers, and `ε`.
+     just confirm;
+  2. the **complete proposed change** ((3 or 4) − baseline) is a time win of **≥ 2·ε_w**
+     on **both `build-reserved` and `clone`** (both, not either — those are the
+     allocation-heavy workloads the whole spec is justified by); **and**
+  3. **no workload** regresses by more than its `ε_w` (no beyond-noise regression
+     anywhere).
+  If single-alloc lands within ±`ε_w` of baseline on build-reserved and clone
+  (allocation savings don't translate to time), that's **no-go / park the spec** —
+  record it and stop.
+- **Q2 (D2):** pick **derived-accessor only if** it beats stored-slice by **≥ 2·ε_w on
+  *both* membership *and* iterate** (both must win — a single-read win is ambiguous),
+  repeatably across the 5 reruns, *and* the team judges it worth the measured migration
+  count. Otherwise **default to stored-slice** (keeps every call site, no repo-wide
+  refactor). Record the chosen option, the per-read numbers, and the `ε_w` values.
 
 ## Deliverable
 
 - A results table: **4 variants** {baseline (32B, 2-alloc), control (16B, 2-alloc),
   single-alloc stored-slice, single-alloc derived} × **workloads** {build-reserved,
   build-growth, clone, deinit, membership, iterate, cardinality} for **alloc/free/resize
-  counts, cumulative/live/peak bytes, and time** — plus the noise floor `ε` and the env
+  counts, cumulative/live/peak bytes, and time** — plus the per-workload noise floors `ε_w` and the env
   header.
 - The real accessor-migration count.
 - **Edit the umbrella:** mark D2 **resolved** (chosen option + one-line numeric
-  justification against `ε`) and record the Q1 go/no-go outcome. If go, 13-01+ proceed;
+  justification against the relevant `ε_w`) and record the Q1 go/no-go outcome. If go, 13-01+ proceed;
   if no-go, the spec parks with the evidence attached.
 
 ## Acceptance
@@ -168,9 +213,9 @@ below is judged against `ε`, so "faster/slower" has a concrete meaning.
   under the isolated `bench-proto` step; no production container/bitmap change; `zig
   build test` unaffected.
 - All four variants measured on byte-identical input; the benchmark protocol
-  (boundaries, counter resets, `doNotOptimizeAway`, rotated order, `ε` floor) is
+  (boundaries, counter resets, `doNotOptimizeAway`, rotated order, per-workload `ε_w` from 5 reruns) is
   followed; results table recorded.
-- **D2 decided against `ε` with numbers and written back into the umbrella; Q1 go/no-go
+- **D2 decided against `ε_w` with numbers and written back into the umbrella; Q1 go/no-go
   stated.**
 - The counting allocator and `bench-proto` land **committed** (reusable util +
   reproducible measurement).
