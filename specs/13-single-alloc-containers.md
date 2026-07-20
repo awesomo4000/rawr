@@ -137,11 +137,15 @@ offset 0:   Header { cardinality: u16, capacity: u16 }   padded to data alignmen
 offset A:   data...                                        (A = data alignment; see D5)
 ```
 
-**D5 — per-type data alignment. DECIDED: array 32, run natural alignment, bitset 64
-(if in scope).** Array `values` (u16) want SIMD alignment for the 11-05 kernels → 32
-is justified. Run data has **no evidence** for 32-byte alignment — no kernel operates
-on `RunPair` arrays with SIMD — so runs use `@alignOf(RunPair)` only. Do not
-blanket-apply 32.
+**D5 — per-type data alignment. DECIDED: array 16, run natural alignment, bitset 64
+(if in scope).** The shipped 11-05/11-06 array kernels are **128-bit** (`@Vector(8,
+u16)` = 16-byte loads), so **16-byte** data alignment is exactly what keeps those
+loads aligned. An earlier draft said 32; that is over-aligned — 32 would only matter
+for a 256-bit kernel, and there deliberately isn't one (a 256-bit AVX2 array-intersect
+doesn't compact cleanly — `vpshufb` is lane-restricted — which is why the wide path is
+AVX-512, out of scope in spec 11). Over-aligning wastes header padding per container,
+which cuts against the allocation-size goal for no load-speed benefit. Run data has no
+SIMD kernel → `@alignOf(RunPair)`. Bitset words → 64 (if in scope, per D1).
 
 ```zig
 fn allocBlock(allocator: Allocator, cap: u16) ![]align(A) u8 {
