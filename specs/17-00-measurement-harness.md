@@ -33,11 +33,20 @@ operand counts, key-sharing structure, and per-key cardinality distribution.
 - **Timing protocol:** five independent process runs, median + range/IQR per phase,
   identical setup/teardown applied to every variant, warmup excluded, result destruction
   excluded from *construction-only* and prepared outside the *repair-only* sample.
-- **Counting allocator wrapper** over the child allocator that records, per variant:
-  child-allocator call count, total requested bytes, **effective SMP size-class bytes**
-  (the rounded slot, not the logical request), and **actual peak live (size-class)
-  bytes**. `queryCapacity()` and requested bytes are reported as diagnostics but are
-  distinct from the size-class peak that the Phase-A 110% memory gate is judged on.
+- **One shared counting allocator wrapper** sits beneath **all** of a variant's
+  allocations — the persistent result allocator, `ArenaAllocator`'s child allocator, and
+  the `FixedBufferAllocator`'s backing slab allocation — so transient and persistent
+  bytes are counted against a single live/peak gauge. Separate per-allocator counters
+  would miss the moment persistent arrays and transient bitsets are simultaneously live
+  and would invalidate the 110% peak gate. It records, per variant: child-allocator call
+  count, total requested bytes, **effective SMP size-class bytes** (the rounded slot, not
+  the logical request), and **actual peak live (size-class) bytes** across the combined
+  footprint. `queryCapacity()` and requested bytes are diagnostics, distinct from the
+  size-class peak the 110% gate is judged on.
+- **Five-process runner:** a script (or a machine-readable single-run mode the script
+  drives) that launches five independent processes, collects each run's per-(experiment,
+  variant, phase) numbers, and aggregates median + range/IQR. In-process loops do not
+  substitute — the five runs must be separate processes.
 - **Variant registry:** the harness runs each experiment across the allocator variants
   the later chunks register (baseline current-path, `ArenaAllocator`, exactly sized
   `FixedBufferAllocator`) and emits one row per (experiment, variant, phase).
@@ -61,5 +70,10 @@ operand counts, key-sharing structure, and per-key cardinality distribution.
 
 ## Out of scope
 
-No arena, no eligibility prepass, no A1/A2 logic — those are `17-01` and `17-02`. This
-chunk is done when a placeholder can be measured and reported through the full pipeline.
+No arena and no A1/A2 experimental logic — those are `17-01` and `17-02`. Note the
+distinction on eligibility: this chunk **may** contain a corpus-verification
+**classifier** that counts, offline, how many keys/groups would be guaranteed-demote
+(used to prove the sparse-heavy corpus fires and the dense control does not). It must
+**not** contain the experimental **routing prepass** that decides per-key allocator
+source at run time — that lives in `17-01`/`17-02` and is timed there. This chunk is done
+when a placeholder variant can be measured and reported through the full pipeline.
