@@ -14,6 +14,16 @@ is resolved as stored slices. The `13-00` prototype halved per-container allocat
 calls but failed the required timing gate, so this initiative is **NO-GO / PARKED**.
 Do not write or execute `13-01+` unless new evidence justifies reopening it.
 
+> **Outcome (2026-07-20):** measured slower on the important workloads on both
+> Apple M4 and Zen 4 — the current two-alloc layout is already allocator-class-optimal
+> (power-of-two payloads fit `smp_allocator`'s classes exactly), and co-locating the
+> header pushes each block just past a class boundary. Full write-up:
+> [`docs/single-alloc-container-analysis.md`](../../docs/single-alloc-container-analysis.md).
+> **Reopen only** around a class-aware-capacity or parent-owned-header design that keeps
+> power-of-two allocations (see the analysis's reopen criteria); do **not** reopen the
+> same header-plus-power-of-two-payload block. The prototype + counting allocator are
+> retained as a reproducible regression harness. The design record below stands as-is.
+
 ## Chunk plan
 
 `13-00` completed the measurement gate. The `13-01+` work below is parked because

@@ -2,6 +2,12 @@
 
 # Spec 13-00: Single-alloc prototype + D2 decision
 
+> **Done (2026-07-20) — result: NO-GO.** The prototype ran and answered both
+> questions: allocation count halved as designed, but the layout was **slower** on
+> the important workloads on both Apple M4 and Zen 4, failing the timing gate. D2 was
+> moot (derived accessors also lost). Spec 13 is parked. Full write-up:
+> [`docs/single-alloc-container-analysis.md`](../../docs/single-alloc-container-analysis.md).
+
 First chunk of [single-allocation container layout](13-single-alloc-containers.md).
 **Measurement, not implementation.** It answers two questions with numbers before
 any production layout is written:
