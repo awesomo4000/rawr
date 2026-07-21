@@ -44,12 +44,15 @@ includes the accumulation loops, per-bitset overhead, top-level merge/append, or
 generation for `@memset` / the accumulation loops. Phase 1 exists to find which; it does
 **not** start from a favored answer.
 
+(Provenance: the rawr-libc lazy-OR harness above is **not on `main`** — it lives on branch
+`bench-experiments-17-18`, commit `0599cae`. `20-00` builds on that preserved input.)
+
 ## Phase 1 (chunk `20-00`) — controlled attribution, the deliverable
 
 Attribute lazy-OR construction across fine-grained components, comparing **rawr-SMP,
-rawr-libc, and CRoaring-libc** on the bench of record. Record counters **and** timings for:
+rawr-libc, and CRoaring-libc** on the bench of record. The components to attribute:
 
-- **shared vs cloned-only chunk keys** (exact counts, not estimates);
+- **shared vs cloned-only chunk keys** (exact counts);
 - **bitsets created and bytes cleared**;
 - **container/header allocation** (the `create`);
 - **words allocation** (the `alignedAlloc`);
@@ -58,11 +61,53 @@ rawr-libc, and CRoaring-libc** on the bench of record. Record counters **and** t
   `lazyAccumulateIntoBitset` passes) separately;
 - **top-level merge / append overhead**.
 
-Plus **inspect the generated code** for the Zig `@memset` and the two accumulation loops —
-the remaining gap may be code generation or loop overhead, not memory behavior.
+### Methodology — do not clock per container
 
-Output: the 2.19x broken down by component with the dominant term identified. Phase 1
-stands alone — the attributed "why" is the required result even if no fix follows.
+Calling a clock around every allocation, memset, and accumulation across ~16K bitsets
+would materially distort the workload. Use this protocol instead:
+
+1. **Untimed counter pass** — capture the exact counts above (shared/cloned-only keys,
+   bitsets created, bytes cleared) with **no** timing calls in the hot path.
+2. **Batched component microbenchmarks** over the **captured shared-container corpus** —
+   time each component (alloc, `@memset`, each accumulation pass) in isolation across the
+   whole captured set, not per-container.
+3. **Whole-operation profiling or controlled variants** to confirm the microbench
+   attribution against the real end-to-end time (e.g. a variant with zeroing elided, or
+   accumulation elided, under a known-zero benchmark allocator — see the phase-2
+   constraints for the legality of that).
+4. Do **not** infer component cost from thousands of per-container clock calls.
+
+### CRoaring instrumentation — pick an explicit, non-invasive approach
+
+CRoaring's relevant functions (`bitset_container_create`/clear, conversion, lazy
+accumulation) are internal to the amalgamation, so the Zig bench cannot time them
+individually as-is. `20-00` states which it uses, and **must not leave permanent
+diagnostic edits in the vendored source**:
+
+- a **benchmark-only instrumented CRoaring translation unit** (a throwaway copy, not
+  `vendor/roaring.c`); and/or
+- **sampling / profile data** from the unmodified reference; and/or
+- **controlled C microbench wrappers** built from the same upstream functions.
+
+### Output — absolute numbers with a residual, not a forced 100%
+
+Allocation, zeroing, page faults, and accumulation interact through cache state, so
+controlled deltas **need not sum exactly** to the 2.19x. Report **absolute medians +
+ranges** per component with **supported attribution bounds**, and **name any residual**
+explicitly — do **not** force the components to total 100%. The required result is the
+dominant term identified with its bound, plus an honest residual. Phase 1 stands alone; the
+attributed "why" is the deliverable even if no fix follows.
+
+### Reproducibility / validation
+
+- **Codegen inspection** records the **exact build command, the symbol/probe examined, and
+  the relevant assembly finding**, so the `@memset` / accumulation-loop observation is
+  reproducible, not anecdotal.
+- Any **instrumented or replica path** (rawr or CRoaring) must be shown to **match
+  production rawr's result after repair and the CRoaring oracle** *before* its timing is
+  accepted — otherwise it is measuring the wrong thing.
+- All instrumentation is **benchmark-only**: it changes no public library behavior and no
+  committed vendored code.
 
 ## Phase 2 (chunk `20-01`, written after diagnosis) — do not preselect
 
