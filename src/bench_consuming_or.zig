@@ -102,10 +102,6 @@ fn unmatchedRightCount(left: *const RoaringBitmap, right: *const RoaringBitmap) 
     return unmatched;
 }
 
-fn consumingOr(self: *RoaringBitmap, other: *RoaringBitmap) !void {
-    return consumingOrImpl(false, self, other, undefined, undefined);
-}
-
 fn consumingOrMeasured(
     self: *RoaringBitmap,
     other: *RoaringBitmap,
@@ -428,7 +424,7 @@ fn makeFixpointDelta(
 fn applyVariant(variant: Variant, left: *RoaringBitmap, right: *RoaringBitmap) !void {
     switch (variant) {
         .baseline => try left.bitwiseOrInPlace(right),
-        .consuming => try consumingOr(left, right),
+        .consuming => try left.bitwiseOrInPlaceConsume(right),
     }
 }
 
@@ -536,19 +532,19 @@ fn measureFixpointAlloc(variant: Variant, unmatched_percent: u8) !Attribution {
     return total;
 }
 
-fn measureProductionSweepAlloc(unmatched_percent: u8) !u64 {
+fn measureProductionSweepAlloc(variant: Variant, unmatched_percent: u8) !u64 {
     var counting = CountingAllocator.init(std.heap.smp_allocator);
     const allocator = counting.allocator();
     var pair = try makeSweepPair(allocator, unmatched_percent);
     counting.resetStats();
-    try pair.left.bitwiseOrInPlace(&pair.right);
+    try applyVariant(variant, &pair.left, &pair.right);
     const allocs = counting.stats.alloc_calls;
     pair.deinit();
     if (counting.stats.live_bytes != 0) return error.CountingAllocatorLeak;
     return allocs;
 }
 
-fn measureProductionFixpointAlloc(unmatched_percent: u8) !u64 {
+fn measureProductionFixpointAlloc(variant: Variant, unmatched_percent: u8) !u64 {
     var counting = CountingAllocator.init(std.heap.smp_allocator);
     const allocator = counting.allocator();
     var accumulator = try initialFixpoint(allocator);
@@ -563,7 +559,7 @@ fn measureProductionFixpointAlloc(unmatched_percent: u8) !u64 {
             &next_key,
         );
         counting.resetStats();
-        try accumulator.bitwiseOrInPlace(&delta);
+        try applyVariant(variant, &accumulator, &delta);
         total_allocs += counting.stats.alloc_calls;
         delta.deinit();
     }
@@ -586,7 +582,7 @@ fn validatePrototype() !void {
             return error.InputCorpusMismatch;
         }
         try baseline.left.bitwiseOrInPlace(&baseline.right);
-        try consumingOr(&consuming.left, &consuming.right);
+        try consuming.left.bitwiseOrInPlaceConsume(&consuming.right);
         try baseline.left.validate();
         try consuming.left.validate();
         try consuming.right.validate();
@@ -625,7 +621,7 @@ fn validatePrototype() !void {
             );
             defer consuming_delta.deinit();
             try baseline.bitwiseOrInPlace(&baseline_delta);
-            try consumingOr(&consuming, &consuming_delta);
+            try consuming.bitwiseOrInPlaceConsume(&consuming_delta);
             try baseline.validate();
             try consuming.validate();
             try consuming_delta.validate();
@@ -676,7 +672,7 @@ fn printAlloc(workload: []const u8, unmatched_percent: u8, variant: Variant, res
 }
 
 pub fn main() !void {
-    bench_time.print("Consuming in-place OR prototype\n", .{});
+    bench_time.print("Consuming in-place OR benchmark\n", .{});
     bench_time.print("================================\n", .{});
     bench_time.printBenchEnvironment();
     bench_time.print(
@@ -687,7 +683,7 @@ pub fn main() !void {
         "fixpoint initial={d}, delta={d}, rounds={d}; warmup={d}, timed={d}\n",
         .{ FIXPOINT_INITIAL_KEYS, FIXPOINT_DELTA_KEYS, FIXPOINT_ROUNDS, WARMUP_RUNS, TIMED_RUNS },
     );
-    bench_time.print("Validating prototype ownership and result parity...\n", .{});
+    bench_time.print("Validating ownership and result parity...\n", .{});
     try validatePrototype();
     bench_time.print("validation: passed\n\n", .{});
 
@@ -695,13 +691,11 @@ pub fn main() !void {
         inline for (.{ Variant.baseline, Variant.consuming }) |variant| {
             const sweep_alloc = try measureSweepAlloc(variant, unmatched_percent);
             const fixpoint_alloc = try measureFixpointAlloc(variant, unmatched_percent);
-            if (variant == .baseline) {
-                if (sweep_alloc.total_allocs != try measureProductionSweepAlloc(unmatched_percent)) {
-                    return error.BaselineReplicaAllocationMismatch;
-                }
-                if (fixpoint_alloc.total_allocs != try measureProductionFixpointAlloc(unmatched_percent)) {
-                    return error.BaselineReplicaAllocationMismatch;
-                }
+            if (sweep_alloc.total_allocs != try measureProductionSweepAlloc(variant, unmatched_percent)) {
+                return error.AllocationReplicaMismatch;
+            }
+            if (fixpoint_alloc.total_allocs != try measureProductionFixpointAlloc(variant, unmatched_percent)) {
+                return error.AllocationReplicaMismatch;
             }
             printAlloc("sweep", unmatched_percent, variant, sweep_alloc);
             printTiming(

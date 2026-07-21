@@ -51,6 +51,7 @@ pub fn main() !void {
 
     {
         try runSparseDenseOrCase(allocator);
+        try runConsumingOrCases(allocator);
         try runOperationMatrix(allocator);
         try runJaccardEmptyCase(allocator);
         try runFlipCases(allocator);
@@ -65,6 +66,66 @@ pub fn main() !void {
 
     if (gpa.deinit() != .ok) {
         return error.MemoryLeak;
+    }
+}
+
+fn runConsumingOrCases(allocator: Allocator) !void {
+    const unmatched_percentages = [_]u8{ 0, 25, 50, 75, 100 };
+    const profiles = [_]Profile{ .sparse, .dense, .runs, .full };
+
+    for (unmatched_percentages) |unmatched_percent| {
+        const chunk_count = 8;
+        const unmatched = chunk_count * @as(usize, unmatched_percent) / 100;
+        const shared = chunk_count - unmatched;
+        var left_chunks: [chunk_count]test_gen.ChunkProfile = undefined;
+        var right_chunks: [chunk_count]test_gen.ChunkProfile = undefined;
+        for (0..shared) |idx| {
+            left_chunks[idx] = .{ .key = @intCast(idx), .profile = profiles[idx % profiles.len] };
+        }
+        for (0..unmatched) |idx| {
+            left_chunks[shared + idx] = .{
+                .key = @intCast(100 + idx),
+                .profile = profiles[(shared + idx) % profiles.len],
+            };
+        }
+        for (0..chunk_count) |idx| {
+            right_chunks[idx] = .{
+                .key = @intCast(idx),
+                .profile = profiles[(idx + 1) % profiles.len],
+            };
+        }
+
+        var prng = std.Random.DefaultPrng.init(0x19_01_0000 + @as(u64, unmatched_percent));
+        const rng = prng.random();
+        var left = try test_gen.build(allocator, rng, &left_chunks, true);
+        defer left.deinit();
+        var right = try test_gen.build(allocator, rng, &right_chunks, true);
+        defer right.deinit();
+
+        const oracle_left = try buildOracle(left.values, true);
+        defer c.roaring_bitmap_free(oracle_left);
+        const oracle_right = try buildOracle(right.values, true);
+        defer c.roaring_bitmap_free(oracle_right);
+        const oracle_result = c.roaring_bitmap_or(oracle_left, oracle_right) orelse
+            return error.CRoaringAllocFailed;
+        defer c.roaring_bitmap_free(oracle_result);
+
+        var baseline = try left.bm.clone(allocator);
+        defer baseline.deinit();
+        try baseline.bitwiseOrInPlace(&right.bm);
+        try left.bm.bitwiseOrInPlaceConsume(&right.bm);
+        var name_buf: [96]u8 = undefined;
+        const name = try std.fmt.bufPrint(
+            &name_buf,
+            "bitwiseOrInPlaceConsume:unmatched={d}%",
+            .{unmatched_percent},
+        );
+        if (!left.bm.equals(&baseline)) return error.SetMismatch;
+        try assertAgree(allocator, name, &left.bm, oracle_result);
+        try expectRawrEmpty(name, &right.bm);
+        try left.bm.validate();
+        try right.bm.validate();
+        if (right.bm.cardinality() != 0) return error.CardinalityMismatch;
     }
 }
 

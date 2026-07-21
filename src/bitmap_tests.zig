@@ -617,6 +617,168 @@ test "iterator collects all values" {
 // In-Place Operation Tests
 // ============================================================================
 
+const ConsumeFixture = struct {
+    left: RoaringBitmap,
+    right: RoaringBitmap,
+
+    fn deinit(self: *ConsumeFixture) void {
+        self.right.deinit();
+        self.left.deinit();
+    }
+};
+
+fn consumeTestArray(allocator: std.mem.Allocator, start: u16, count: u16) !TaggedPtr {
+    const array = try ArrayContainer.init(allocator, count);
+    for (0..count) |idx| array.values[idx] = start + @as(u16, @intCast(idx));
+    array.cardinality = count;
+    return TaggedPtr.initArray(array);
+}
+
+fn consumeTestBitset(allocator: std.mem.Allocator, start: u16, count: u16) !TaggedPtr {
+    const bitset = try BitsetContainer.init(allocator);
+    var value: u32 = start;
+    const end = value + count;
+    while (value < end) : (value += 1) _ = bitset.add(@intCast(value));
+    return TaggedPtr.initBitset(bitset);
+}
+
+fn consumeTestRun(allocator: std.mem.Allocator, start: u16, end: u16) !TaggedPtr {
+    const run = try RunContainer.init(allocator, 1);
+    errdefer run.deinit(allocator);
+    _ = try run.addRange(allocator, start, end);
+    return TaggedPtr.initRun(run);
+}
+
+fn appendConsumeTestContainer(bitmap: *RoaringBitmap, key: u16, container: TaggedPtr) void {
+    std.debug.assert(bitmap.size < bitmap.capacity);
+    bitmap.keys[bitmap.size] = key;
+    bitmap.containers[bitmap.size] = container;
+    bitmap.size += 1;
+    bitmap.cached_cardinality = -1;
+}
+
+fn makeConsumeFixture(allocator: std.mem.Allocator) !ConsumeFixture {
+    var left = try RoaringBitmap.initCapacity(allocator, 3);
+    errdefer left.deinit();
+    appendConsumeTestContainer(&left, 0, try consumeTestArray(allocator, 0, 64));
+    appendConsumeTestContainer(&left, 1, try consumeTestArray(allocator, 0, 64));
+    appendConsumeTestContainer(&left, 2, try consumeTestRun(allocator, 0, 99));
+
+    var right = try RoaringBitmap.initCapacity(allocator, 4);
+    errdefer right.deinit();
+    appendConsumeTestContainer(&right, 0, try consumeTestArray(allocator, 64, 64));
+    appendConsumeTestContainer(&right, 1, try consumeTestBitset(allocator, 0, 5000));
+    appendConsumeTestContainer(&right, 2, try consumeTestRun(allocator, 100, 199));
+    appendConsumeTestContainer(&right, 3, try consumeTestArray(allocator, 0, 64));
+
+    try left.validate();
+    try right.validate();
+    return .{ .left = left, .right = right };
+}
+
+fn iteratorCardinality(bitmap: *const RoaringBitmap) u64 {
+    var count: u64 = 0;
+    var iterator = bitmap.iterator();
+    while (iterator.next() != null) count += 1;
+    return count;
+}
+
+fn consumeOrAllocationFailureCase(allocator: std.mem.Allocator) !void {
+    var fixture = try makeConsumeFixture(allocator);
+    defer fixture.deinit();
+
+    var expected_left = try fixture.left.bitwiseOr(std.testing.allocator, &fixture.right);
+    defer expected_left.deinit();
+    var expected_right = try fixture.right.clone(std.testing.allocator);
+    defer expected_right.deinit();
+
+    fixture.left.bitwiseOrInPlaceConsume(&fixture.right) catch |err| switch (err) {
+        error.OutOfMemory => {
+            try fixture.left.validate();
+            try fixture.right.validate();
+            try std.testing.expect(fixture.right.equals(&expected_right));
+            try std.testing.expectEqual(iteratorCardinality(&fixture.left), fixture.left.cardinality());
+            try std.testing.expectEqual(iteratorCardinality(&fixture.right), fixture.right.cardinality());
+            return error.OutOfMemory;
+        },
+        else => return err,
+    };
+
+    try fixture.left.validate();
+    try fixture.right.validate();
+    try std.testing.expect(fixture.left.equals(&expected_left));
+    try std.testing.expectEqual(@as(u64, 0), fixture.right.cardinality());
+}
+
+test "bitwiseOrInPlaceConsume handles all allocation failures" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        consumeOrAllocationFailureCase,
+        .{},
+    );
+}
+
+test "bitwiseOrInPlaceConsume rejects allocator mismatch and aliasing" {
+    var left_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer left_arena.deinit();
+    var right_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer right_arena.deinit();
+
+    var left = try RoaringBitmap.init(left_arena.allocator());
+    var right = try RoaringBitmap.init(right_arena.allocator());
+    _ = try left.add(1);
+    _ = try right.add(2);
+    const left_cardinality = left.cardinality();
+    const right_cardinality = right.cardinality();
+    try std.testing.expect(left.allocator.vtable == right.allocator.vtable);
+    try std.testing.expect(left.allocator.ptr != right.allocator.ptr);
+    try std.testing.expectError(error.AllocatorMismatch, left.bitwiseOrInPlaceConsume(&right));
+    try std.testing.expectEqual(left_cardinality, left.cardinality());
+    try std.testing.expectEqual(right_cardinality, right.cardinality());
+    try left.validate();
+    try right.validate();
+
+    var aliased = try RoaringBitmap.init(std.testing.allocator);
+    defer aliased.deinit();
+    _ = try aliased.add(7);
+    var expected = try aliased.clone(std.testing.allocator);
+    defer expected.deinit();
+    try std.testing.expectError(error.AliasedOperands, aliased.bitwiseOrInPlaceConsume(&aliased));
+    try std.testing.expect(aliased.equals(&expected));
+    try aliased.validate();
+}
+
+test "bitwiseOrInPlaceConsume empties and permits reuse of other" {
+    const allocator = std.testing.allocator;
+    var left = try RoaringBitmap.init(allocator);
+    defer left.deinit();
+    var right = try RoaringBitmap.initCapacity(allocator, 8);
+    defer right.deinit();
+    _ = try left.add(1);
+    _ = try left.add((@as(u32, 1) << 16) | 2);
+    _ = try right.add(3);
+    _ = try right.add((@as(u32, 2) << 16) | 4);
+
+    var expected = try left.bitwiseOr(allocator, &right);
+    defer expected.deinit();
+    const right_capacity = right.capacity;
+    try left.bitwiseOrInPlaceConsume(&right);
+    try std.testing.expect(left.equals(&expected));
+    try left.validate();
+    try right.validate();
+    try std.testing.expectEqual(@as(u64, 0), right.cardinality());
+    try std.testing.expectEqual(right_capacity, right.capacity);
+
+    _ = try right.add(99);
+    var further = try RoaringBitmap.init(allocator);
+    defer further.deinit();
+    _ = try further.add(100);
+    try right.bitwiseOrInPlace(&further);
+    try right.validate();
+    try std.testing.expect(right.contains(99));
+    try std.testing.expect(right.contains(100));
+}
+
 test "bitwiseOrInPlace" {
     const allocator = std.testing.allocator;
 

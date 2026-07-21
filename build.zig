@@ -136,7 +136,7 @@ pub fn build(b: *std.Build) void {
     );
     bench_transient_step.dependOn(&b.addInstallArtifact(bench_transient_exe, .{}).step);
 
-    // Benchmark-only consuming in-place OR prototype.
+    // Consuming in-place OR benchmark and allocation-attribution harness.
     const bench_consuming_or_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_consuming_or.zig"),
         .target = target,
@@ -152,7 +152,7 @@ pub fn build(b: *std.Build) void {
     });
     const bench_consuming_or_step = b.step(
         "bench-consuming-or",
-        "Build consuming in-place OR prototype benchmark",
+        "Build consuming in-place OR benchmark",
     );
     bench_consuming_or_step.dependOn(&b.addInstallArtifact(bench_consuming_or_exe, .{}).step);
 

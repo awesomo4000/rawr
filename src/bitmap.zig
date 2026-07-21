@@ -1233,6 +1233,128 @@ pub const RoaringBitmap = struct {
         self.size = @intCast(k);
     }
 
+    /// Consuming in-place union: `self |= other`, moving right-only containers
+    /// instead of cloning them.
+    ///
+    /// Both bitmaps must use the exact same allocator handle and must be distinct
+    /// objects. Allocator mismatch returns `error.AllocatorMismatch`; aliasing
+    /// returns `error.AliasedOperands`, both before mutation.
+    ///
+    /// On success, `other` is a valid empty bitmap whose top-level capacity is
+    /// retained and may be reused or deinited normally. On allocation failure,
+    /// `other` is unchanged and `self` remains valid, but `self` may contain
+    /// completed unions for matched chunk keys processed before the failure.
+    pub fn bitwiseOrInPlaceConsume(self: *Self, other: *Self) !void {
+        if (self.allocator.ptr != other.allocator.ptr or self.allocator.vtable != other.allocator.vtable) {
+            return error.AllocatorMismatch;
+        }
+        if (self == other) return error.AliasedOperands;
+
+        const old_self_size = self.size;
+        var i: usize = 0;
+        var j: usize = 0;
+        var unmatched: u32 = 0;
+        while (i < old_self_size and j < other.size) {
+            if (self.keys[i] < other.keys[j]) {
+                i += 1;
+            } else if (self.keys[i] > other.keys[j]) {
+                unmatched += 1;
+                j += 1;
+            } else {
+                i += 1;
+                j += 1;
+            }
+        }
+        unmatched += other.size - @as(u32, @intCast(j));
+
+        const output_size = old_self_size + unmatched;
+        try self.ensureTotalCapacity(output_size);
+
+        // This is unconditional: an unmatched-only commit also changes self.
+        self.cached_cardinality = -1;
+
+        i = 0;
+        j = 0;
+        while (i < old_self_size and j < other.size) {
+            const key_a = self.keys[i];
+            const key_b = other.keys[j];
+            if (key_a < key_b) {
+                i += 1;
+            } else if (key_a > key_b) {
+                j += 1;
+            } else {
+                const old_container = Container.fromTagged(self.containers[i]);
+                const result = try ops.containerUnionInPlace(
+                    self.allocator,
+                    old_container,
+                    Container.fromTagged(other.containers[j]),
+                );
+                const result_tp = result.toTagged();
+                if (@as(u64, @bitCast(result_tp)) != @as(u64, @bitCast(self.containers[i]))) {
+                    old_container.deinit(self.allocator);
+                    self.containers[i] = result_tp;
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+
+        // Commit starts here. All remaining operations are infallible.
+        i = 0;
+        j = 0;
+        while (i < old_self_size and j < other.size) {
+            if (self.keys[i] < other.keys[j]) {
+                i += 1;
+            } else if (self.keys[i] > other.keys[j]) {
+                j += 1;
+            } else {
+                Container.fromTagged(other.containers[j]).deinit(other.allocator);
+                i += 1;
+                j += 1;
+            }
+        }
+
+        var left_tail: usize = old_self_size;
+        var right_tail: usize = other.size;
+        var out_tail: usize = output_size;
+        while (left_tail > 0 and right_tail > 0) {
+            const key_a = self.keys[left_tail - 1];
+            const key_b = other.keys[right_tail - 1];
+            out_tail -= 1;
+            if (key_a > key_b) {
+                left_tail -= 1;
+                self.keys[out_tail] = key_a;
+                self.containers[out_tail] = self.containers[left_tail];
+            } else if (key_a < key_b) {
+                right_tail -= 1;
+                self.keys[out_tail] = key_b;
+                self.containers[out_tail] = other.containers[right_tail];
+            } else {
+                left_tail -= 1;
+                right_tail -= 1;
+                self.keys[out_tail] = key_a;
+                self.containers[out_tail] = self.containers[left_tail];
+            }
+        }
+        while (left_tail > 0) {
+            left_tail -= 1;
+            out_tail -= 1;
+            self.keys[out_tail] = self.keys[left_tail];
+            self.containers[out_tail] = self.containers[left_tail];
+        }
+        while (right_tail > 0) {
+            right_tail -= 1;
+            out_tail -= 1;
+            self.keys[out_tail] = other.keys[right_tail];
+            self.containers[out_tail] = other.containers[right_tail];
+        }
+        std.debug.assert(out_tail == 0);
+
+        self.size = output_size;
+        other.size = 0;
+        other.cached_cardinality = 0;
+    }
+
     /// In-place intersection: self &= other. Modifies self to contain only values in both.
     pub fn bitwiseAndInPlace(self: *Self, other: *const Self) !void {
         self.cached_cardinality = -1;
