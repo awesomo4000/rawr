@@ -69,9 +69,9 @@ prototype clears the gates.
   `bitwiseOrInPlace`).
 - **Distinct bitmaps required.** On `self == other`, return **`error.AliasedOperands`
   before any mutation** (symmetric with the allocator-mismatch guard).
-- **Success post-state:** `other` is a **valid, empty bitmap** — `size = 0`, cardinality 0,
-  top-level capacity retained — safe to reuse, add to, `validate()`, or `deinit`. No
-  husk/consumed flag.
+- **Success post-state:** `other` is a **valid, empty bitmap** — `size = 0`,
+  `cached_cardinality = 0`, top-level capacity retained — safe to reuse, add to,
+  `validate()`, or `deinit`. No husk/consumed flag.
 - **Error post-state:** per the commit protocol below.
 
 ## Failure semantics — basic guarantee via a late, infallible commit
@@ -83,13 +83,18 @@ the **basic guarantee** with an explicit protocol:
 2. **Reserve** (fallible, up front): grow `self`'s key/container index arrays to
    `self.size + (count of `other`'s unmatched chunk keys)`. **All** index allocation
    happens here.
-3. **Merge matched** (fallible, mutates `self`): merge each `other` matched container into
+3. **Invalidate `self`'s bitmap-level cache** (no allocation): set
+   `self.cached_cardinality = -1` **before the first matched merge**. Otherwise a later
+   merge failure could leave modified containers sitting behind a stale bitmap-level
+   cardinality cache.
+4. **Merge matched** (fallible, mutates `self`): merge each `other` matched container into
    `self`'s existing container with the current in-place merge.
-4. **Commit** (infallible): free `other`'s now-redundant matched containers, then insert
+5. **Commit** (infallible): free `other`'s now-redundant matched containers, then insert
    `other`'s unmatched tagged pointers by an **infallible backward merge** into the
    pre-reserved arrays (merge from the tail so no element is overwritten before it is
    moved). **Do not** call an insertion helper that could grow or allocate during commit —
-   capacity was reserved in step 2. Finally set `other.size = 0`.
+   capacity was reserved in step 2. Finally set `other.size = 0` **and**
+   `other.cached_cardinality = 0`.
 
 Guarantee: **`other` is unchanged on any error** (all moves/frees are in the infallible
 commit), and **`self` stays valid** though it may already contain completed matched
@@ -154,12 +159,13 @@ noted as the alternative.)
   of current numbers; semantics untouched (additive change).
 - **Correctness + failure injection:** result set-equal to current `bitwiseOrInPlace` (and
   logically to the CRoaring oracle); differential coverage for the consuming op;
-  **exhaustive allocation-failure injection** sweeping every fallible site across step 2
-  (index reserve) and step 3 (matched merge), asserting after **each** injected failure
-  that `other` is unchanged, both bitmaps pass `validate()`, and both `deinit` leak-free
-  under a leak-checking GPA; `error.AllocatorMismatch` (tested with the **same vtable but
-  different allocator state**, e.g. two separate arenas) and `error.AliasedOperands` both
-  guarded and tested.
+  **exhaustive allocation-failure injection** sweeping every fallible site across the
+  reserve and matched-merge steps, asserting after **each** injected failure that `other`
+  is unchanged, both bitmaps pass `validate()`, **and `cardinality()` on both returns the
+  correct value** (call it explicitly — `validate()` does not detect a stale bitmap-level
+  cardinality cache), and both `deinit` leak-free under a leak-checking GPA;
+  `error.AllocatorMismatch` (tested with the **same vtable but different allocator state**,
+  e.g. two separate arenas) and `error.AliasedOperands` both guarded and tested.
 - Full build green under `ReleaseSafe` and `ReleaseFast`.
 
 ## NO-GO
