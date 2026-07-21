@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 
 const std = @import("std");
-const builtin = @import("builtin");
 const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
 const c = @import("c");
 const bench_time = @import("bench_time.zig");
 
-const allocator = if (builtin.os.tag == .openbsd) bench_time.openbsd_c_allocator else std.heap.smp_allocator;
+const smp_allocator = std.heap.smp_allocator;
+const libc_allocator = bench_time.cAllocator();
 
 const WARMUP_RUNS = 3;
 const BENCH_RUNS = 21;
@@ -27,7 +27,7 @@ const LazyPhase = enum {
     repair,
 };
 
-fn benchmark(comptime func: anytype, args: anytype) BenchResult {
+fn benchmark(comptime func: anytype, comptime args: anytype) BenchResult {
     var times: [BENCH_RUNS]u64 = undefined;
 
     // Warmup
@@ -52,7 +52,7 @@ fn benchmark(comptime func: anytype, args: anytype) BenchResult {
     };
 }
 
-fn benchmarkInternallyTimed(comptime func: anytype, args: anytype) BenchResult {
+fn benchmarkInternallyTimed(comptime func: anytype, comptime args: anytype) BenchResult {
     var times: [BENCH_RUNS]u64 = undefined;
 
     for (0..WARMUP_RUNS) |_| {
@@ -73,15 +73,52 @@ fn benchmarkInternallyTimed(comptime func: anytype, args: anytype) BenchResult {
 }
 
 fn printHeader() void {
-    bench_time.print("\n{s:<40} {s:>12} {s:>12} {s:>8}\n", .{ "Operation", "rawr (ms)", "CRoaring", "ratio" });
-    bench_time.print("{s:-<40} {s:->12} {s:->12} {s:->8}\n", .{ "", "", "", "" });
+    bench_time.print("\n{s:<40} {s:>12} {s:>12} {s:>12} {s:>9} {s:>9} {s:>9}\n", .{
+        "Operation",
+        "rawr smp",
+        "rawr c",
+        "CRoaring",
+        "smp/CR",
+        "c/CR",
+        "c/smp",
+    });
+    bench_time.print("{s:-<40} {s:->12} {s:->12} {s:->12} {s:->9} {s:->9} {s:->9}\n", .{
+        "", "", "", "", "", "", "",
+    });
 }
 
-fn printResult(name: []const u8, rawr_ns: u64, cr_ns: u64) void {
-    const rawr_ms = @as(f64, @floatFromInt(rawr_ns)) / 1_000_000.0;
+fn printResult(name: []const u8, smp_ns: u64, c_ns: ?u64, cr_ns: u64) void {
+    const smp_ms = @as(f64, @floatFromInt(smp_ns)) / 1_000_000.0;
     const cr_ms = @as(f64, @floatFromInt(cr_ns)) / 1_000_000.0;
-    const ratio = if (cr_ns > 0) rawr_ms / cr_ms else 0;
-    bench_time.print("{s:<40} {d:>12.2} {d:>12.2} {d:>8.2}x\n", .{ name, rawr_ms, cr_ms, ratio });
+    const smp_cr_ratio = if (cr_ns > 0) smp_ms / cr_ms else 0;
+
+    if (c_ns) |libc_ns| {
+        const c_ms = @as(f64, @floatFromInt(libc_ns)) / 1_000_000.0;
+        const c_cr_ratio = if (cr_ns > 0) c_ms / cr_ms else 0;
+        const c_smp_ratio = if (smp_ns > 0) c_ms / smp_ms else 0;
+        bench_time.print("{s:<40} {d:>12.2} {d:>12.2} {d:>12.2} {d:>8.2}x {d:>8.2}x {d:>8.2}x\n", .{
+            name,
+            smp_ms,
+            c_ms,
+            cr_ms,
+            smp_cr_ratio,
+            c_cr_ratio,
+            c_smp_ratio,
+        });
+        bench_time.print("RESULT\t{s}\t{d}\t{d}\t{d}\n", .{ name, smp_ns, libc_ns, cr_ns });
+        return;
+    }
+
+    bench_time.print("{s:<40} {d:>12.2} {s:>12} {d:>12.2} {d:>8.2}x {s:>9} {s:>9}\n", .{
+        name,
+        smp_ms,
+        "N/A",
+        cr_ms,
+        smp_cr_ratio,
+        "N/A",
+        "N/A",
+    });
+    bench_time.print("RESULT\t{s}\t{d}\tN/A\t{d}\n", .{ name, smp_ns, cr_ns });
 }
 
 // ============================================================================
@@ -146,8 +183,8 @@ fn initTestData() void {
 // Rawr benchmarks
 // ============================================================================
 
-fn benchRawrAddRandom() void {
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+fn benchRawrAddRandom(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.init(result_allocator) catch unreachable;
     defer bm.deinit();
     for (random_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
@@ -155,8 +192,8 @@ fn benchRawrAddRandom() void {
     std.mem.doNotOptimizeAway(&bm);
 }
 
-fn benchRawrAddSequential() void {
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+fn benchRawrAddSequential(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.init(result_allocator) catch unreachable;
     defer bm.deinit();
     for (sequential_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
@@ -164,22 +201,22 @@ fn benchRawrAddSequential() void {
     std.mem.doNotOptimizeAway(&bm);
 }
 
-fn benchRawrAddManyRandom() void {
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+fn benchRawrAddManyRandom(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.init(result_allocator) catch unreachable;
     defer bm.deinit();
     bm.addMany(random_values[0..]) catch unreachable;
     std.mem.doNotOptimizeAway(&bm);
 }
 
-fn benchRawrAddManySequential() void {
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+fn benchRawrAddManySequential(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.init(result_allocator) catch unreachable;
     defer bm.deinit();
     bm.addMany(sequential_values[0..]) catch unreachable;
     std.mem.doNotOptimizeAway(&bm);
 }
 
-fn benchRawrAddRange() void {
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+fn benchRawrAddRange(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.init(result_allocator) catch unreachable;
     defer bm.deinit();
     _ = bm.addRange(0, N_VALUES - 1) catch unreachable;
     std.mem.doNotOptimizeAway(&bm);
@@ -189,7 +226,7 @@ var rawr_contains_bm: ?RoaringBitmap = null;
 
 fn initRawrContainsBm() void {
     if (rawr_contains_bm != null) return;
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+    var bm = RoaringBitmap.init(smp_allocator) catch unreachable;
     for (random_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
     }
@@ -226,8 +263,8 @@ var rawr_many_inputs: [N_MANY_BITMAPS]*const RoaringBitmap = undefined;
 fn initRawrSparseBitmaps() void {
     if (rawr_sparse_a != null) return;
 
-    var a = RoaringBitmap.init(allocator) catch unreachable;
-    var b = RoaringBitmap.init(allocator) catch unreachable;
+    var a = RoaringBitmap.init(smp_allocator) catch unreachable;
+    var b = RoaringBitmap.init(smp_allocator) catch unreachable;
 
     const half = sparse_len / 2;
     for (sparse_values[0..half]) |v| {
@@ -244,10 +281,10 @@ fn initRawrSparseBitmaps() void {
 fn initRawrArrayBitmaps() void {
     if (rawr_array_balanced_a != null) return;
 
-    var balanced_a = RoaringBitmap.init(allocator) catch unreachable;
-    var balanced_b = RoaringBitmap.init(allocator) catch unreachable;
-    var skewed_a = RoaringBitmap.init(allocator) catch unreachable;
-    var skewed_b = RoaringBitmap.init(allocator) catch unreachable;
+    var balanced_a = RoaringBitmap.init(smp_allocator) catch unreachable;
+    var balanced_b = RoaringBitmap.init(smp_allocator) catch unreachable;
+    var skewed_a = RoaringBitmap.init(smp_allocator) catch unreachable;
+    var skewed_b = RoaringBitmap.init(smp_allocator) catch unreachable;
 
     addArrayContainersRawr(&balanced_a, 0, 0, 2048);
     addArrayContainersRawr(&balanced_b, 20, 1024, 2048);
@@ -273,7 +310,7 @@ fn initRawrManyBitmaps() void {
     if (rawr_many_bms[0] != null) return;
 
     for (0..N_MANY_BITMAPS) |i| {
-        var bm = RoaringBitmap.init(allocator) catch unreachable;
+        var bm = RoaringBitmap.init(smp_allocator) catch unreachable;
         addManyPatternRawr(&bm, i) catch unreachable;
         if (i % 3 == 0) {
             _ = bm.runOptimize() catch unreachable;
@@ -313,16 +350,16 @@ fn addManyPatternRawr(bm: *RoaringBitmap, bitmap_idx: usize) !void {
     }
 }
 
-fn benchRawrAndSparse() void {
+fn benchRawrAndSparse(comptime result_allocator: std.mem.Allocator) void {
     const a = &rawr_sparse_a.?;
     const b = &rawr_sparse_b.?;
-    var result = a.bitwiseAnd(allocator, b) catch unreachable;
+    var result = a.bitwiseAnd(result_allocator, b) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn benchRawrAndArrayBalanced() void {
-    var result = rawr_array_balanced_a.?.bitwiseAnd(allocator, &rawr_array_balanced_b.?) catch unreachable;
+fn benchRawrAndArrayBalanced(comptime result_allocator: std.mem.Allocator) void {
+    var result = rawr_array_balanced_a.?.bitwiseAnd(result_allocator, &rawr_array_balanced_b.?) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
@@ -332,14 +369,14 @@ fn benchRawrAndCardinalityArrayBalanced() void {
     std.mem.doNotOptimizeAway(cardinality);
 }
 
-fn benchRawrXorArrayBalanced() void {
-    var result = rawr_array_balanced_a.?.bitwiseXor(allocator, &rawr_array_balanced_b.?) catch unreachable;
+fn benchRawrXorArrayBalanced(comptime result_allocator: std.mem.Allocator) void {
+    var result = rawr_array_balanced_a.?.bitwiseXor(result_allocator, &rawr_array_balanced_b.?) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn benchRawrAndArraySkewed() void {
-    var result = rawr_array_skewed_a.?.bitwiseAnd(allocator, &rawr_array_skewed_b.?) catch unreachable;
+fn benchRawrAndArraySkewed(comptime result_allocator: std.mem.Allocator) void {
+    var result = rawr_array_skewed_a.?.bitwiseAnd(result_allocator, &rawr_array_skewed_b.?) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
@@ -349,37 +386,37 @@ fn benchRawrAndCardinalityArraySkewed() void {
     std.mem.doNotOptimizeAway(cardinality);
 }
 
-fn benchRawrOrSparse() void {
+fn benchRawrOrSparse(comptime result_allocator: std.mem.Allocator) void {
     const a = &rawr_sparse_a.?;
     const b = &rawr_sparse_b.?;
-    var result = a.bitwiseOr(allocator, b) catch unreachable;
+    var result = a.bitwiseOr(result_allocator, b) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn benchRawrLazyOrSparseRepair() void {
+fn benchRawrLazyOrSparseRepair(comptime result_allocator: std.mem.Allocator) void {
     const a = &rawr_sparse_a.?;
     const b = &rawr_sparse_b.?;
-    var result = a.lazyOr(allocator, b, true) catch unreachable;
+    var result = a.lazyOr(result_allocator, b, true) catch unreachable;
     defer result.deinit();
     result.repairAfterLazy() catch unreachable;
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn timeRawrLazyOrSparse(comptime phase: LazyPhase) u64 {
+fn timeRawrLazyOrSparse(comptime phase: LazyPhase, comptime result_allocator: std.mem.Allocator) u64 {
     const a = &rawr_sparse_a.?;
     const b = &rawr_sparse_b.?;
 
     if (phase == .construction) {
         const start = bench_time.monotonicNanos();
-        var result = a.lazyOr(allocator, b, true) catch unreachable;
+        var result = a.lazyOr(result_allocator, b, true) catch unreachable;
         const elapsed = bench_time.monotonicNanos() - start;
         std.mem.doNotOptimizeAway(&result);
         result.deinit();
         return elapsed;
     }
 
-    var result = a.lazyOr(allocator, b, true) catch unreachable;
+    var result = a.lazyOr(result_allocator, b, true) catch unreachable;
     const start = bench_time.monotonicNanos();
     result.repairAfterLazy() catch unreachable;
     const elapsed = bench_time.monotonicNanos() - start;
@@ -407,20 +444,20 @@ fn benchRawrOrSparseArena() void {
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn benchRawrOrMany() void {
-    var result = RoaringBitmap.orMany(allocator, &rawr_many_inputs) catch unreachable;
+fn benchRawrOrMany(comptime result_allocator: std.mem.Allocator) void {
+    var result = RoaringBitmap.orMany(result_allocator, &rawr_many_inputs) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn benchRawrOrManyHeap() void {
-    var result = RoaringBitmap.orManyHeap(allocator, &rawr_many_inputs) catch unreachable;
+fn benchRawrOrManyHeap(comptime result_allocator: std.mem.Allocator) void {
+    var result = RoaringBitmap.orManyHeap(result_allocator, &rawr_many_inputs) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn benchRawrXorMany() void {
-    var result = RoaringBitmap.xorMany(allocator, &rawr_many_inputs) catch unreachable;
+fn benchRawrXorMany(comptime result_allocator: std.mem.Allocator) void {
+    var result = RoaringBitmap.xorMany(result_allocator, &rawr_many_inputs) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
@@ -432,8 +469,8 @@ var rawr_bitset_range_bm: ?RoaringBitmap = null;
 fn initRawrDenseBitmaps() void {
     if (rawr_dense_a != null) return;
 
-    var a = RoaringBitmap.init(allocator) catch unreachable;
-    var b = RoaringBitmap.init(allocator) catch unreachable;
+    var a = RoaringBitmap.init(smp_allocator) catch unreachable;
+    var b = RoaringBitmap.init(smp_allocator) catch unreachable;
 
     _ = a.addRange(0, 499999) catch unreachable;
     _ = b.addRange(250000, 749999) catch unreachable;
@@ -445,7 +482,7 @@ fn initRawrDenseBitmaps() void {
 fn initRawrBitsetRangeBm() void {
     if (rawr_bitset_range_bm != null) return;
 
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+    var bm = RoaringBitmap.init(smp_allocator) catch unreachable;
     var value: u32 = 0;
     while (value < 60_000) : (value += 3) {
         _ = bm.add(value) catch unreachable;
@@ -454,18 +491,18 @@ fn initRawrBitsetRangeBm() void {
     rawr_bitset_range_bm = bm;
 }
 
-fn benchRawrAndDense() void {
+fn benchRawrAndDense(comptime result_allocator: std.mem.Allocator) void {
     const a = &rawr_dense_a.?;
     const b = &rawr_dense_b.?;
-    var result = a.bitwiseAnd(allocator, b) catch unreachable;
+    var result = a.bitwiseAnd(result_allocator, b) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn benchRawrOrDense() void {
+fn benchRawrOrDense(comptime result_allocator: std.mem.Allocator) void {
     const a = &rawr_dense_a.?;
     const b = &rawr_dense_b.?;
-    var result = a.bitwiseOr(allocator, b) catch unreachable;
+    var result = a.bitwiseOr(result_allocator, b) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
@@ -488,8 +525,8 @@ fn initToArrayBuffers() void {
 
     const rawr_card: usize = @intCast(rawr_contains_bm.?.cardinality());
     const cr_card: usize = @intCast(c.roaring_bitmap_get_cardinality(cr_contains_bm.?));
-    rawr_to_array_out = allocator.alloc(u32, rawr_card) catch unreachable;
-    cr_to_array_out = allocator.alloc(u32, cr_card) catch unreachable;
+    rawr_to_array_out = smp_allocator.alloc(u32, rawr_card) catch unreachable;
+    cr_to_array_out = smp_allocator.alloc(u32, cr_card) catch unreachable;
 }
 
 fn benchRawrToArray() void {
@@ -505,18 +542,18 @@ fn benchCRoaringToArray() void {
     std.mem.doNotOptimizeAway(cr_to_array_out.?[cr_to_array_out.?.len - 1]);
 }
 
-fn benchRawrToArrayAlloc() void {
+fn benchRawrToArrayAlloc(comptime result_allocator: std.mem.Allocator) void {
     const bm = &rawr_contains_bm.?;
-    const values = bm.toArrayAlloc(allocator) catch unreachable;
-    defer allocator.free(values);
+    const values = bm.toArrayAlloc(result_allocator) catch unreachable;
+    defer result_allocator.free(values);
     std.mem.doNotOptimizeAway(values.ptr);
 }
 
 fn benchCRoaringToArrayAlloc() void {
     const bm = cr_contains_bm.?;
     const card: usize = @intCast(c.roaring_bitmap_get_cardinality(bm));
-    const values = allocator.alloc(u32, card) catch unreachable;
-    defer allocator.free(values);
+    const values = smp_allocator.alloc(u32, card) catch unreachable;
+    defer smp_allocator.free(values);
     c.roaring_bitmap_to_uint32_array(bm, values.ptr);
     std.mem.doNotOptimizeAway(values.ptr);
 }
@@ -526,18 +563,18 @@ var rawr_serialized: ?[]u8 = null;
 fn initRawrSerialized() void {
     if (rawr_serialized != null) return;
     const bm = &rawr_contains_bm.?;
-    rawr_serialized = RoaringBitmap.serialize(bm, allocator) catch unreachable;
+    rawr_serialized = RoaringBitmap.serialize(bm, smp_allocator) catch unreachable;
 }
 
-fn benchRawrSerialize() void {
+fn benchRawrSerialize(comptime result_allocator: std.mem.Allocator) void {
     const bm = &rawr_contains_bm.?;
-    const bytes = RoaringBitmap.serialize(bm, allocator) catch unreachable;
-    defer allocator.free(bytes);
+    const bytes = RoaringBitmap.serialize(bm, result_allocator) catch unreachable;
+    defer result_allocator.free(bytes);
     std.mem.doNotOptimizeAway(bytes.ptr);
 }
 
-fn benchRawrDeserialize() void {
-    var bm = RoaringBitmap.deserialize(allocator, rawr_serialized.?) catch unreachable;
+fn benchRawrDeserialize(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.deserialize(result_allocator, rawr_serialized.?) catch unreachable;
     defer bm.deinit();
     std.mem.doNotOptimizeAway(&bm);
 }
@@ -580,16 +617,16 @@ fn benchRawrRankManyDense() void {
     std.mem.doNotOptimizeAway(rank_many_out[rank_many_out.len - 1]);
 }
 
-fn benchRawrFlipWideDense() void {
+fn benchRawrFlipWideDense(comptime result_allocator: std.mem.Allocator) void {
     const bm = &rawr_dense_a.?;
-    var result = bm.flip(allocator, 100_000, 650_000) catch unreachable;
+    var result = bm.flip(result_allocator, 100_000, 650_000) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn benchRawrRemoveRangeWideDense() void {
+fn benchRawrRemoveRangeWideDense(comptime result_allocator: std.mem.Allocator) void {
     const bm = &rawr_dense_a.?;
-    var result = bm.clone(allocator) catch unreachable;
+    var result = bm.clone(result_allocator) catch unreachable;
     defer result.deinit();
     const removed = result.removeRange(100_000, 650_000) catch unreachable;
     std.mem.doNotOptimizeAway(removed);
@@ -947,7 +984,7 @@ fn initCRoaringSerialized() void {
     if (cr_serialized != null) return;
     const bm = cr_contains_bm.?;
     const size = c.roaring_bitmap_portable_size_in_bytes(bm);
-    const buf = allocator.alloc(u8, size) catch unreachable;
+    const buf = smp_allocator.alloc(u8, size) catch unreachable;
     _ = c.roaring_bitmap_portable_serialize(bm, @ptrCast(buf.ptr));
     cr_serialized = buf;
 }
@@ -955,8 +992,8 @@ fn initCRoaringSerialized() void {
 fn benchCRoaringSerialize() void {
     const bm = cr_contains_bm.?;
     const size = c.roaring_bitmap_portable_size_in_bytes(bm);
-    const buf = allocator.alloc(u8, size) catch unreachable;
-    defer allocator.free(buf);
+    const buf = smp_allocator.alloc(u8, size) catch unreachable;
+    defer smp_allocator.free(buf);
     _ = c.roaring_bitmap_portable_serialize(bm, @ptrCast(buf.ptr));
     std.mem.doNotOptimizeAway(buf.ptr);
 }
@@ -1042,6 +1079,8 @@ fn benchCRoaringRangeCardinalityBitsetLarge() void {
 
 pub fn main() !void {
     bench_time.printBenchEnvironment();
+    bench_time.print("# benchmark allocators: rawr smp=std.heap.smp_allocator | rawr c=libc via bench_time.cAllocator() | CRoaring=libc internal\n", .{});
+    bench_time.print("# allocator-match caveat: serialize and toArrayAlloc CRoaring output buffers use rawr smp; rawr c/CRoaring is matched only where CRoaring owns allocation\n\n", .{});
 
     bench_time.print("Rawr vs CRoaring Benchmark Comparison\n", .{});
     bench_time.print("======================================\n", .{});
@@ -1062,7 +1101,7 @@ pub fn main() !void {
     cleanupBenchmarks();
 
     bench_time.print("\nDone.\n", .{});
-    bench_time.print("\nNote: ratio < 1.0 = rawr faster, > 1.0 = CRoaring faster\n", .{});
+    bench_time.print("\nNote: smp/CR and c/CR < 1.0 = rawr faster; c/smp < 1.0 = libc allocator faster\n", .{});
 }
 
 // Keep benchmark sections out of main so ReleaseFast does not build a single
@@ -1070,26 +1109,30 @@ pub fn main() !void {
 noinline fn runAddBenchmarks() void {
     printHeader();
     bench_time.print("ADD OPERATIONS\n", .{});
-
-    var r = benchmark(benchRawrAddRandom, .{});
+    var r = benchmark(benchRawrAddRandom, .{smp_allocator});
     var cr = benchmark(benchCRoaringAddRandom, .{});
-    printResult("add (random 1M)", r.median_ns, cr.median_ns);
+    var rawr_c = benchmark(benchRawrAddRandom, .{libc_allocator});
+    printResult("add (random 1M)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrAddSequential, .{});
+    r = benchmark(benchRawrAddSequential, .{smp_allocator});
     cr = benchmark(benchCRoaringAddSequential, .{});
-    printResult("add (sequential 1M)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrAddSequential, .{libc_allocator});
+    printResult("add (sequential 1M)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrAddManyRandom, .{});
+    r = benchmark(benchRawrAddManyRandom, .{smp_allocator});
     cr = benchmark(benchCRoaringAddManyRandom, .{});
-    printResult("addMany (random 1M)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrAddManyRandom, .{libc_allocator});
+    printResult("addMany (random 1M)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrAddManySequential, .{});
+    r = benchmark(benchRawrAddManySequential, .{smp_allocator});
     cr = benchmark(benchCRoaringAddManySequential, .{});
-    printResult("addMany (sequential 1M)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrAddManySequential, .{libc_allocator});
+    printResult("addMany (sequential 1M)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrAddRange, .{});
+    r = benchmark(benchRawrAddRange, .{smp_allocator});
     cr = benchmark(benchCRoaringAddRange, .{});
-    printResult("addRange (1M)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrAddRange, .{libc_allocator});
+    printResult("addRange (1M)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 }
 
 noinline fn runContainsBenchmarks() void {
@@ -1099,11 +1142,11 @@ noinline fn runContainsBenchmarks() void {
 
     var r = benchmark(benchRawrContainsHit, .{});
     var cr = benchmark(benchCRoaringContainsHit, .{});
-    printResult("contains (hit)", r.median_ns, cr.median_ns);
+    printResult("contains (hit)", r.median_ns, null, cr.median_ns);
 
     r = benchmark(benchRawrContainsMiss, .{});
     cr = benchmark(benchCRoaringContainsMiss, .{});
-    printResult("contains (miss)", r.median_ns, cr.median_ns);
+    printResult("contains (miss)", r.median_ns, null, cr.median_ns);
 }
 
 noinline fn runSetBenchmarks() void {
@@ -1117,71 +1160,84 @@ noinline fn runSetBenchmarks() void {
     initRawrManyBitmaps();
     initCRoaringManyBitmaps();
 
-    var r = benchmark(benchRawrAndSparse, .{});
+    var r = benchmark(benchRawrAndSparse, .{smp_allocator});
     var cr = benchmark(benchCRoaringAndSparse, .{});
-    printResult("bitwiseAnd (sparse)", r.median_ns, cr.median_ns);
+    var rawr_c = benchmark(benchRawrAndSparse, .{libc_allocator});
+    printResult("bitwiseAnd (sparse)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrAndSparseArena, .{});
-    printResult("bitwiseAnd (sparse, arena)", r.median_ns, cr.median_ns);
+    printResult("bitwiseAnd (sparse, arena)", r.median_ns, null, cr.median_ns);
 
-    r = benchmark(benchRawrAndDense, .{});
+    r = benchmark(benchRawrAndDense, .{smp_allocator});
     cr = benchmark(benchCRoaringAndDense, .{});
-    printResult("bitwiseAnd (dense)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrAndDense, .{libc_allocator});
+    printResult("bitwiseAnd (dense)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrOrSparse, .{});
+    r = benchmark(benchRawrOrSparse, .{smp_allocator});
     cr = benchmark(benchCRoaringOrSparse, .{});
-    printResult("bitwiseOr (sparse)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrOrSparse, .{libc_allocator});
+    printResult("bitwiseOr (sparse)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrOrSparseArena, .{});
-    printResult("bitwiseOr (sparse, arena)", r.median_ns, cr.median_ns);
+    printResult("bitwiseOr (sparse, arena)", r.median_ns, null, cr.median_ns);
 
-    r = benchmark(benchRawrLazyOrSparseRepair, .{});
+    r = benchmark(benchRawrLazyOrSparseRepair, .{smp_allocator});
     cr = benchmark(benchCRoaringLazyOrSparseRepair, .{});
-    printResult("lazyOr+repair (sparse)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrLazyOrSparseRepair, .{libc_allocator});
+    printResult("lazyOr+repair (sparse)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmarkInternallyTimed(timeRawrLazyOrSparse, .{LazyPhase.construction});
+    r = benchmarkInternallyTimed(timeRawrLazyOrSparse, .{ LazyPhase.construction, smp_allocator });
     cr = benchmarkInternallyTimed(timeCRoaringLazyOrSparse, .{LazyPhase.construction});
-    printResult("lazyOr construction (sparse)", r.median_ns, cr.median_ns);
+    rawr_c = benchmarkInternallyTimed(timeRawrLazyOrSparse, .{ LazyPhase.construction, libc_allocator });
+    printResult("lazyOr construction (sparse)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmarkInternallyTimed(timeRawrLazyOrSparse, .{LazyPhase.repair});
+    r = benchmarkInternallyTimed(timeRawrLazyOrSparse, .{ LazyPhase.repair, smp_allocator });
     cr = benchmarkInternallyTimed(timeCRoaringLazyOrSparse, .{LazyPhase.repair});
-    printResult("lazyOr repair (sparse)", r.median_ns, cr.median_ns);
+    rawr_c = benchmarkInternallyTimed(timeRawrLazyOrSparse, .{ LazyPhase.repair, libc_allocator });
+    printResult("lazyOr repair (sparse)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrOrDense, .{});
+    r = benchmark(benchRawrOrDense, .{smp_allocator});
     cr = benchmark(benchCRoaringOrDense, .{});
-    printResult("bitwiseOr (dense)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrOrDense, .{libc_allocator});
+    printResult("bitwiseOr (dense)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrOrMany, .{});
+    r = benchmark(benchRawrOrMany, .{smp_allocator});
     cr = benchmark(benchCRoaringOrMany, .{});
-    printResult("orMany (32 mixed)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrOrMany, .{libc_allocator});
+    printResult("orMany (32 mixed)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrOrManyHeap, .{});
+    r = benchmark(benchRawrOrManyHeap, .{smp_allocator});
     cr = benchmark(benchCRoaringOrManyHeap, .{});
-    printResult("orManyHeap (32 mixed)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrOrManyHeap, .{libc_allocator});
+    printResult("orManyHeap (32 mixed)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrXorMany, .{});
+    r = benchmark(benchRawrXorMany, .{smp_allocator});
     cr = benchmark(benchCRoaringXorMany, .{});
-    printResult("xorMany (32 mixed)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrXorMany, .{libc_allocator});
+    printResult("xorMany (32 mixed)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrAndArrayBalanced, .{});
+    r = benchmark(benchRawrAndArrayBalanced, .{smp_allocator});
     cr = benchmark(benchCRoaringAndArrayBalanced, .{});
-    printResult("bitwiseAnd (array balanced)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrAndArrayBalanced, .{libc_allocator});
+    printResult("bitwiseAnd (array balanced)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrAndCardinalityArrayBalanced, .{});
     cr = benchmark(benchCRoaringAndCardinalityArrayBalanced, .{});
-    printResult("andCardinality (array balanced)", r.median_ns, cr.median_ns);
+    printResult("andCardinality (array balanced)", r.median_ns, null, cr.median_ns);
 
-    r = benchmark(benchRawrXorArrayBalanced, .{});
+    r = benchmark(benchRawrXorArrayBalanced, .{smp_allocator});
     cr = benchmark(benchCRoaringXorArrayBalanced, .{});
-    printResult("bitwiseXor (array balanced)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrXorArrayBalanced, .{libc_allocator});
+    printResult("bitwiseXor (array balanced)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrAndArraySkewed, .{});
+    r = benchmark(benchRawrAndArraySkewed, .{smp_allocator});
     cr = benchmark(benchCRoaringAndArraySkewed, .{});
-    printResult("bitwiseAnd (array skewed)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrAndArraySkewed, .{libc_allocator});
+    printResult("bitwiseAnd (array skewed)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrAndCardinalityArraySkewed, .{});
     cr = benchmark(benchCRoaringAndCardinalityArraySkewed, .{});
-    printResult("andCardinality (array skewed)", r.median_ns, cr.median_ns);
+    printResult("andCardinality (array skewed)", r.median_ns, null, cr.median_ns);
 }
 
 noinline fn runIterationBenchmarks() void {
@@ -1189,16 +1245,17 @@ noinline fn runIterationBenchmarks() void {
 
     var r = benchmark(benchRawrIterate, .{});
     var cr = benchmark(benchCRoaringIterate, .{});
-    printResult("iterate (1M values)", r.median_ns, cr.median_ns);
+    printResult("iterate (1M values)", r.median_ns, null, cr.median_ns);
 
     initToArrayBuffers();
     r = benchmark(benchRawrToArray, .{});
     cr = benchmark(benchCRoaringToArray, .{});
-    printResult("toArray (1M values)", r.median_ns, cr.median_ns);
+    printResult("toArray (1M values)", r.median_ns, null, cr.median_ns);
 
-    r = benchmark(benchRawrToArrayAlloc, .{});
+    r = benchmark(benchRawrToArrayAlloc, .{smp_allocator});
     cr = benchmark(benchCRoaringToArrayAlloc, .{});
-    printResult("toArrayAlloc (1M values)", r.median_ns, cr.median_ns);
+    const rawr_c = benchmark(benchRawrToArrayAlloc, .{libc_allocator});
+    printResult("toArrayAlloc (1M values)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 }
 
 noinline fn runSerializationBenchmarks() void {
@@ -1206,16 +1263,18 @@ noinline fn runSerializationBenchmarks() void {
     initRawrSerialized();
     initCRoaringSerialized();
 
-    var r = benchmark(benchRawrSerialize, .{});
+    var r = benchmark(benchRawrSerialize, .{smp_allocator});
     var cr = benchmark(benchCRoaringSerialize, .{});
-    printResult("serialize", r.median_ns, cr.median_ns);
+    var rawr_c = benchmark(benchRawrSerialize, .{libc_allocator});
+    printResult("serialize", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrDeserialize, .{});
+    r = benchmark(benchRawrDeserialize, .{smp_allocator});
     cr = benchmark(benchCRoaringDeserialize, .{});
-    printResult("deserialize", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrDeserialize, .{libc_allocator});
+    printResult("deserialize", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrDeserializeArena, .{});
-    printResult("deserialize (arena)", r.median_ns, cr.median_ns);
+    printResult("deserialize (arena)", r.median_ns, null, cr.median_ns);
 }
 
 noinline fn runCardinalityBenchmarks() void {
@@ -1223,7 +1282,7 @@ noinline fn runCardinalityBenchmarks() void {
 
     const r = benchmark(benchRawrCardinality, .{});
     const cr = benchmark(benchCRoaringCardinality, .{});
-    printResult("cardinality", r.median_ns, cr.median_ns);
+    printResult("cardinality", r.median_ns, null, cr.median_ns);
 }
 
 noinline fn runPositionalBenchmarks() void {
@@ -1231,15 +1290,15 @@ noinline fn runPositionalBenchmarks() void {
 
     var r = benchmark(benchRawrRankDense, .{});
     var cr = benchmark(benchCRoaringRankDense, .{});
-    printResult("rank (dense)", r.median_ns, cr.median_ns);
+    printResult("rank (dense)", r.median_ns, null, cr.median_ns);
 
     r = benchmark(benchRawrSelectDense, .{});
     cr = benchmark(benchCRoaringSelectDense, .{});
-    printResult("select (dense)", r.median_ns, cr.median_ns);
+    printResult("select (dense)", r.median_ns, null, cr.median_ns);
 
     r = benchmark(benchRawrRankManyDense, .{});
     cr = benchmark(benchCRoaringRankManyDense, .{});
-    printResult("rankMany (dense)", r.median_ns, cr.median_ns);
+    printResult("rankMany (dense)", r.median_ns, null, cr.median_ns);
 }
 
 noinline fn runRangeBenchmarks() void {
@@ -1249,19 +1308,21 @@ noinline fn runRangeBenchmarks() void {
 
     var r = benchmark(benchRawrRangeCardinalityBitset, .{});
     var cr = benchmark(benchCRoaringRangeCardinalityBitset, .{});
-    printResult("rangeCardinality small (bitset)", r.median_ns, cr.median_ns);
+    printResult("rangeCardinality small (bitset)", r.median_ns, null, cr.median_ns);
 
     r = benchmark(benchRawrRangeCardinalityBitsetLarge, .{});
     cr = benchmark(benchCRoaringRangeCardinalityBitsetLarge, .{});
-    printResult("rangeCardinality large (bitset)", r.median_ns, cr.median_ns);
+    printResult("rangeCardinality large (bitset)", r.median_ns, null, cr.median_ns);
 
-    r = benchmark(benchRawrFlipWideDense, .{});
+    r = benchmark(benchRawrFlipWideDense, .{smp_allocator});
     cr = benchmark(benchCRoaringFlipWideDense, .{});
-    printResult("flip wide range (dense)", r.median_ns, cr.median_ns);
+    var rawr_c = benchmark(benchRawrFlipWideDense, .{libc_allocator});
+    printResult("flip wide range (dense)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 
-    r = benchmark(benchRawrRemoveRangeWideDense, .{});
+    r = benchmark(benchRawrRemoveRangeWideDense, .{smp_allocator});
     cr = benchmark(benchCRoaringRemoveRangeWideDense, .{});
-    printResult("removeRange wide (dense)", r.median_ns, cr.median_ns);
+    rawr_c = benchmark(benchRawrRemoveRangeWideDense, .{libc_allocator});
+    printResult("removeRange wide (dense)", r.median_ns, rawr_c.median_ns, cr.median_ns);
 }
 
 noinline fn cleanupBenchmarks() void {
@@ -1278,9 +1339,9 @@ noinline fn cleanupBenchmarks() void {
     for (&rawr_many_bms) |*maybe_bm| {
         if (maybe_bm.*) |*bm| bm.deinit();
     }
-    if (rawr_to_array_out) |s| allocator.free(s);
-    if (cr_to_array_out) |s| allocator.free(s);
-    if (rawr_serialized) |s| allocator.free(s);
+    if (rawr_to_array_out) |s| smp_allocator.free(s);
+    if (cr_to_array_out) |s| smp_allocator.free(s);
+    if (rawr_serialized) |s| smp_allocator.free(s);
 
     if (cr_contains_bm) |bm| c.roaring_bitmap_free(bm);
     if (cr_sparse_a) |bm| c.roaring_bitmap_free(bm);
@@ -1295,5 +1356,5 @@ noinline fn cleanupBenchmarks() void {
     for (cr_many_bms[0..]) |maybe_bm| {
         if (maybe_bm) |bm| c.roaring_bitmap_free(bm);
     }
-    if (cr_serialized) |s| allocator.free(s);
+    if (cr_serialized) |s| smp_allocator.free(s);
 }
