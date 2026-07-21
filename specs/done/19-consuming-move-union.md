@@ -8,6 +8,32 @@ gate shipping on whether the intended workload actually has enough move opportun
 matter. The lever is allocation **demand** (spec 18 closed the faster-allocator track),
 but the benefit is real only under a specific, measurable condition.
 
+> **Outcome (2026-07-21) — GO; shipped as an optional API.** Both chunks landed.
+> `bitwiseOrInPlace​Consume` (`src/bitmap.zig:1247`) implements the full commit protocol —
+> allocator + alias guards before mutation, reserve → cache-invalidate → matched merge →
+> infallible backward-merge commit, `other` left valid-empty. M4 results scale with
+> unmatched-chunk-key overlap as predicted:
+> - 25% unmatched: **12% faster** fixpoint, **18% faster** direct sweep;
+> - 50%: **31% faster** fixpoint; 75%: **53% faster** fixpoint;
+> - **zero consuming clones**; `other` reusable with retained capacity; existing
+>   `bitwiseOrInPlace` stayed within parity.
+>
+> Coverage: allocator mismatch (same vtable / different state), aliasing, exhaustive
+> allocation-failure injection, reuse, mixed container types, all overlap levels, in-place
+> OR parity, CRoaring differential. Verified across `ReleaseSafe`/`ReleaseFast`, x86_64
+> Linux + Windows cross-builds, and five-process benches.
+>
+> **One honest caveat on the gate:** the `19-01` real-driver overlap-data requirement was
+> **not** gathered — the decision was the synthetic sweep only, and at 25% overlap the
+> fixpoint win (12%) is below the 15% gate (50%+ clears it easily). Shipping anyway is
+> defensible because the API is **optional/opt-in with a clean cloning fallback** and is
+> broadly beneficial. The remaining open item transfers to the caller: **the datalog engine
+> must measure its actual unmatched-chunk-key overlap** to know its realized benefit and
+> when to call the consuming path.
+>
+> Next target surfaced by the same run: **lazy-OR construction (2.19x)** — see the new
+> spec when opened.
+
 ## Why, and the one condition it hinges on
 
 - Spec 18: the whole-result allocator is not the lever; rawr's container model is already
