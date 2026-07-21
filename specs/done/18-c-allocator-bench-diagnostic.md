@@ -8,6 +8,25 @@ CRoaring columns, across the whole suite. The deliverable is a per-op table that
 one question cheaply before any allocator is built: **is the whole-result allocator a
 broad lever, or was the spec-16 lazyOr result narrow/platform-specific?**
 
+> **Outcome (2026-07-21) — decisive NO to the allocator track.** Implemented; the M4
+> five-run aggregate shows the whole-result libc swap does **not** reproduce broadly once
+> inputs are held constant:
+> - **lazyOr+repair: only 0.980x** (2% faster) — the spec-16 ~1.07x was narrow /
+>   confounded by *fixture* allocation, which this diagnostic holds constant.
+> - **Container-heavy ops regress hard on libc:** sparse AND `1.427x`, sparse OR `1.431x`,
+>   deserialize `1.782x` (all slower).
+> - **libc gains are confined to flat single-buffer allocation:** `toArrayAlloc` 0.77x,
+>   `serialize` 0.86x, and a couple of build paths (random add ~0.96x, sequential add
+>   0.87x; sequential `addMany` neutral).
+>
+> Interpretation: rawr's container model is already SMP-optimal (many small power-of-two
+> allocs land in classes exactly); libc only wins where one big flat buffer is allocated.
+> **Do not build the persistent segregated heap** — it would regress the container-heavy
+> set ops that matter. The whole allocator-replacement track (the spec-16 libc lead, the
+> segregated-heap idea) is **closed**. The remaining perf lever is reducing allocation
+> *demand* — the 98k-clone finding → next spec. Benchmark-only; no library/API change; the
+> `c_alloc` column is retained for future allocator questions.
+
 ## Why
 
 Spec 17 Phase A falsified the transient-bitset-arena hypothesis and showed the spec-16
