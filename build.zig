@@ -136,6 +136,26 @@ pub fn build(b: *std.Build) void {
     );
     bench_transient_step.dependOn(&b.addInstallArtifact(bench_transient_exe, .{}).step);
 
+    // Benchmark-only consuming in-place OR prototype.
+    const bench_consuming_or_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_consuming_or.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_consuming_or_mod.addImport("rawr", bench_lib_mod);
+    bench_consuming_or_mod.link_libc = true;
+    addBenchmarkPlatformShim(b, bench_consuming_or_mod, target);
+
+    const bench_consuming_or_exe = b.addExecutable(.{
+        .name = "bench_consuming_or",
+        .root_module = bench_consuming_or_mod,
+    });
+    const bench_consuming_or_step = b.step(
+        "bench-consuming-or",
+        "Build consuming in-place OR prototype benchmark",
+    );
+    bench_consuming_or_step.dependOn(&b.addInstallArtifact(bench_consuming_or_exe, .{}).step);
+
     // CRoaring validation executable
     const validate_mod = b.createModule(.{
         .root_source_file = b.path("src/validate_croaring.zig"),
