@@ -12,6 +12,37 @@ are told to force conversion and both do; the work is equivalent, so the gap is
 construction/repair *cost*, not a difference in what gets built. Semantics stay
 identical — this spec does not change dispatch or any public contract.
 
+> **Outcome (2026-07-21, commit `0c6a88d`) — algorithmic scope done; GO gate missed,
+> cause is the allocator, not the loop. Kept.**
+>
+> The construction/repair split (the spec's first deliverable) immediately located the
+> problem: construction was 2.32x (8.20 ms vs 3.53 ms), repair already at parity
+> (1.03x). The justified construction fixes landed — array accumulation via `setList`
+> (sentinel invalidated once per list, not per value), and up-front top-level result
+> capacity reservation matching the reference. That cut construction to ~1.9x and left
+> repair at or slightly better than parity (rawr 7.89 ms vs CR 8.19 ms over five runs).
+>
+> Combined ratio-of-medians still ~**1.22x**, missing the ≤1.10x / ≥75%-excess gate.
+> **Allocator isolation proved the residual is not algorithmic:** swapping rawr's output
+> allocator to libc gave construction 0.99x and combined **1.07x**. Forced sparse union
+> creates thousands of short-lived 8 KB bitsets, and Zig's SMP allocator is materially
+> slower for that churn on this M4 than libc — even though SMP is excellent for the
+> small power-of-two array allocations eager sparse OR uses (which is why eager
+> `bitwiseOr` is already at parity). This is the flip side of the [spec 13] allocator-
+> class finding: co-locating header+payload was ruled out here too, since 8192 payload
+> bytes + header crosses into SMP's 16,384-byte class — the same class-boundary failure.
+>
+> **Disposition:** keep `0c6a88d` (real, semantics-preserving improvements; all tests,
+> both build modes, and n-way benchmarks green). Record spec 16 as **missing its perf
+> GO gate under the SMP benchmark allocator**, with the remaining gap allocator-bound.
+> Closing it needs a **separate allocator/ownership design** — class-aware pooling or
+> parent-owned temporary storage for the transient bitsets — not more lazy-loop tuning
+> and not reopening the rejected single-block layout unchanged. Also note (per the
+> Roaring+Run paper, §5.1): lazy union is designed for **n-way** aggregation; this
+> sparse 2-way array workload is off-design, so it is not worth chasing below parity.
+>
+> [spec 13]: 13-single-alloc-containers.md
+
 ## Correcting an earlier framing
 
 An earlier draft of this spec assumed the reference keeps small array unions as arrays

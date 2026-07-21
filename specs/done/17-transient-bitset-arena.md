@@ -10,6 +10,32 @@ later) makes arena *ownership* the hard part, so this spec is staged: **prove th
 performance ceiling with two non-shipping experiments first, and only design the
 escaping arena-backed result if those clear both timing and memory gates.**
 
+> **Outcome (2026-07-21) — Phase A NO-GO; hypothesis falsified. Parked.**
+>
+> Phase A (`17-01`/`17-02`) ran; both experiments **missed the gates** — the transient
+> arena is slower and hungrier, not faster.
+> - **A1 (2-way):** FBA construction 9.71 ms vs 6.85 baseline, combined 22.0 vs 16.3;
+>   repair unchanged. Redirecting only the transient bitsets removed few allocations
+>   (130,994 → 98,268) because the sparse 2-way merge **clones thousands of *unmatched*
+>   containers** the arena never touches. Individual SMP frees turned out to be cheap on
+>   M4; **bulk-freeing the giant slab cost *more*** (~+2.6 ms teardown). `ArenaAllocator`
+>   geometry was worse still (293 MB cumulative for 173 MB, 22 resizes, memory 1.289x).
+> - **A2 (n-way):** same shape without clones — construction slower, and the **memory
+>   gate fails structurally (1.259x)**: the arena must retain every bitset until repair
+>   while the demoted arrays coexist. No side-table fixes that lifetime overlap.
+>
+> **Root misread (ours, not the code):** spec 16's libc experiment swapped the allocator
+> for the *entire* result — unmatched clones, temp bitset structs+words, index arrays,
+> repair-created arrays, destruction — so its ~1.07x never isolated the transient
+> bitsets. The whole-result allocator matters; the transient bitsets alone do not, and an
+> arena for them is a net loss. The staging paid off: falsified at benchmark-only cost,
+> `RoaringBitmap` untouched, **Phase B not attempted**.
+>
+> `17-00`'s harness + counting allocator are retained as a reusable measurement bed.
+> Follow-up directions (whole-result allocator diagnostics, a persistent caller-owned
+> segregated heap, reducing clone demand via move/in-place union) are a **new** design,
+> not this arena — see the next spec when opened.
+
 ## Why
 
 Spec 16 closed the algorithmic side of `lazyOr+repair (sparse)` and proved the residual
@@ -18,7 +44,7 @@ combined ratio sat at ~1.22x under `smp_allocator`, but swapping only the lazy o
 allocator took construction to ~0.99x and combined to ~1.07x. Forced lazy union builds
 thousands of 8 KB bitset payloads that are freed again almost immediately (repair
 demotes most straight back to arrays); the general allocator's per-object cost on that
-churn is the whole gap. Full context in `done/16-lazy-union-forced-bitset.md`.
+churn is the whole gap. Full context in `16-lazy-union-forced-bitset.md`.
 
 The value is **not** the sparse 2-way number itself (off-design for lazy). It is that a
 reusable *transient allocator for scratch containers* is a general lever for any
