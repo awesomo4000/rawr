@@ -60,12 +60,12 @@ and route to the transient arena **only when the complete bound is known to be �
 
 - Accumulate the sum in `u64` (or with an early-saturating cutoff that stops once the
   running sum exceeds 4096) — no overflow, no full second pass.
-- Array/run/normal-bitset inputs expose their cardinality cheaply. If any same-key input
-  is a **lazy bitset with an unknown (sentinel `-1`) cardinality** — which can happen for
-  an in-place accumulator mid-fold — treat the bound as *not known ≤ 4096* and use the
-  **normal allocator**. Do **not** trigger a fresh cardinality scan merely to qualify a
-  key for the arena; the prepass must never add work that the transient path was meant to
-  save.
+- Array/run/bitset inputs expose their cardinality cheaply. rawr has no distinct "lazy
+  bitset" type, so the rule is on the stored value: **any bitset whose stored cardinality
+  is `< 0` is ineligible** (unknown, however it arose — e.g. an in-place accumulator
+  mid-fold), and that key uses the **normal allocator**. Do **not** trigger a fresh
+  cardinality scan merely to qualify a key for the arena; the prepass must never add work
+  that the transient path was meant to save.
 
 ## Phase A — non-shipping experiments (prove the ceiling)
 
@@ -77,6 +77,18 @@ must clear the Phase-A gates before any ownership design is attempted.
 the **entire temporary `BitsetContainer`** (struct + words) from the transient arena.
 Only the resulting demoted array container is built on the persistent allocator. This is
 the cleanest experiment; words-only splitting is not needed to measure the ceiling.
+
+**Reuse production kernels (control the variables):** the prototypes must call the same
+accumulation (`setList`) and bitset→array demotion kernels the production path uses.
+**Eligibility, allocator source, and lifetime are the only permitted behavioral
+differences** — otherwise a kernel divergence, not the arena, could move the number.
+
+**Two allocator variants per experiment (avoid a false no-go):** measure both a
+`std.heap.ArenaAllocator` and an **exactly sized single-allocation
+`FixedBufferAllocator`** (one child allocation of the counted guaranteed-demote size).
+`ArenaAllocator`'s node geometry and atomic bump could miss the gate on their own even
+though the transient-lifetime design is sound; the fixed-buffer variant isolates that, so
+a miss is attributed to the right cause.
 
 ### A1 — Fused 2-way construct+repair (upper bound on sparse benefit)
 
@@ -101,8 +113,10 @@ both required:
 
 ### Phase-A gates (all required to proceed to Phase B)
 
-- **Exact value parity:** each prototype's repaired output is byte-identical to the
-  current path's output (and to the reference oracle).
+- **Value parity, two levels:** each prototype's repaired output is **byte-identical to
+  rawr's current path**; against the CRoaring oracle require **logical set/cardinality
+  equality**, not byte-identity — portable serialization can legitimately differ when the
+  two implementations pick different container representations.
 - **Leak-free teardown:** arena plus all persistent allocations fully released under a
   leak-checking GPA; no leaked bytes, no double free.
 - **Timing:** A1 sparse combined (including teardown) reaches ~1.07x territory; A2
@@ -175,17 +189,21 @@ The hard part; explicitly **not** designed until A justifies it.
   `queryCapacity()` and logical requested bytes are useful diagnostics but are **not**
   the peak-memory figure — the 110% gate applies to actual child-allocator live/peak
   (size-class) bytes.
-- **Fixed-buffer sizing (if used) must be exact.** `min(a.size, b.size) × 8 KB` counts
-  *potential* overlaps and can reserve ~2× the sparse need; a fixed-buffer variant must
-  first count actual guaranteed-demote keys, or explicitly accept and gate the
-  over-allocation against the peak-memory ceiling.
+- **Fixed-buffer sizing must be exact.** The `FixedBufferAllocator` variant is required
+  (above), and its slab must be sized from a **count of actual guaranteed-demote keys**,
+  not `min(a.size, b.size) × 8 KB` — that counts *potential* overlaps and can reserve ~2×
+  the sparse need. Any deliberate over-allocation must be explicit and gated against the
+  peak-memory ceiling.
 
 ## Acceptance
 
 **Phase A (benchmark-only prototypes) — required to unlock Phase B:**
 
-- Exact value parity with the current path and the reference oracle.
+- Value parity: byte-identical to rawr's current path; logical set/cardinality equality
+  vs the CRoaring oracle.
 - Leak-free teardown under a leak-checking GPA.
+- Both allocator variants measured (`ArenaAllocator` and exactly sized
+  `FixedBufferAllocator`), reusing production accumulation/demotion kernels.
 - Allocator measurements reported (calls, requested, SMP-class, peak).
 - Timing: A1 sparse combined ≤ ~1.10x (approaching ~1.07x), A2 sparse-heavy wins and
   enters the arena, A2 dense control within noise.
