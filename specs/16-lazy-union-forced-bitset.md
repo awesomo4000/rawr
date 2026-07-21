@@ -32,8 +32,9 @@ policy/API, benchmarked on its own — not folded into this flag.
 
 ## What each forced path does
 
-Both build a bitset for every overlapping (non-bitset) key pair and leave its
-cardinality unresolved until repair. The construction differs:
+For the benchmark's overlapping array/array pairs, both build a destination bitset and
+leave its cardinality unresolved until repair (other overlap type combinations have
+their own paths — e.g. union with a full run container). The construction differs:
 
 - **Reference** (`vendor/roaring.c:16808`): converts **one** input to a bitset via
   `container_to_bitset`, then `container_lazy_ior`s the second input **in place** into
@@ -84,9 +85,12 @@ rawr's excess cost in that path.
    where rawr diverges from the reference before changing code.
 3. **Candidate optimizations to validate against the split** (implement only what the
    measurement justifies):
-   - Apply the second (and subsequent) array input with the existing bulk `setList`
+   - Apply the second (and subsequent) array input with the existing batch `setList`
      rather than a per-element `lazySet` loop — this is the concrete divergence from the
-     reference, which applies its second input via `bitset_set_list`.
+     reference, which applies its second input via `bitset_set_list`. "Batch" here means
+     the sentinel is invalidated once for the whole list instead of on every element; it
+     is not inherently SIMD (on M4 the reference's `bitset_set_list` is also a scalar
+     loop). The win is the removed per-element bookkeeping, not vectorization.
    - Drop the redundant per-element `cardinality = -1` store — invalidate the sentinel
      once per container, not once per bit.
    - Only if the split shows repair dominates: evaluate reducing repair's popcount/demote
