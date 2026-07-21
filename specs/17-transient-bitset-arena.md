@@ -25,6 +25,16 @@ reusable *transient allocator for scratch containers* is a general lever for any
 allocation-churn-heavy caller — the same "parent-owned temporary storage" direction the
 spec 13 analysis pointed at, composing with rawr's existing arena/`Owned` story.
 
+## Why an arena (not a pool, not a malloc clone)
+
+The lazy path builds **all** output bitsets first, then a single `repairAfterLazy` sweep
+converts them. So during the pre-repair window every transient bitset is live at once and
+they all die together at repair — **batch lifetime, not interleaved churn**. A free-list
+pool (recycling one buffer across many objects) does not fit, because the objects
+coexist. Batch lifetime is the arena case: replace N allocator round-trips with N
+bump-allocations plus a bulk free. Reimplementing a general allocator is out of scope;
+the libc measurement in spec 16 was a diagnostic proxy, not a target.
+
 ## The unifying constraint: only arena guaranteed-demote bitsets
 
 The single decision that makes the rest tractable: **arena a transient bitset only when
@@ -37,109 +47,160 @@ upper-bound sum for n-way). Consequences:
   allocator) escapes. The entire dense >4096 copy-out problem disappears.
 - **Dense is untouched by construction.** Keys whose sum exceeds the threshold keep
   today's path exactly, so a genuinely dense union — which may survive as a bitset — is
-  never routed through the arena. This directly answers the dense-regression risk:
-  `manyMerge` already repairs internally and retains surviving dense bitsets, and the
-  arena must not make it allocate transiently, allocate again persistently, copy 8 KB,
-  and hold both.
+  never routed through the arena. This answers the dense-regression risk: `manyMerge`
+  already repairs internally and retains surviving dense bitsets, and the arena must not
+  make it allocate transiently, allocate again persistently, copy 8 KB, and hold both.
 - Forced-bitset **semantics are preserved**: a guaranteed-demote key still builds a
   bitset pre-repair (representation unchanged); only its *allocation source* changes.
 
-This turns "transient-bitset arena" into "cheap allocation for the forced bitsets that
-were always going to demote" — precisely the waste spec 16 measured.
+### Eligibility prepass (must be cheap and exact)
+
+Before allocating a key group's accumulator, compute the same-key input-cardinality sum
+and route to the transient arena **only when the complete bound is known to be ≤ 4096**:
+
+- Accumulate the sum in `u64` (or with an early-saturating cutoff that stops once the
+  running sum exceeds 4096) — no overflow, no full second pass.
+- Array/run/normal-bitset inputs expose their cardinality cheaply. If any same-key input
+  is a **lazy bitset with an unknown (sentinel `-1`) cardinality** — which can happen for
+  an in-place accumulator mid-fold — treat the bound as *not known ≤ 4096* and use the
+  **normal allocator**. Do **not** trigger a fresh cardinality scan merely to qualify a
+  key for the arena; the prepass must never add work that the transient path was meant to
+  save.
 
 ## Phase A — non-shipping experiments (prove the ceiling)
 
-Neither experiment changes `RoaringBitmap` or ships. Both must clear the Phase-A gates
-below before any ownership design is attempted.
+Neither experiment ships or modifies the production `lazyOr` / `manyMerge` code paths:
+each is a **separate prototype function or a compile-time benchmark-only path**. Both
+must clear the Phase-A gates before any ownership design is attempted.
+
+**Allocation granularity (decided for Phase A):** for a guaranteed-demote key, allocate
+the **entire temporary `BitsetContainer`** (struct + words) from the transient arena.
+Only the resulting demoted array container is built on the persistent allocator. This is
+the cleanest experiment; words-only splitting is not needed to measure the ceiling.
 
 ### A1 — Fused 2-way construct+repair (upper bound on sparse benefit)
 
 A benchmark-only path that constructs and repairs a single 2-way forced lazy OR in one
-scope, so the arena's lifetime never escapes. This measures the **maximum** sparse
-benefit available from arena allocation, with zero ownership risk. It does not optimize
-the real `lazyOr` → later `repairAfterLazy` workflow — it establishes whether the
-ceiling justifies pursuing that workflow at all.
+scope, so the arena's lifetime never escapes. Measures the **maximum** sparse benefit
+available from arena allocation with zero ownership risk. It does not optimize the real
+`lazyOr` → later `repairAfterLazy` workflow — it establishes whether the ceiling
+justifies pursuing that workflow at all. **Arena teardown (bulk free) is inside the timed
+region**, so the free cost is in the comparison.
 
-### A2 — Local-arena n-way prototype (inside `manyMerge`)
+### A2 — Local-arena n-way prototype (benchmark-only)
 
-`manyMerge` already encloses construction and repair in one call, so an arena's lifetime
-is naturally local there — no escaping result. Prototype transient storage for the
-guaranteed-demote keys only, and measure against a real dense n-way corpus. Purpose: show
-the arena does **not** regress the n-way case (its intended use), given the
-guaranteed-demote gate.
+A benchmark-only n-way prototype (a separate function, **not** an edit to `manyMerge`)
+whose arena lifetime is fully local — `manyMerge` already encloses construction and
+repair in one call, so this models that shape without touching production. Two workloads,
+both required:
 
-### Phase-A gates (both required to proceed to Phase B)
+- **Sparse-heavy n-way** — many *shared sparse* keys whose summed bound is ≤ 4096, so the
+  transient arena is actually exercised. This is the case that must show a win.
+- **Dense n-way control** — genuinely dense shared keys that bypass the arena, held as a
+  **no-regression control**.
 
-- **Timing:** A1 sparse combined reaches ~1.07x territory (approaching the spec-16
-  isolated-allocator figure); A2 dense shows **no beyond-noise regression**.
-- **Memory:** peak live transient bytes do not exceed the current path's peak by more
-  than a small margin (ceiling stated below), measured — not assumed.
+### Phase-A gates (all required to proceed to Phase B)
+
+- **Exact value parity:** each prototype's repaired output is byte-identical to the
+  current path's output (and to the reference oracle).
+- **Leak-free teardown:** arena plus all persistent allocations fully released under a
+  leak-checking GPA; no leaked bytes, no double free.
+- **Timing:** A1 sparse combined (including teardown) reaches ~1.07x territory; A2
+  sparse-heavy shows a win and demonstrably enters the arena; A2 dense control shows **no
+  beyond-noise regression**.
+- **Memory:** peak child-allocator live bytes ≤ **110%** of the current path's peak (see
+  measurement — this is physical/size-class bytes, not logical requested bytes).
+- **Allocator measurements reported** for every variant (list below).
 
 ## Phase B — production integration (only if Phase A clears its gates)
 
-This is the hard part and is explicitly **not** designed until A justifies it.
+The hard part; explicitly **not** designed until A justifies it.
 
-- **D2 — Escaping ownership (primary blocker).** The public workflow needs the arena to
-  outlive the `lazyOr` return and be used by a later `repairAfterLazy`. An **embedded**
-  arena is unsafe: `ArenaAllocator`'s `Allocator` holds a pointer to the arena object,
-  which moves when `RoaringBitmap` is returned by value. `OwnedBitmap` sidesteps this by
-  never using its bitmap allocator after return (`src/bitmap.zig:2380`); `repairAfterLazy`
-  would have to. Production therefore needs an explicit stable-ownership mechanism —
-  candidates: a heap-boxed arena sidecar with a stable address, or a **distinct
-  lazy-result type** that owns the arena and exposes only `repair()` → `RoaringBitmap`.
-  The lazy-result type also cleanly fixes the existing lazy footgun (invalid until
-  repaired). Decide this before any code.
+- **D2 — Escaping ownership (primary blocker), with an honest API fork.** The public
+  workflow needs the arena to outlive the `lazyOr` return and be used by a later
+  `repairAfterLazy`. An **embedded** arena is unsafe: `ArenaAllocator`'s `Allocator`
+  holds a pointer to the arena object, which moves when `RoaringBitmap` is returned by
+  value. `OwnedBitmap` sidesteps this by never using its bitmap allocator after return
+  (`src/bitmap.zig:2380`); `repairAfterLazy` would have to. The two viable vehicles are
+  **not** equivalent in API impact, and the spec does not pretend otherwise:
+  - a **heap-boxed arena sidecar** with a stable address — fully **internal**, no public
+    API change; or
+  - a **distinct lazy-result type** that owns the arena and exposes `repair()` →
+    `RoaringBitmap` — an **additive public API change** (and it also retires the lazy
+    footgun).
+
+  The choice is deferred to Phase B, but it is a real fork: the sidecar preserves the
+  current public surface; the lazy-result type extends it. What is invariant either way
+  is the **deferred-cardinality contract and the semantics of a repaired result** — not
+  the public surface.
 - **Mixed-ownership representation.** `repairAfterLazy` and `deinit` free every bitset
   through `self.allocator` (`src/bitmap.zig:1537`). Arena-backed bitsets must be
   identifiable **without** losing that identity when cardinality is computed, so repair
   frees each container through the correct owner. Specify a representation, not "minimal
   bookkeeping."
-- **Enumerated edge cases (all must have defined behavior):**
-  - deinit of an unrepaired result (arena still owns transients);
-  - repair failing partway through (some demoted arrays built, arena not yet freed);
-  - repeated `lazyOrInPlace` before a repair;
-  - clone or move of an unrepaired result;
-  - construction failure with a mix of persistent (cloned) and transient (arena) containers.
-- **Caller-allocator interaction — no detection.** `std.mem.Allocator` has no supported
-  "is this an arena?" query; vtable-identity checks are brittle and are **out**.
-  Double-arena is **not** harmless: an inner arena's frees become near-no-ops inside an
-  outer arena, so transient bitsets persist until the outer `OwnedBitmap` dies — the
-  existing ~512 MB inflate/demote hazard (`api-design-notes.md`). The design must make
-  the transient arena's lifetime self-contained regardless of the caller's allocator,
-  not conditionally skip based on what the caller passed.
-- **Failing-allocator tests** are a precondition for production integration, given the
-  mixed-ownership free paths.
+- **Enumerated edge cases (all must have defined behavior):** deinit of an unrepaired
+  result; repair failing partway (some demoted arrays built, arena not yet freed);
+  repeated `lazyOrInPlace` before a repair; clone or move of an unrepaired result;
+  construction failure with a mix of persistent (cloned) and transient (arena)
+  containers.
+- **Caller-allocator interaction — no detection, and honest guarantees.**
+  `std.mem.Allocator` has no supported "is this an arena?" query; vtable-identity checks
+  are brittle and are **out**. rawr can guarantee **correct ownership and cleanup calls
+  for every caller allocator** — but *physical reclamation and the performance win are
+  only guaranteed for reclaiming allocators*. If the caller's backing allocator is itself
+  a non-reclaiming arena, the inner arena's bulk free is ignored by the outer allocator,
+  so the transient bitsets are not physically reclaimed until the outer `OwnedBitmap`
+  dies — the existing ~512 MB inflate/demote hazard (`api-design-notes.md`). State this
+  limitation explicitly rather than claiming reclamation "regardless of caller
+  allocator." The design must not *depend* on detecting the caller; correctness holds for
+  all, reclamation holds for reclaiming allocators.
+- **Failing-allocator tests** are a Phase-B precondition, given the mixed-ownership free
+  paths.
 
 ## Measurement
 
-- **Both workloads with a real corpus.** Sparse 2-way (spec 16 corpus) and a **concrete
-  dense n-way** corpus — the current `orMany` case (≈6 chunks, ~0.01 ms) is far too small
-  to decide this; define enough shared keys and repetitions for stable construction,
-  repair/copy-out, allocation, and memory numbers.
+- **Corpora.** Sparse 2-way (spec 16 corpus); **sparse-heavy n-way** (many shared
+  ≤4096-bound keys — actually enters the arena); **dense n-way control**. The current
+  `orMany` case (≈6 chunks, ~0.01 ms) is far too small — size the n-way corpora with
+  enough shared keys and repetitions for stable construction, repair, allocation, and
+  memory numbers.
 - **Construction/repair split** (spec 16 method), five independent process runs, median
-  and range/IQR per phase, identical setup/teardown on both sides.
+  and range/IQR per phase, identical setup/teardown on both sides, **teardown inside the
+  combined timing**.
 - **Report allocator behavior, not just wall-clock.** `ArenaAllocator` is **not** one
   slab acquisition — it allocates geometrically growing nodes and attempts resizes
   (`std/heap/ArenaAllocator.zig`), and an 8 KB payload plus node/alignment overhead
-  initially crosses SMP's 8 KB class. So report, per variant: child-allocator call count,
-  `queryCapacity()`, requested bytes, effective SMP size-class bytes, and actual peak live
-  memory.
+  initially crosses SMP's 8 KB class. Per variant report: child-allocator call count,
+  requested bytes, **effective SMP size-class bytes**, and **actual peak live memory**.
+  `queryCapacity()` and logical requested bytes are useful diagnostics but are **not**
+  the peak-memory figure — the 110% gate applies to actual child-allocator live/peak
+  (size-class) bytes.
 - **Fixed-buffer sizing (if used) must be exact.** `min(a.size, b.size) × 8 KB` counts
   *potential* overlaps and can reserve ~2× the sparse need; a fixed-buffer variant must
-  first count actual forced-bitset (guaranteed-demote) keys, or explicitly accept and gate
-  the over-allocation against the peak-memory ceiling.
+  first count actual guaranteed-demote keys, or explicitly accept and gate the
+  over-allocation against the peak-memory ceiling.
 
-## Acceptance (hard gates)
+## Acceptance
 
-- **Sparse:** `lazyOr+repair (sparse)` combined **≤ 1.10x**, construction at/near parity.
-- **Dense:** n-way combined regression **within the measured noise band** (the
-  guaranteed-demote gate should make this hold by construction; verify it does).
-- **Peak memory:** transient peak **≤ 110%** of the current path's peak on both workloads.
-- **Correctness:** representation tests (forced/size-selected, by-value/in-place),
+**Phase A (benchmark-only prototypes) — required to unlock Phase B:**
+
+- Exact value parity with the current path and the reference oracle.
+- Leak-free teardown under a leak-checking GPA.
+- Allocator measurements reported (calls, requested, SMP-class, peak).
+- Timing: A1 sparse combined ≤ ~1.10x (approaching ~1.07x), A2 sparse-heavy wins and
+  enters the arena, A2 dense control within noise.
+- Memory: peak child-allocator live (size-class) bytes ≤ 110% of the current path on all
+  workloads.
+
+**Phase B (production integration) — only if Phase A passes:**
+
+- Ownership vehicle chosen (sidecar vs lazy-result type) with the API impact stated;
+  mixed-ownership representation and all enumerated edge cases given defined behavior.
+- Sparse ≤ 1.10x preserved through the real escaping `lazyOr` → `repairAfterLazy`
+  workflow; dense within noise; peak ≤ 110%.
+- Correctness: representation tests (forced/size-selected, by-value/in-place),
   lazy-or/xor and in-place differential cases, footgun, edge cases, and
-  **failing-allocator** tests all green under `ReleaseSafe` and `ReleaseFast`. No change
-  to the deferred-cardinality contract; any ownership vehicle (sidecar/lazy-result type)
-  keeps the arena lifetime internal.
+  **failing-allocator** tests green under `ReleaseSafe` and `ReleaseFast`.
 - Full build green; no diagnostic allocator left in the tree.
 
 ## NO-GO
@@ -151,6 +212,7 @@ This is the hard part and is explicitly **not** designed until A justifies it.
 
 ## Estimate
 
-Phase A: S–M (two benchmark-scoped prototypes + the measurement harness). Phase B: M–L
-and only attempted if A clears its gates — the cost is the ownership decision (D2), the
-mixed-ownership free paths, and the failing-allocator hardening, not the arena itself.
+Phase A: S–M (two benchmark-scoped prototypes + the measurement harness), and it is
+ready to chunk. Phase B: M–L, attempted only if A clears its gates — the cost is the
+ownership decision (D2 fork), the mixed-ownership free paths, and the failing-allocator
+hardening, not the arena itself.
