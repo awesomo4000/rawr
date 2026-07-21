@@ -62,11 +62,11 @@ representative pure-Zig number and an allocator-matched number.
 - **"Allocator-matched" caveat.** CRoaring uses libc internally for bitmap creation, set
   results, and deserialization, but its `serialize` and `toArrayAlloc` wrappers currently
   allocate their **output buffers** with the Zig benchmark allocator
-  (`bench_croaring.zig` ~line 508). For those rows `rawr(c_alloc)/CRoaring` is therefore
-  *not* fully allocator-matched. Resolve one of two ways and state which in the output:
-  (a) switch those CRoaring wrapper output buffers to the C allocator for those rows too,
-  or (b) leave them and label those rows "allocator-matched only where CRoaring owns the
-  allocation." Either is acceptable; do not leave it ambiguous.
+  (`bench_croaring.zig` ~line 508). **CRoaring stays unchanged** — changing those buffers
+  would move the `rawr(smp)/CRoaring` baseline this suite must keep comparable. So for
+  those two rows label `rawr(c_alloc)/CRoaring` as **"allocator-matched only where CRoaring
+  owns the allocation"** in the output. The primary diagnostic `rawr(c_alloc)/rawr(smp)`
+  is unaffected and remains valid for every qualifying row.
 - The env header records target / CPU / features and names which allocator each column
   used, consistent with spec 14's header.
 
@@ -89,7 +89,9 @@ machines are supporting measurements.
 Report the M4 result from **at least five independent process runs**, aggregated to
 median + range — a single 21-sample process is vulnerable to allocator-state and
 benchmark-order effects that are exactly what this diagnostic is probing. Extend
-`scripts/run-compare-bench.sh` to launch the runs and aggregate if it does not already.
+`scripts/run-compare-bench.sh` to build once with `-Dcpu=native`, run the binary five
+times, aggregate **each timing column independently**, and **recompute the ratios from the
+median times** (not by averaging per-run ratios).
 
 ## Acceptance
 
@@ -108,10 +110,11 @@ benchmark-order effects that are exactly what this diagnostic is probing. Extend
   - `zig build test`
   - `zig build -Doptimize=ReleaseSafe`
   - `zig build -Doptimize=ReleaseFast`
-- Diagnostic run of record (the `bench-compare` suite is the `bench_croaring` binary):
-  - `zig build bench-compare -Dcpu=native` (ReleaseFast target), then
-  - `scripts/run-compare-bench.sh` to launch ≥5 independent processes and aggregate
-    median + range.
+- Diagnostic run of record (the `bench-compare` step builds the `bench_croaring` binary):
+  - `scripts/run-compare-bench.sh` — builds once with `-Dcpu=native` (ReleaseFast), runs
+    the binary five times, aggregates each timing column, and recomputes ratios from the
+    medians.
+  - Manual smoke check: `zig build bench-compare -Dcpu=native` then run the binary once.
 - Confirm the emitted env header names each column's allocator, non-allocating ops and
   arena rows show `N/A` in the `c_alloc`/effect columns, and the "allocator-matched"
   resolution (a or b) is stated in the output.
