@@ -116,8 +116,8 @@ median times** (not by averaging per-run ratios).
     medians.
   - Manual smoke check: `zig build bench-compare -Dcpu=native` then run the binary once.
 - Confirm the emitted env header names each column's allocator, non-allocating ops and
-  arena rows show `N/A` in the `c_alloc`/effect columns, and the "allocator-matched"
-  resolution (a or b) is stated in the output.
+  arena rows show `N/A` in the `c_alloc`/effect columns, and the mandated option-(b)
+  allocator-matching caveat is stated in the output.
 
 ## Decision this feeds
 
