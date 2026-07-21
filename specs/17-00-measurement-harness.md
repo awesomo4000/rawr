@@ -47,9 +47,23 @@ operand counts, key-sharing structure, and per-key cardinality distribution.
   drives) that launches five independent processes, collects each run's per-(experiment,
   variant, phase) numbers, and aggregates median + range/IQR. In-process loops do not
   substitute — the five runs must be separate processes.
+- **Authoritative environment.** The Phase-A timing/memory gates are judged in
+  **`ReleaseFast`, native CPU (`-Dcpu=native`)**, on the **same Apple M4 / macOS host used
+  for spec 16**, with target / CPU / features recorded in the output header (as spec 14's
+  env header does). Runs on other machines are supporting measurements only. `ReleaseSafe`
+  is for correctness/build/leak validation, not for the timing gate.
 - **Variant registry:** the harness runs each experiment across the allocator variants
   the later chunks register (baseline current-path, `ArenaAllocator`, exactly sized
   `FixedBufferAllocator`) and emits one row per (experiment, variant, phase).
+- **Timed CRoaring reference.** Because the Phase-A timing gate (`≤ 1.10x`) is a
+  **rawr-vs-CRoaring** ratio, the harness also times CRoaring construction / repair /
+  combined for each experiment as a reference row. This is a **timing** reference only —
+  CRoaring uses its own allocator, so it is outside the shared counting wrapper and does
+  not feed the memory gauge. Two denominators, kept distinct:
+  - **timing gate** = rawr transient ÷ CRoaring reference (`≤ 1.10x`);
+  - **improvement** = rawr transient ÷ rawr baseline (reported, informational);
+  - **memory gate** = rawr transient peak ÷ rawr baseline peak (`≤ 110%`, both under the
+    shared wrapper).
 - **Value-parity checks** wired in but exercised by the later chunks: a byte-identical
   comparison against rawr's current path, and a logical set/cardinality comparison
   against the CRoaring oracle.

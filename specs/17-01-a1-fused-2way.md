@@ -52,9 +52,14 @@ shippable path.
 - **Leak-free:** arena/buffer plus all persistent allocations fully released under a
   leak-checking GPA; no leaks, no double free (exercise the eligible and ineligible key
   mixes).
-- **Timing (the ceiling):** report construction / repair / combined (median + range) for
-  all three variants. The gate is combined **≤ ~1.10x** (approaching the spec-16
-  isolated-allocator ~1.07x) for at least one transient variant; report which.
+- **Timing (the ceiling), two denominators:** report construction / repair / combined
+  (median + range) for all three rawr variants **and the timed CRoaring reference**, and
+  give both numbers per transient variant:
+  - **improvement** = transient ÷ rawr baseline (informational);
+  - **gate** = transient ÷ **CRoaring reference**, which must be combined **≤ 1.10x**
+    (approaching the spec-16 isolated-allocator ~1.07x) for at least one transient
+    variant; report which.
+  Gate measured in the authoritative environment (`ReleaseFast`, native, spec-16 M4 host).
 - **Memory:** peak child-allocator live (size-class) bytes ≤ **110%** of baseline.
 - **Attribution:** if `ArenaAllocator` misses but `FixedBufferAllocator` clears the gate,
   that is a *pass with a noted cause* (arena node geometry / atomic bump), not a no-go —
@@ -63,5 +68,6 @@ shippable path.
 
 ## Result to record
 
-The A1 ceiling number (best transient variant vs baseline, construction + combined) and
-which allocator variant produced it — this is half of the Phase-A go/no-go input.
+The A1 ceiling: the best transient variant's combined **ratio vs the CRoaring reference**
+(the gate) plus its **improvement vs rawr baseline**, and which allocator variant produced
+it — this is half of the Phase-A go/no-go input.
