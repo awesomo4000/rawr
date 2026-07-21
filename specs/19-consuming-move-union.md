@@ -114,7 +114,15 @@ noted as the alternative.)
   chunk keys unmatched in `self`, with exact rounds, delta sizes, container types, and key
   distribution pinned and documented.
 - **Realistic fixpoint-pattern bench:** repeated `R := R ∪ ΔR` over many rounds with a
-  freshly built, then consumed, `ΔR` each round — cumulative allocations and time.
+  freshly built, then consumed, `ΔR` each round. **Timing boundaries (report all three,
+  kept separate):**
+  - the **union operation only**, with `ΔR` construction *outside* the timed region;
+  - the **full round lifecycle** separately, including `ΔR` construction and cleanup;
+  - **allocator counters reset immediately around the union operation**, so the alloc
+    numbers attribute to the union, not to delta construction.
+
+  Without this split the 15% gate drifts with how much unrelated delta-construction cost
+  is folded in.
 - **Real-driver overlap data is a requirement, not a nicety.** The repo has no datalog
   driver or trace, and the GO gate depends on its actual unmatched-chunk-key frequency.
   Satisfy this one of exactly these ways: **(a)** a supplied trace / distribution from the
@@ -129,10 +137,15 @@ noted as the alternative.)
 
 ## Acceptance (GO) — numeric gates set now
 
-- **Allocation-reduction correctness:** measured allocation drop equals **2 ×
-  moved_container_count** (payload + struct per moved container), with index-array
-  allocations reported separately and **excluded** from this equality — i.e. the mechanism
-  removes exactly the clone pairs it claims, within ±1 alloc/moved-container tolerance.
+- **Allocation-reduction correctness (exact, no tolerance):** the result is
+  deterministic, so assert it exactly —
+  - baseline unmatched-right container clones: **exactly `2 × moved_container_count`**
+    (payload + struct per unmatched-right container);
+  - consuming unmatched-right clones: **exactly zero**;
+  - index-array growth and matched-merge allocations reported **separately** (they are the
+    residual the move does not remove — D2), never folded into the above.
+
+  No `±` tolerance — a tolerance could silently accept losing half the expected savings.
 - **Value at the realistic overlap:** at the unmatched-chunk-key frequency the real-driver
   data (a/b) exhibits, the fixpoint-pattern bench shows the consuming op **≥ 15% median
   faster** than cloning `bitwiseOrInPlace`. (If the real frequency is low, this simply
