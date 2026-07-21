@@ -547,6 +547,7 @@ fn runOrManyHeapVaryingSizeCase(allocator: Allocator) !void {
 fn runLazyRepairCases(allocator: Allocator) !void {
     try runLazyFootgunCase(allocator);
     try runLazyRepairEdgeCases(allocator);
+    try runLazyRepresentationCases(allocator);
 
     for (&[_]bool{ false, true }) |run_optimize| {
         var prng = std.Random.DefaultPrng.init(if (run_optimize) 0x1A2E_0001 else 0x1A2E_0000);
@@ -562,6 +563,40 @@ fn runLazyRepairCases(allocator: Allocator) !void {
             try assertLazyXorCase(allocator, &a.bm, &b.bm, a.values, b.values, run_optimize);
         }
     }
+}
+
+fn runLazyRepresentationCases(allocator: Allocator) !void {
+    var a = try RoaringBitmap.init(allocator);
+    defer a.deinit();
+    var b = try RoaringBitmap.init(allocator);
+    defer b.deinit();
+
+    for (&[_]u32{ 1, 100, 1000 }) |value| {
+        _ = try a.add(value);
+    }
+    for (&[_]u32{ 2, 100, 2000 }) |value| {
+        _ = try b.add(value);
+    }
+    try assertSingleContainerType("lazy-representation:input-a", &a, .array);
+    try assertSingleContainerType("lazy-representation:input-b", &b, .array);
+
+    var forced = try a.lazyOr(allocator, &b, true);
+    defer forced.deinit();
+    try assertSingleContainerType("lazy-representation:forced", &forced, .bitset);
+
+    var selected = try a.lazyOr(allocator, &b, false);
+    defer selected.deinit();
+    try assertSingleContainerType("lazy-representation:selected", &selected, .array);
+
+    var forced_in_place = try a.clone(allocator);
+    defer forced_in_place.deinit();
+    try forced_in_place.lazyOrInPlace(&b, true);
+    try assertSingleContainerType("lazy-representation:forced-in-place", &forced_in_place, .bitset);
+
+    var selected_in_place = try a.clone(allocator);
+    defer selected_in_place.deinit();
+    try selected_in_place.lazyOrInPlace(&b, false);
+    try assertSingleContainerType("lazy-representation:selected-in-place", &selected_in_place, .array);
 }
 
 fn assertLazyOrCase(

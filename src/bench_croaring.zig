@@ -22,6 +22,11 @@ const BenchResult = struct {
     p75_ns: u64,
 };
 
+const LazyPhase = enum {
+    construction,
+    repair,
+};
+
 fn benchmark(comptime func: anytype, args: anytype) BenchResult {
     var times: [BENCH_RUNS]u64 = undefined;
 
@@ -38,6 +43,26 @@ fn benchmark(comptime func: anytype, args: anytype) BenchResult {
     }
 
     // Sort for percentiles
+    std.mem.sort(u64, &times, {}, std.sort.asc(u64));
+
+    return .{
+        .p25_ns = times[BENCH_RUNS / 4],
+        .median_ns = times[BENCH_RUNS / 2],
+        .p75_ns = times[3 * BENCH_RUNS / 4],
+    };
+}
+
+fn benchmarkInternallyTimed(comptime func: anytype, args: anytype) BenchResult {
+    var times: [BENCH_RUNS]u64 = undefined;
+
+    for (0..WARMUP_RUNS) |_| {
+        _ = @call(.auto, func, args);
+    }
+
+    for (0..BENCH_RUNS) |i| {
+        times[i] = @call(.auto, func, args);
+    }
+
     std.mem.sort(u64, &times, {}, std.sort.asc(u64));
 
     return .{
@@ -339,6 +364,28 @@ fn benchRawrLazyOrSparseRepair() void {
     defer result.deinit();
     result.repairAfterLazy() catch unreachable;
     std.mem.doNotOptimizeAway(&result);
+}
+
+fn timeRawrLazyOrSparse(comptime phase: LazyPhase) u64 {
+    const a = &rawr_sparse_a.?;
+    const b = &rawr_sparse_b.?;
+
+    if (phase == .construction) {
+        const start = bench_time.monotonicNanos();
+        var result = a.lazyOr(allocator, b, true) catch unreachable;
+        const elapsed = bench_time.monotonicNanos() - start;
+        std.mem.doNotOptimizeAway(&result);
+        result.deinit();
+        return elapsed;
+    }
+
+    var result = a.lazyOr(allocator, b, true) catch unreachable;
+    const start = bench_time.monotonicNanos();
+    result.repairAfterLazy() catch unreachable;
+    const elapsed = bench_time.monotonicNanos() - start;
+    std.mem.doNotOptimizeAway(&result);
+    result.deinit();
+    return elapsed;
 }
 
 fn benchRawrAndSparseArena() void {
@@ -795,6 +842,28 @@ fn benchCRoaringLazyOrSparseRepair() void {
     std.mem.doNotOptimizeAway(result);
 }
 
+fn timeCRoaringLazyOrSparse(comptime phase: LazyPhase) u64 {
+    const a = cr_sparse_a.?;
+    const b_bm = cr_sparse_b.?;
+
+    if (phase == .construction) {
+        const start = bench_time.monotonicNanos();
+        const result = c.roaring_bitmap_lazy_or(a, b_bm, true) orelse unreachable;
+        const elapsed = bench_time.monotonicNanos() - start;
+        std.mem.doNotOptimizeAway(result);
+        c.roaring_bitmap_free(result);
+        return elapsed;
+    }
+
+    const result = c.roaring_bitmap_lazy_or(a, b_bm, true) orelse unreachable;
+    const start = bench_time.monotonicNanos();
+    c.roaring_bitmap_repair_after_lazy(result);
+    const elapsed = bench_time.monotonicNanos() - start;
+    std.mem.doNotOptimizeAway(result);
+    c.roaring_bitmap_free(result);
+    return elapsed;
+}
+
 fn benchCRoaringOrMany() void {
     const result = c.roaring_bitmap_or_many(N_MANY_BITMAPS, @ptrCast(&cr_many_inputs)) orelse unreachable;
     defer c.roaring_bitmap_free(result);
@@ -1069,6 +1138,14 @@ noinline fn runSetBenchmarks() void {
     r = benchmark(benchRawrLazyOrSparseRepair, .{});
     cr = benchmark(benchCRoaringLazyOrSparseRepair, .{});
     printResult("lazyOr+repair (sparse)", r.median_ns, cr.median_ns);
+
+    r = benchmarkInternallyTimed(timeRawrLazyOrSparse, .{LazyPhase.construction});
+    cr = benchmarkInternallyTimed(timeCRoaringLazyOrSparse, .{LazyPhase.construction});
+    printResult("lazyOr construction (sparse)", r.median_ns, cr.median_ns);
+
+    r = benchmarkInternallyTimed(timeRawrLazyOrSparse, .{LazyPhase.repair});
+    cr = benchmarkInternallyTimed(timeCRoaringLazyOrSparse, .{LazyPhase.repair});
+    printResult("lazyOr repair (sparse)", r.median_ns, cr.median_ns);
 
     r = benchmark(benchRawrOrDense, .{});
     cr = benchmark(benchCRoaringOrDense, .{});

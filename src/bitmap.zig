@@ -1967,7 +1967,8 @@ pub const RoaringBitmap = struct {
         b: *const Self,
         bitset_conversion: bool,
     ) !Self {
-        var result = try Self.init(allocator);
+        const max_result_size = @min(a.size + b.size, @as(u32, 1) << 16);
+        var result = try Self.initCapacity(allocator, max_result_size);
         errdefer result.deinit();
 
         var i: usize = 0;
@@ -2032,13 +2033,13 @@ pub const RoaringBitmap = struct {
 
     fn lazyAccumulateIntoBitset(comptime op: ManyOp, acc: *BitsetContainer, container: Container) void {
         switch (container) {
-            .array => |ac| {
-                for (ac.values[0..ac.cardinality]) |value| {
-                    switch (op) {
-                        .bor => acc.lazySet(value),
-                        .xor => acc.lazyToggle(value),
+            .array => |ac| switch (op) {
+                .bor => acc.setList(ac.values[0..ac.cardinality]),
+                .xor => {
+                    for (ac.values[0..ac.cardinality]) |value| {
+                        acc.lazyToggle(value);
                     }
-                }
+                },
             },
             .bitset => |bc| switch (op) {
                 .bor => acc.lazyUnionWith(bc),
