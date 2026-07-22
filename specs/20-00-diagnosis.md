@@ -46,7 +46,10 @@ Across **rawr-SMP, rawr-libc, and CRoaring-libc**:
 **CRoaring instrumentation** — explicit and non-invasive; state which is used and leave no
 permanent diagnostic edits in `vendor/roaring.c`: a benchmark-only instrumented translation
 unit (throwaway copy), sampling/profile of the unmodified reference, and/or controlled C
-microbench wrappers from the same upstream functions.
+microbench wrappers from the same upstream functions. If the throwaway translation unit is
+chosen, **commit a generator or patch that reproduces it** (not just the transient file),
+and any copied CRoaring code **keeps its upstream license and must not receive an MPL
+header**.
 
 **Codegen inspection** of the Zig `@memset` and the two accumulation loops records the
 **exact build command, symbol/probe, and relevant assembly finding** — reproducible, not
@@ -65,6 +68,9 @@ anecdotal.
   CRoaring oracle** before its timing is accepted.
 - Environment: `ReleaseFast`, native CPU, spec-16 M4 host; five independent process runs,
   median + range; env header recorded.
+- **Durable artifact:** findings, exact commands, assembly observations, and the final
+  attribution are committed to **`docs/lazy-or-construction-analysis.md`** — benchmark
+  output under ignored `misc/` alone is not sufficient.
 - **Benchmark-only:** no public library behavior change, no committed vendored-source
   change; full build green under `ReleaseSafe` and `ReleaseFast`.
 
@@ -72,4 +78,10 @@ anecdotal.
 
 The dominant construction-cost term and its bound — this decides whether `20-01` (a fix) is
 written and around which mechanism. An explained-but-intrinsic gap (documented, no fix) is a
-valid terminal outcome.
+valid terminal outcome, recorded in the analysis doc.
+
+## Estimate
+
+M. Replicas, three allocator/reference variants, non-invasive CRoaring instrumentation,
+codegen inspection, five-process runs, validation, and the written attribution — not a
+quick microbench.

@@ -144,4 +144,6 @@ range; env header recorded. Same rig for both phases.
 
 ## Estimate
 
-S for `20-00`. `20-01` sized once the mechanism is known.
+M for `20-00` (replicas, three allocator/reference variants, CRoaring instrumentation,
+codegen inspection, five-process runs, validation, and the written analysis). `20-01` sized
+once the mechanism is known.
