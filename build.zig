@@ -183,6 +183,33 @@ pub fn build(b: *std.Build) void {
     );
     bench_lazy_attr_step.dependOn(&b.addInstallArtifact(bench_lazy_attr_exe, .{}).step);
 
+    // Focused parity board for operations whose broad-harness numbers need isolation.
+    const bench_parity_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_parity_isolated.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_parity_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_parity_mod, target);
+    addTranslatedCImport(b, bench_parity_mod, .{
+        .header = "tools/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_parity_exe = b.addExecutable(.{
+        .name = "bench_parity_isolated",
+        .root_module = bench_parity_mod,
+    });
+    const bench_parity_step = b.step(
+        "bench-parity-isolated",
+        "Build focused CRoaring parity benchmark",
+    );
+    bench_parity_step.dependOn(&b.addInstallArtifact(bench_parity_exe, .{}).step);
+
     // CRoaring validation executable
     const validate_mod = b.createModule(.{
         .root_source_file = b.path("src/validate_croaring.zig"),

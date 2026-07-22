@@ -8,6 +8,7 @@ const c = @import("c");
 const bench_time = @import("bench_time.zig");
 
 const allocator = if (builtin.os.tag == .openbsd) bench_time.openbsd_c_allocator else std.heap.smp_allocator;
+const libc_allocator = bench_time.cAllocator();
 
 const WARMUP_RUNS = 3;
 const BENCH_RUNS = 21;
@@ -27,7 +28,21 @@ const LazyPhase = enum {
     repair,
 };
 
-fn benchmark(comptime func: anytype, args: anytype) BenchResult {
+const LazyContext = enum {
+    target_only,
+    full_init_first,
+    full_init_last,
+    allocator_prime,
+    cache_prime,
+};
+
+const Protocol = struct {
+    name: []const u8,
+    warmup_runs: usize,
+    timed_runs: usize,
+};
+
+fn benchmark(comptime func: anytype, comptime args: anytype) BenchResult {
     var times: [BENCH_RUNS]u64 = undefined;
 
     // Warmup
@@ -52,7 +67,7 @@ fn benchmark(comptime func: anytype, args: anytype) BenchResult {
     };
 }
 
-fn benchmarkInternallyTimed(comptime func: anytype, args: anytype) BenchResult {
+fn benchmarkInternallyTimed(comptime func: anytype, comptime args: anytype) BenchResult {
     var times: [BENCH_RUNS]u64 = undefined;
 
     for (0..WARMUP_RUNS) |_| {
@@ -69,6 +84,25 @@ fn benchmarkInternallyTimed(comptime func: anytype, args: anytype) BenchResult {
         .p25_ns = times[BENCH_RUNS / 4],
         .median_ns = times[BENCH_RUNS / 2],
         .p75_ns = times[3 * BENCH_RUNS / 4],
+    };
+}
+
+fn benchmarkInternallyTimedProtocol(
+    comptime func: anytype,
+    comptime args: anytype,
+    protocol: Protocol,
+) BenchResult {
+    std.debug.assert(protocol.timed_runs > 0 and protocol.timed_runs <= BENCH_RUNS);
+    var times: [BENCH_RUNS]u64 = undefined;
+
+    for (0..protocol.warmup_runs) |_| _ = @call(.auto, func, args);
+    for (times[0..protocol.timed_runs]) |*time| time.* = @call(.auto, func, args);
+    std.mem.sort(u64, times[0..protocol.timed_runs], {}, std.sort.asc(u64));
+
+    return .{
+        .p25_ns = times[protocol.timed_runs / 4],
+        .median_ns = times[protocol.timed_runs / 2],
+        .p75_ns = times[(3 * protocol.timed_runs) / 4],
     };
 }
 
@@ -103,6 +137,7 @@ var range_query_lo: [N_VALUES]u32 = undefined;
 var range_query_hi: [N_VALUES]u32 = undefined;
 var range_large_query_lo: [N_VALUES]u32 = undefined;
 var range_large_query_hi: [N_VALUES]u32 = undefined;
+var sparse_values_initialized = false;
 
 fn initTestData() void {
     var prng = std.Random.DefaultPrng.init(12345);
@@ -126,6 +161,12 @@ fn initTestData() void {
         rank_many_probes[i] = @intCast((i * 500_000) / N_RANK_MANY_PROBES);
     }
 
+    initSparseValues();
+}
+
+fn initSparseValues() void {
+    if (sparse_values_initialized) return;
+
     // Sparse values for set operations (across u32 space)
     var prng2 = std.Random.DefaultPrng.init(54321);
     for (0..500000) |i| {
@@ -140,6 +181,7 @@ fn initTestData() void {
             sparse_len += 1;
         }
     }
+    sparse_values_initialized = true;
 }
 
 // ============================================================================
@@ -147,7 +189,11 @@ fn initTestData() void {
 // ============================================================================
 
 fn benchRawrAddRandom() void {
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+    benchRawrAddRandomWithAllocator(allocator);
+}
+
+fn benchRawrAddRandomWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.init(result_allocator) catch unreachable;
     defer bm.deinit();
     for (random_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
@@ -156,7 +202,11 @@ fn benchRawrAddRandom() void {
 }
 
 fn benchRawrAddSequential() void {
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+    benchRawrAddSequentialWithAllocator(allocator);
+}
+
+fn benchRawrAddSequentialWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.init(result_allocator) catch unreachable;
     defer bm.deinit();
     for (sequential_values[0..]) |v| {
         _ = bm.add(v) catch unreachable;
@@ -165,21 +215,33 @@ fn benchRawrAddSequential() void {
 }
 
 fn benchRawrAddManyRandom() void {
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+    benchRawrAddManyRandomWithAllocator(allocator);
+}
+
+fn benchRawrAddManyRandomWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.init(result_allocator) catch unreachable;
     defer bm.deinit();
     bm.addMany(random_values[0..]) catch unreachable;
     std.mem.doNotOptimizeAway(&bm);
 }
 
 fn benchRawrAddManySequential() void {
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+    benchRawrAddManySequentialWithAllocator(allocator);
+}
+
+fn benchRawrAddManySequentialWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.init(result_allocator) catch unreachable;
     defer bm.deinit();
     bm.addMany(sequential_values[0..]) catch unreachable;
     std.mem.doNotOptimizeAway(&bm);
 }
 
 fn benchRawrAddRange() void {
-    var bm = RoaringBitmap.init(allocator) catch unreachable;
+    benchRawrAddRangeWithAllocator(allocator);
+}
+
+fn benchRawrAddRangeWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.init(result_allocator) catch unreachable;
     defer bm.deinit();
     _ = bm.addRange(0, N_VALUES - 1) catch unreachable;
     std.mem.doNotOptimizeAway(&bm);
@@ -314,9 +376,13 @@ fn addManyPatternRawr(bm: *RoaringBitmap, bitmap_idx: usize) !void {
 }
 
 fn benchRawrAndSparse() void {
+    benchRawrAndSparseWithAllocator(allocator);
+}
+
+fn benchRawrAndSparseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const a = &rawr_sparse_a.?;
     const b = &rawr_sparse_b.?;
-    var result = a.bitwiseAnd(allocator, b) catch unreachable;
+    var result = a.bitwiseAnd(result_allocator, b) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
@@ -350,36 +416,48 @@ fn benchRawrAndCardinalityArraySkewed() void {
 }
 
 fn benchRawrOrSparse() void {
+    benchRawrOrSparseWithAllocator(allocator);
+}
+
+fn benchRawrOrSparseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const a = &rawr_sparse_a.?;
     const b = &rawr_sparse_b.?;
-    var result = a.bitwiseOr(allocator, b) catch unreachable;
+    var result = a.bitwiseOr(result_allocator, b) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
 fn benchRawrLazyOrSparseRepair() void {
+    benchRawrLazyOrSparseRepairWithAllocator(allocator);
+}
+
+fn benchRawrLazyOrSparseRepairWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const a = &rawr_sparse_a.?;
     const b = &rawr_sparse_b.?;
-    var result = a.lazyOr(allocator, b, true) catch unreachable;
+    var result = a.lazyOr(result_allocator, b, true) catch unreachable;
     defer result.deinit();
     result.repairAfterLazy() catch unreachable;
     std.mem.doNotOptimizeAway(&result);
 }
 
 fn timeRawrLazyOrSparse(comptime phase: LazyPhase) u64 {
+    return timeRawrLazyOrSparseWithAllocator(phase, allocator);
+}
+
+fn timeRawrLazyOrSparseWithAllocator(comptime phase: LazyPhase, comptime result_allocator: std.mem.Allocator) u64 {
     const a = &rawr_sparse_a.?;
     const b = &rawr_sparse_b.?;
 
     if (phase == .construction) {
         const start = bench_time.monotonicNanos();
-        var result = a.lazyOr(allocator, b, true) catch unreachable;
+        var result = a.lazyOr(result_allocator, b, true) catch unreachable;
         const elapsed = bench_time.monotonicNanos() - start;
         std.mem.doNotOptimizeAway(&result);
         result.deinit();
         return elapsed;
     }
 
-    var result = a.lazyOr(allocator, b, true) catch unreachable;
+    var result = a.lazyOr(result_allocator, b, true) catch unreachable;
     const start = bench_time.monotonicNanos();
     result.repairAfterLazy() catch unreachable;
     const elapsed = bench_time.monotonicNanos() - start;
@@ -455,9 +533,13 @@ fn initRawrBitsetRangeBm() void {
 }
 
 fn benchRawrAndDense() void {
+    benchRawrAndDenseWithAllocator(allocator);
+}
+
+fn benchRawrAndDenseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const a = &rawr_dense_a.?;
     const b = &rawr_dense_b.?;
-    var result = a.bitwiseAnd(allocator, b) catch unreachable;
+    var result = a.bitwiseAnd(result_allocator, b) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
@@ -1040,7 +1122,195 @@ fn benchCRoaringRangeCardinalityBitsetLarge() void {
 // Main
 // ============================================================================
 
-pub fn main() !void {
+fn initAllBenchmarkData() void {
+    initTestData();
+    initRawrContainsBm();
+    initCRoaringContainsBm();
+    initRawrSparseBitmaps();
+    initCRoaringSparseBitmaps();
+    initRawrArrayBitmaps();
+    initCRoaringArrayBitmaps();
+    initRawrDenseBitmaps();
+    initCRoaringDenseBitmaps();
+    initRawrManyBitmaps();
+    initCRoaringManyBitmaps();
+    initRawrBitsetRangeBm();
+    initCRoaringBitsetRangeBm();
+    initToArrayBuffers();
+    initRawrSerialized();
+    initCRoaringSerialized();
+}
+
+fn validateLazyContext() !void {
+    var smp_result = try rawr_sparse_a.?.lazyOr(allocator, &rawr_sparse_b.?, true);
+    defer smp_result.deinit();
+    try smp_result.repairAfterLazy();
+    var libc_result = try rawr_sparse_a.?.lazyOr(libc_allocator, &rawr_sparse_b.?, true);
+    defer libc_result.deinit();
+    try libc_result.repairAfterLazy();
+    if (!smp_result.equals(&libc_result)) return error.RawrAllocatorMismatch;
+
+    const cr_result = c.roaring_bitmap_lazy_or(cr_sparse_a.?, cr_sparse_b.?, true) orelse return error.OutOfMemory;
+    defer c.roaring_bitmap_free(cr_result);
+    c.roaring_bitmap_repair_after_lazy(cr_result);
+
+    const rawr_bytes = try smp_result.serialize(std.heap.smp_allocator);
+    defer std.heap.smp_allocator.free(rawr_bytes);
+    const cr_len = c.roaring_bitmap_portable_size_in_bytes(cr_result);
+    if (rawr_bytes.len != cr_len) return error.SerializedSizeMismatch;
+    const cr_bytes = try std.heap.smp_allocator.alloc(u8, cr_len);
+    defer std.heap.smp_allocator.free(cr_bytes);
+    if (c.roaring_bitmap_portable_serialize(cr_result, @ptrCast(cr_bytes.ptr)) != cr_len) {
+        return error.SerializedSizeMismatch;
+    }
+    if (!std.mem.eql(u8, rawr_bytes, cr_bytes)) return error.CRoaringMismatch;
+}
+
+noinline fn primeExecutionHistoryBeforeLazy() void {
+    _ = benchmark(benchRawrAddRandom, .{});
+    _ = benchmark(benchCRoaringAddRandom, .{});
+    _ = benchmark(benchRawrAddRandomWithAllocator, .{libc_allocator});
+    _ = benchmark(benchRawrAddSequential, .{});
+    _ = benchmark(benchCRoaringAddSequential, .{});
+    _ = benchmark(benchRawrAddSequentialWithAllocator, .{libc_allocator});
+    _ = benchmark(benchRawrAddManyRandom, .{});
+    _ = benchmark(benchCRoaringAddManyRandom, .{});
+    _ = benchmark(benchRawrAddManyRandomWithAllocator, .{libc_allocator});
+    _ = benchmark(benchRawrAddManySequential, .{});
+    _ = benchmark(benchCRoaringAddManySequential, .{});
+    _ = benchmark(benchRawrAddManySequentialWithAllocator, .{libc_allocator});
+    _ = benchmark(benchRawrAddRange, .{});
+    _ = benchmark(benchCRoaringAddRange, .{});
+    _ = benchmark(benchRawrAddRangeWithAllocator, .{libc_allocator});
+    _ = benchmark(benchRawrContainsHit, .{});
+    _ = benchmark(benchCRoaringContainsHit, .{});
+    _ = benchmark(benchRawrContainsMiss, .{});
+    _ = benchmark(benchCRoaringContainsMiss, .{});
+    _ = benchmark(benchRawrAndSparse, .{});
+    _ = benchmark(benchCRoaringAndSparse, .{});
+    _ = benchmark(benchRawrAndSparseWithAllocator, .{libc_allocator});
+    _ = benchmark(benchRawrAndSparseArena, .{});
+    _ = benchmark(benchRawrAndDense, .{});
+    _ = benchmark(benchCRoaringAndDense, .{});
+    _ = benchmark(benchRawrAndDenseWithAllocator, .{libc_allocator});
+    _ = benchmark(benchRawrOrSparse, .{});
+    _ = benchmark(benchCRoaringOrSparse, .{});
+    _ = benchmark(benchRawrOrSparseWithAllocator, .{libc_allocator});
+    _ = benchmark(benchRawrOrSparseArena, .{});
+    _ = benchmark(benchRawrLazyOrSparseRepair, .{});
+    _ = benchmark(benchCRoaringLazyOrSparseRepair, .{});
+    _ = benchmark(benchRawrLazyOrSparseRepairWithAllocator, .{libc_allocator});
+}
+
+fn primeAllocatorOnly(target_allocator: std.mem.Allocator) void {
+    const block_count = 16_384;
+    var blocks: [block_count][]u8 = undefined;
+    for (&blocks) |*block| block.* = target_allocator.alloc(u8, 8192) catch unreachable;
+    var index = blocks.len;
+    while (index > 0) {
+        index -= 1;
+        target_allocator.free(blocks[index]);
+    }
+}
+
+noinline fn primeAllocatorsOnly() void {
+    primeAllocatorOnly(allocator);
+    primeAllocatorOnly(libc_allocator);
+}
+
+noinline fn primeCachesOnly() void {
+    var checksum: u64 = 0;
+    for (random_values[0..]) |value| checksum +%= value;
+    for (sequential_values[0..]) |value| checksum +%= value;
+    for (rank_queries[0..]) |value| checksum +%= value;
+    for (select_queries[0..]) |value| checksum +%= value;
+    for (range_query_lo[0..]) |value| checksum +%= value;
+    for (range_query_hi[0..]) |value| checksum +%= value;
+    for (range_large_query_lo[0..]) |value| checksum +%= value;
+    for (range_large_query_hi[0..]) |value| checksum +%= value;
+    for (sparse_values[0..sparse_len]) |value| checksum +%= value;
+    std.mem.doNotOptimizeAway(checksum);
+}
+
+fn runLazyContext(context: LazyContext, protocol: Protocol) !void {
+    bench_time.printBenchEnvironment();
+    bench_time.print("Lazy-OR broad-context diagnostic\n", .{});
+    bench_time.print("context={s}, warmup={d}, timed={d}\n", .{ @tagName(context), protocol.warmup_runs, protocol.timed_runs });
+
+    switch (context) {
+        .target_only => {
+            initSparseValues();
+            initRawrSparseBitmaps();
+            initCRoaringSparseBitmaps();
+        },
+        .full_init_first, .full_init_last, .allocator_prime, .cache_prime => initAllBenchmarkData(),
+    }
+    defer cleanupBenchmarks();
+    try validateLazyContext();
+    bench_time.print("VALIDATION\trawr-smp=rawr-libc=croaring-portable\n", .{});
+
+    switch (context) {
+        .full_init_last => primeExecutionHistoryBeforeLazy(),
+        .allocator_prime => primeAllocatorsOnly(),
+        .cache_prime => primeCachesOnly(),
+        else => {},
+    }
+
+    const smp = benchmarkInternallyTimedProtocol(
+        timeRawrLazyOrSparseWithAllocator,
+        .{ LazyPhase.construction, allocator },
+        protocol,
+    );
+    const cr = benchmarkInternallyTimedProtocol(
+        timeCRoaringLazyOrSparse,
+        .{LazyPhase.construction},
+        protocol,
+    );
+    const rawr_libc = benchmarkInternallyTimedProtocol(
+        timeRawrLazyOrSparseWithAllocator,
+        .{ LazyPhase.construction, libc_allocator },
+        protocol,
+    );
+
+    bench_time.print("CONTEXT_RESULT\t{s}\t{s}\trawr-smp\t{d}\n", .{ @tagName(context), protocol.name, smp.median_ns });
+    bench_time.print("CONTEXT_RESULT\t{s}\t{s}\trawr-libc\t{d}\n", .{ @tagName(context), protocol.name, rawr_libc.median_ns });
+    bench_time.print("CONTEXT_RESULT\t{s}\t{s}\tcroaring\t{d}\n", .{ @tagName(context), protocol.name, cr.median_ns });
+}
+
+fn parseLazyContext(name: []const u8) ?LazyContext {
+    if (std.mem.eql(u8, name, "target-only")) return .target_only;
+    if (std.mem.eql(u8, name, "full-init-first")) return .full_init_first;
+    if (std.mem.eql(u8, name, "full-init-last")) return .full_init_last;
+    if (std.mem.eql(u8, name, "allocator-prime")) return .allocator_prime;
+    if (std.mem.eql(u8, name, "cache-prime")) return .cache_prime;
+    return null;
+}
+
+fn parseProtocol(name: []const u8) ?Protocol {
+    if (std.mem.eql(u8, name, "2x9")) return .{ .name = "2x9", .warmup_runs = 2, .timed_runs = 9 };
+    if (std.mem.eql(u8, name, "3x21")) return .{ .name = "3x21", .warmup_runs = 3, .timed_runs = 21 };
+    return null;
+}
+
+pub fn main(init: std.process.Init) !void {
+    var args = try init.minimal.args.iterateAllocator(std.heap.smp_allocator);
+    defer args.deinit();
+    _ = args.skip();
+
+    var lazy_context: ?LazyContext = null;
+    var protocol: Protocol = .{ .name = "3x21", .warmup_runs = 3, .timed_runs = 21 };
+    while (args.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, "--lazy-context=")) {
+            lazy_context = parseLazyContext(arg[15..]) orelse return error.UnknownLazyContext;
+        } else if (std.mem.startsWith(u8, arg, "--protocol=")) {
+            protocol = parseProtocol(arg[11..]) orelse return error.UnknownBenchmarkProtocol;
+        } else {
+            return error.UnknownArgument;
+        }
+    }
+
+    if (lazy_context) |context| return runLazyContext(context, protocol);
+
     bench_time.printBenchEnvironment();
 
     bench_time.print("Rawr vs CRoaring Benchmark Comparison\n", .{});
