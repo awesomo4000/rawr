@@ -12,14 +12,18 @@ The board re-measurement is largely independent of `20a-00` and can run in paral
 
 ## Re-measure the parity board in isolation
 
-For each remaining broad-harness target, report the **real isolated ratio** in a focused
-executable — five independent process runs, median + range — versus its broad-harness number:
+For each remaining broad-harness target, report the **real isolated** result in a focused
+executable — five independent process runs, median + range — versus its **anchored** broad
+number below (median `[low, high]` ms, so implementation does not depend on ignored output):
 
-| target | broad-harness ratio | measure in isolation as |
-|---|---:|---|
-| sparse AND | 1.28x | **SMP** and **allocation-matched (libc)** — it allocates a result |
-| sparse OR | 1.15x | **SMP** and **allocation-matched (libc)** — it allocates a result |
-| skewed `andCardinality` | 1.43x | **one rawr number** vs CRoaring — it does **not allocate** in its timed op (SMP-vs-libc is meaningless; optionally confirm input-allocator-invariant timing) |
+| target | broad rawr-SMP | broad rawr-libc | broad CRoaring | measure in isolation as |
+|---|---:|---:|---:|---|
+| sparse AND | 0.881 [0.850, 0.926] | 1.242 [1.152, 1.405] | 0.687 [0.675, 0.713] | **SMP** and **allocation-matched (libc)** — it allocates a result |
+| sparse OR | 2.827 [2.634, 3.558] | 4.539 [4.051, 4.778] | 2.450 [2.380, 2.532] | **SMP** and **allocation-matched (libc)** — it allocates a result |
+| skewed `andCardinality` | 0.020 [0.018, 0.021] | — | 0.014 [0.012, 0.014] | **one rawr number** vs CRoaring — it does **not allocate** in its timed op (SMP-vs-libc meaningless; optionally confirm input-allocator-invariant timing) |
+
+Broad source: branch `bench-experiments-17-18`, commit `0599cae` /
+`misc/bench-croaring-20260721-142207-summary.txt`.
 
 **Correctness first:** every focused operation is validated — result equal to production rawr
 and logically to the CRoaring oracle — **before** its timing is accepted, so a
@@ -49,6 +53,8 @@ misled by the residual again.
 - A concrete **`bench_croaring` methodology recommendation**, consistent with `20a-00`'s
   finding.
 - Environment: `ReleaseFast`, native CPU, spec-16 M4 host; env header recorded.
+- **Build verification:** the added benchmark/build tooling builds green under both
+  `zig build -Doptimize=ReleaseSafe` and `-Doptimize=ReleaseFast` (independently verifiable).
 - **Benchmark-only:** no public library behavior change; results committed to the durable
   artifact, not ignored `misc/`.
 

@@ -40,17 +40,21 @@ each across **rawr-SMP, rawr-libc, and CRoaring-libc**:
    dead-code elimination changing the code layout under test);
 3. **broad binary, full data initialization, target group first**;
 4. **broad binary, full data initialization, target group last**;
-5. **protocol swap** — the same op under `2` warmup / `9` timed vs `3` warmup / `21` timed.
+5. **protocol swap** — the same op under `2` warmup / `9` timed vs `3` warmup / `21` timed,
+   **both run under the same condition (use condition 2)** so the protocol effect is not
+   confounded with binary layout or data initialization.
 
 These separate the four candidate causes: **code layout** (2 vs 1), **unrelated data
-initialization** (3 vs 2), **execution history** (4 vs 3), **timing protocol** (5).
+initialization** (3 vs 2), **execution history** (4 vs 3), **timing protocol** (the two arms
+of 5).
 
 **Follow-up discriminator (required if the 4-vs-3 execution-history delta is material).**
-That delta cannot on its own separate **allocator state** from **cache/TLB pollution**. If
-it is material, add two minimal priming variants and compare their effect on the target: an
-**allocator-only prime** (drive the allocator to the prior groups' state without
-retaining/reading their data) and a **cache-touch-only prime** (walk the prior corpora
-without allocating).
+"Material" = the 4-vs-3 **median changes by ≥ 10%** and the two conditions' five-process
+**ranges do not substantially overlap**. That delta cannot on its own separate **allocator
+state** from **cache/TLB pollution**, so when material add two minimal priming variants and
+compare their effect on the target: an **allocator-only prime** (drive the allocator to the
+prior groups' state without retaining/reading their data) and a **cache-touch-only prime**
+(walk the prior corpora without allocating).
 
 ## Acceptance
 
