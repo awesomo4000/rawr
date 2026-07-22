@@ -46,10 +46,12 @@ The residual to explain is the **asymmetry** in each variant's broad-harness pen
 - CRoaring-libc: 3.832 − 3.601 = **0.231 ms**.
 
 So the broad harness hammers rawr and barely touches CRoaring — and it penalizes
-rawr-**libc** *more* than rawr-SMP. That ordering already argues **against** "SMP allocator
-state" being the sole cause (the libc build has no `SmpAllocator` and takes the bigger hit),
-which is exactly why the matrix must separate layout / data-init / execution-history /
-protocol rather than assume an allocator cause. The 2.19x is the broad rawr-SMP/CRoaring
+rawr-**libc** *more* than rawr-SMP. That ordering argues against SMP **result** allocation
+being the sole cause: the rawr-libc timed construction routes result allocations through
+libc yet takes the larger penalty. But it is the **same process**, its input bitmaps are
+built with SMP, and it follows SMP-backed benchmark work — so cross-group SMP state is **not**
+fully ruled out. This is exactly why the matrix must separate layout / data-init /
+execution-history / protocol rather than assume an allocator cause. The 2.19x is the broad rawr-SMP/CRoaring
 ratio (8.375/3.832); focused it is 1.71x (6.162/3.601), 1.10x allocation-matched.
 
 ## Deliverables
