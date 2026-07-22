@@ -9,6 +9,26 @@ cause (calloc zero-pages); that guess is **refuted** (below), which is exactly w
 spec commits to measurement before any theory. A fix is a separate chunk written only
 after the diagnosis names the mechanism.
 
+> **Outcome (2026-07-22, `20-00` commit `f27e223`) — lazy construction is at algorithmic
+> parity; no fix warranted.** The attribution (full data:
+> [`docs/lazy-or-construction-analysis.md`](../../docs/lazy-or-construction-analysis.md))
+> overturned the premise:
+> - **Allocation-matched, the shared-key lazy pipeline is at parity** — 2.816 ms rawr-libc
+>   vs 2.806 ms CRoaring. Accumulation, merge, and the 8 KB clear (both lower to `bzero`)
+>   are at or faster than the reference. **No lazy-accumulation change is warranted.**
+> - The focused full-construction gap is **1.71x on default SMP / 1.10x allocation-matched**
+>   — not 2.19x. **86% (2.2 ms)** is SMP-vs-libc behavior churning ~16K separate 8 KB
+>   bitsets — the known SMP 8 KB-churn area already investigated and closed in specs 17–18
+>   (transient-arena loses; allocator-swap isn't generic). **~0.355 ms** is unique-container
+>   cloning (inputs aren't consumed in `lazyOr`, so unmovable) — too small to chase.
+> - **The 2.19x was largely a broad-harness measurement artifact** — not reproduced in a
+>   focused executable even with primed allocators. Whether that residual also inflates the
+>   rest of the parity board is spun off to **`20a`**.
+>
+> `20-01` (the fix chunk) is **dropped** — no warranted production change. Corpus confirmed:
+> 16,364 shared keys / 134,053,888 bytes cleared (~128 MB, not 512 MB). The remaining
+> exploration continues in `20a-broad-harness-residual.md`.
+
 ## What is known (corrected)
 
 - The gap is in **construction, not repair** (repair at parity) — not the popcount/demote
