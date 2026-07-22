@@ -2,10 +2,35 @@
 
 # Spec 20a: Broad-harness residual — parity-measurement integrity
 
-Discovered mid-implementation of [spec 20](done/20-lazy-or-construction-gap.md). **Diagnosis
+Discovered mid-implementation of [spec 20](20-lazy-or-construction-gap.md). **Diagnosis
 only, no preselected cause** (same discipline as `20-00`, which caught a wrong premise by
 measuring first). Its purpose is to protect the rest of the parity effort from chasing
 phantom gaps.
+
+> **Outcome (2026-07-22) — cause found; two of three "gaps" were artifacts.** The matrix
+> attributed the residual cleanly: **code layout** ruled out (focused ≈ broad-target-only),
+> **unrelated resident data** ruled out (full-init-target-first neutral), **execution
+> history** confirmed (lazy OR moved after the allocation-heavy groups went rawr-SMP 4.340 →
+> 7.909 ms; libc and CRoaring unchanged), and the discriminator pinned it to **allocator
+> state, not cache** (allocator-only prime reproduced part of the penalty; cache-touch-only
+> had none). Plus **warmup-dependent allocator state** (2/9 → 3/21 dropped rawr-SMP 6.046 →
+> 4.438 ms; libc/CR flat). So `bench_croaring`'s rawr-SMP rows measured *operation cost +
+> process-global `smp_allocator` history + warmup-dependent allocator state*; CRoaring (libc)
+> escaped it, making the broad ratios structurally asymmetric.
+>
+> **Corrected isolated board (fresh process), rawr-SMP / CRoaring:**
+> - Sparse AND: broad **1.28x → 0.91x** (rawr faster) — artifact.
+> - Sparse OR: broad **1.15x → 0.75x** (rawr faster) — artifact.
+> - Skewed `andCardinality`: broad **1.43x → 1.46x** — **real** (no allocation → no history
+>   penalty; a genuine algorithm/kernel gap).
+>
+> Allocation-matched (libc) real gaps: sparse AND 1.42x, sparse OR 1.36x — valid **only** as
+> explicit libc-matched targets, not as evidence default rawr usage is slower (it is faster).
+>
+> **Verdict:** keep `bench_croaring` as a broad regression dashboard, but **confirm
+> optimization targets in fresh-process focused executables**, and **report rawr-SMP and
+> rawr-libc separately** for allocating ops. **The one remaining real parity target is skewed
+> `andCardinality`** — not sparse AND or OR.
 
 ## Why
 
