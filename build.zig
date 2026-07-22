@@ -156,6 +156,33 @@ pub fn build(b: *std.Build) void {
     );
     bench_consuming_or_step.dependOn(&b.addInstallArtifact(bench_consuming_or_exe, .{}).step);
 
+    // Lazy-OR construction attribution harness.
+    const bench_lazy_attr_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_lazy_or_attribution.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_lazy_attr_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_lazy_attr_mod, target);
+    addTranslatedCImport(b, bench_lazy_attr_mod, .{
+        .header = "tools/croaring_lazy_attribution.h",
+        .include_dir = "tools/",
+        .c_source = "tools/croaring_lazy_attribution.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_lazy_attr_exe = b.addExecutable(.{
+        .name = "bench_lazy_or_attribution",
+        .root_module = bench_lazy_attr_mod,
+    });
+    const bench_lazy_attr_step = b.step(
+        "bench-lazy-or-attribution",
+        "Build lazy-OR construction attribution benchmark",
+    );
+    bench_lazy_attr_step.dependOn(&b.addInstallArtifact(bench_lazy_attr_exe, .{}).step);
+
     // CRoaring validation executable
     const validate_mod = b.createModule(.{
         .root_source_file = b.path("src/validate_croaring.zig"),
