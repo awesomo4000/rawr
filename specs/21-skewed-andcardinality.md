@@ -13,7 +13,7 @@ non-overlapping so the ratio is real). We scope it to *finish parity cleanly*, n
 it is a hot path. Effort is proportionate: a cheap diagnosis, a fix only if reachable and
 generalizing.
 
-## What the op is, and why this is a kernel gap not a threshold gap
+## What the op is, and why threshold selection is ruled out
 
 `andCardinality(a, b)` counts `|a ∩ b|` without materializing the result. The measured
 "skewed" case is two **array** containers, **32 × 4096** — a **128:1** ratio, all-hit. It
@@ -23,10 +23,13 @@ spec 11 (scalar 64, x86 12, **NEON 40** — NEON is the M4 host).
 
 **A threshold re-tune cannot explain the measured point.** At 128:1, rawr gallops (NEON
 threshold ≥ 40) *and* CRoaring gallops (its dispatch, `vendor/roaring.c:6971`, gallops at
-ratio > 64). Both are already in their galloping-cardinality kernels, so selection is not
-the difference — **the gap is in the galloping-count kernel itself.** Threshold tuning could
-only help *nearby* boundary cases, never the 32 × 4096 result. Phase 1 therefore
-**prioritizes a kernel-to-kernel comparison at the original case.**
+ratio > 64). Both are already in their galloping-cardinality kernels, so **threshold
+selection is ruled out**. What that does *not* establish is where the 1.46x actually lives:
+it could be the galloping kernels, or the surrounding top-level key traversal, container
+dispatch, or call overhead. **Phase 1 will determine how much comes from the galloping
+kernels versus surrounding traversal and dispatch** — exactly what the two-layer measurement
+below separates. Threshold tuning could only help *nearby* boundary cases, never the
+32 × 4096 result, so it is not the lever here.
 
 ## Phase 1 — Diagnosis (fresh-process, kernel comparison first)
 
@@ -53,7 +56,11 @@ This says whether the ~1.46x is in the kernel, the per-key dispatch/traversal, o
   original **32 × 4096 all-hit** case.
 - Three overlap distributions per pair: **all-hit**, **disjoint**, and **deterministic
   mixed / random-overlap**.
-- **Boundary cases** immediately below / at / above rawr's `40` and CRoaring's `64`.
+- **Boundary cases** immediately below / at / above each threshold — concrete pairs, all
+  ≤ 4096 so both stay arrays:
+  - rawr NEON 40: `64×2496` (39:1), `64×2560` (40:1), `64×2624` (41:1);
+  - CRoaring 64: `32×2016` (63:1), `32×2048` (64:1), `32×2080` (65:1);
+  - original: `32×4096` (128:1).
 - **Confirm container representations** (both arrays, expected cardinalities) before any
   timing is accepted.
 
@@ -72,11 +79,12 @@ even if no fix follows.
 
 Only if Phase 1 finds a reachable, generalizing improvement.
 
-- **Primary lever (per the point above): a tighter galloping-count kernel** — the measured
-  case is already gallop-vs-gallop, so kernel work is where the point moves.
-- **Secondary:** a count-only crossover threshold re-tune, which only helps boundary cases,
-  not 32 × 4096. If touched, keep it **separate from the write-kernel threshold** if they
-  differ.
+- **Primary lever follows Phase 1's attribution:** if the galloping kernel dominates the
+  1.46x, a tighter galloping-count kernel; if surrounding traversal/dispatch dominates,
+  target that instead. (Threshold selection is already ruled out for the measured point.)
+- **Not the lever for 32 × 4096:** a count-only crossover threshold re-tune only helps
+  boundary cases, never the original result. If touched, keep it **separate from the
+  write-kernel threshold** if they differ.
 - **Threshold-change test scope:** if a change touches a **shared kernel or the x86/scalar
   threshold**, it **requires x86 testing**. If only the **measured NEON threshold** changes,
   explicitly **scope it to NEON**.
@@ -101,9 +109,12 @@ Only if Phase 1 finds a reachable, generalizing improvement.
 ## Validation commands
 
 - `zig build test`
-- `zig build bench-aa -Dcpu=native` (array-kernel differential + timing)
-- the focused five-process runner for the isolated skewed-`andCardinality` result
-- differential validation (rawr result `== |a ∩ b|` `==` CRoaring oracle)
+- `zig build bench-aa -Dcpu=native && ./zig-out/bin/bench_aa` — build **and run** the
+  array-kernel differential + timing (the build step alone does not execute it)
+- `zig build difftest` — differential validation (rawr result `== |a ∩ b|` `==` CRoaring
+  oracle)
+- the new focused five-process runner for the isolated skewed-`andCardinality` result, once
+  it is named/added
 
 ## NO-GO
 
