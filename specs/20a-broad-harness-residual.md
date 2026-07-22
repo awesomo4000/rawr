@@ -2,7 +2,7 @@
 
 # Spec 20a: Broad-harness residual — parity-measurement integrity
 
-Discovered mid-implementation of [spec 20](20-lazy-or-construction-gap.md). **Diagnosis
+Discovered mid-implementation of [spec 20](done/20-lazy-or-construction-gap.md). **Diagnosis
 only, no preselected cause** (same discipline as `20-00`, which caught a wrong premise by
 measuring first). Its purpose is to protect the rest of the parity effort from chasing
 phantom gaps.
@@ -23,44 +23,75 @@ harness**. If it inflated lazy-OR from ~1.10x-matched to 2.19x, it may be inflat
 too. We cannot trust broad-harness numbers for target selection until this is understood.
 Re-establishing the *real* isolated gaps is the highest-value parity move right now.
 
+## Anchored baselines (do not depend on branch/ignored state)
+
+`main` no longer contains the three-column diagnostic harness. The numbers `20a` must
+reproduce and compare against are fixed here so implementation does not rely on ignored
+files or branch state. Lazy-OR construction, M4:
+
+| variant | broad harness | focused (`20-00`) |
+|---|---:|---:|
+| rawr, SMP (full) | 8.375 ms | 6.162 ms |
+| rawr, libc (full) | 7.574 ms | 3.960 ms |
+| CRoaring, libc | 3.832 ms | 3.601 ms |
+
+Broad source: branch `bench-experiments-17-18`, commit `0599cae`,
+`misc/bench-croaring-20260721-142207-summary.txt`. Focused source: commit `f27e223`.
+
+The residual to explain is the **asymmetry**: the broad harness penalizes rawr-SMP by
+~2.2 ms (8.375 vs 6.162) but CRoaring by only ~0.23 ms (3.832 vs 3.601). The 2.19x is the
+broad rawr-SMP/CRoaring ratio (8.375/3.832); focused it is 1.71x (6.162/3.601), 1.10x
+allocation-matched.
+
 ## Deliverables
 
-### 1. Reproduce and attribute the residual
+### 1. Reproduce and attribute the residual — a precise harness matrix
 
-Take one op with a known residual (lazy-OR construction) and measure it under controlled
-harness conditions to isolate the cause — no favored hypothesis:
+Measure lazy-OR construction under these controlled conditions, **one condition per fresh
+process** (Zig's `SmpAllocator` is a global singleton with no reset, and libc has no
+portable reset either — process isolation, not per-group allocator reset, is the only clean
+control). Five processes per condition, median + range:
 
-- **focused single-op executable** (the `20-00` baseline);
-- **full broad harness** (reproduce the inflated number);
-- **broad harness with the target group run first** vs **last**;
-- **broad harness with other groups removed / order permuted**;
-- **with and without a per-group allocator reset** (fresh allocator instance per group).
+1. **focused single-op executable** (the `20-00` baseline);
+2. **broad binary running only the target group**, with all the broad harness's code still
+   linked in (isolates *code layout* from *execution history*);
+3. **broad binary, full data initialization, target group run first**;
+4. **broad binary, full data initialization, target group run last** (isolates *execution
+   history* / prior-group state from *unrelated data initialization*);
+5. **protocol swap** — the same op under `2` warmup / `9` timed vs `3` warmup / `21` timed
+   (isolates *timing protocol* from everything else).
 
-Candidate mechanisms to test (report attribution + a named residual, not a forced 100%):
-
-- **allocator state** — SMP's internal state (fragmentation, warm/cold size-class pools)
-  after earlier allocation-heavy groups changing later-group cost;
-- **executable / code layout** — the same op in two different binaries (focused vs broad)
-  placing code differently (icache / branch prediction);
-- **cache / TLB interaction** — earlier large corpora evicting state the target op needs;
-- **protocol differences** — warmup and run counts, group sequencing.
-
-Compare rawr-SMP, rawr-libc, and CRoaring-libc so an allocator-state cause is separable
-from a rawr-only layout/interaction cause.
+That matrix separates the four candidate causes cleanly — **code layout** (2 vs 1),
+**unrelated data initialization** (3 vs 2), **execution history** (4 vs 3), and **timing
+protocol** (5). Run each across rawr-SMP, rawr-libc, and CRoaring-libc so an allocator-state
+cause (SMP fragmentation / warm-cold size-class pools after earlier allocation-heavy groups)
+is separable from a rawr-only layout/interaction cause. Report attribution with bounds and a
+**named residual** — not a forced 100%.
 
 ### 2. Re-measure the parity board in isolation
 
-For each remaining target — **skewed `andCardinality`, sparse AND, sparse OR** — report the
-**real isolated ratio** in a focused executable, on **default SMP** and **allocation-matched
-(libc)**, five independent process runs, median + range. This produces a **corrected parity
-board**: which gaps survive isolation, and how much each shrinks versus its broad-harness
-number.
+Report the **real isolated ratio** for each remaining target in a focused executable, five
+independent process runs, median + range, versus its broad-harness number:
+
+- **sparse AND** and **sparse OR** — both **default SMP** and **allocation-matched (libc)**
+  (they allocate a result, so the allocator matters).
+- **skewed `andCardinality`** — **one rawr result**; it does **not allocate** in its timed
+  operation, so SMP-vs-libc is meaningless. Optionally confirm that inputs built with either
+  allocator produce equivalent timing, but report a single rawr number vs CRoaring.
+
+**Correctness first:** every focused/isolated operation must be validated — result equal to
+production rawr and logically to the CRoaring oracle — **before** its timing is accepted, so
+a re-measurement is never of the wrong computation.
+
+Output: a **corrected parity board** — which gaps survive isolation and how much each shrinks
+versus its broad-harness number.
 
 ### 3. Recommendation on the harness itself
 
 State whether `bench_croaring`'s numbers can be trusted as-is or need a methodology fix
-(e.g. per-group allocator reset, group isolation, or reporting isolated alongside broad),
-so future parity target selection is not misled again.
+(e.g. per-op process isolation, running each group in a fresh process, or reporting isolated
+alongside broad — not per-group allocator reset, which `SmpAllocator` cannot do), so future
+parity target selection is not misled again.
 
 ## Methodology / constraints
 
