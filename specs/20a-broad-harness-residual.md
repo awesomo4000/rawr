@@ -38,10 +38,19 @@ files or branch state. Lazy-OR construction, M4:
 Broad source: branch `bench-experiments-17-18`, commit `0599cae`,
 `misc/bench-croaring-20260721-142207-summary.txt`. Focused source: commit `f27e223`.
 
-The residual to explain is the **asymmetry**: the broad harness penalizes rawr-SMP by
-~2.2 ms (8.375 vs 6.162) but CRoaring by only ~0.23 ms (3.832 vs 3.601). The 2.19x is the
-broad rawr-SMP/CRoaring ratio (8.375/3.832); focused it is 1.71x (6.162/3.601), 1.10x
-allocation-matched.
+The residual to explain is the **asymmetry** in each variant's broad-harness penalty
+(broad − focused):
+
+- rawr-libc: 7.574 − 3.960 = **3.614 ms** — the **largest** signal;
+- rawr-SMP: 8.375 − 6.162 = **2.213 ms**;
+- CRoaring-libc: 3.832 − 3.601 = **0.231 ms**.
+
+So the broad harness hammers rawr and barely touches CRoaring — and it penalizes
+rawr-**libc** *more* than rawr-SMP. That ordering already argues **against** "SMP allocator
+state" being the sole cause (the libc build has no `SmpAllocator` and takes the bigger hit),
+which is exactly why the matrix must separate layout / data-init / execution-history /
+protocol rather than assume an allocator cause. The 2.19x is the broad rawr-SMP/CRoaring
+ratio (8.375/3.832); focused it is 1.71x (6.162/3.601), 1.10x allocation-matched.
 
 ## Deliverables
 
@@ -53,8 +62,10 @@ portable reset either — process isolation, not per-group allocator reset, is t
 control). Five processes per condition, median + range:
 
 1. **focused single-op executable** (the `20-00` baseline);
-2. **broad binary running only the target group**, with all the broad harness's code still
-   linked in (isolates *code layout* from *execution history*);
+2. **broad binary, target-only data initialization, running only the target group** — via a
+   **runtime group selector** so **all** broad-harness functions stay **linked** (guard
+   against dead-code elimination changing the very code layout under test); isolates *code
+   layout* from *execution history*;
 3. **broad binary, full data initialization, target group run first**;
 4. **broad binary, full data initialization, target group run last** (isolates *execution
    history* / prior-group state from *unrelated data initialization*);
@@ -67,6 +78,13 @@ protocol** (5). Run each across rawr-SMP, rawr-libc, and CRoaring-libc so an all
 cause (SMP fragmentation / warm-cold size-class pools after earlier allocation-heavy groups)
 is separable from a rawr-only layout/interaction cause. Report attribution with bounds and a
 **named residual** — not a forced 100%.
+
+**Follow-up discriminator (required if execution history is material).** Conditions 3 vs 4
+detect prior-group influence but cannot on their own separate **allocator state** from
+**cache/TLB pollution**. If the 3-vs-4 delta is material, add two minimal priming variants
+that isolate each: an **allocator-only prime** (drive the allocator to the prior groups'
+state without retaining/reading their data) and a **cache-touch-only prime** (walk the prior
+corpora without allocating), and compare their effect on the target.
 
 ### 2. Re-measure the parity board in isolation
 
