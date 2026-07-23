@@ -200,17 +200,60 @@ pub fn intersectCard(a: []const u16, b: []const u16) u64 {
 
 pub fn intersectCardGallop(a: []const u16, b: []const u16) u64 {
     const ordered = orderedBySize(a, b);
+    if (ordered.small.len == 0) return 0;
 
     var count: u64 = 0;
-    var lo: usize = 0;
-    for (ordered.small) |value| {
-        lo = gallopSearch(ordered.big, value, lo);
-        if (lo < ordered.big.len and ordered.big[lo] == value) {
+    var small_index: usize = 0;
+    var big_index: usize = 0;
+    var small_value = ordered.small[small_index];
+    var big_value = ordered.big[big_index];
+
+    while (true) {
+        if (big_value < small_value) {
+            big_index = advanceUntilCard(ordered.big, big_index, small_value);
+            if (big_index == ordered.big.len) break;
+            big_value = ordered.big[big_index];
+        } else if (small_value < big_value) {
+            small_index += 1;
+            if (small_index == ordered.small.len) break;
+            small_value = ordered.small[small_index];
+        } else {
             count += 1;
-            lo += 1;
+            small_index += 1;
+            if (small_index == ordered.small.len) break;
+            small_value = ordered.small[small_index];
+            big_index = advanceUntilCard(ordered.big, big_index, small_value);
+            if (big_index == ordered.big.len) break;
+            big_value = ordered.big[big_index];
         }
     }
     return count;
+}
+
+inline fn advanceUntilCard(values: []const u16, position: usize, target: u16) usize {
+    var lower = position + 1;
+    if (lower >= values.len or values[lower] >= target) return lower;
+
+    var span: usize = 1;
+    while (span < values.len - lower and values[lower + span] < target) {
+        span *= 2;
+    }
+
+    var upper = if (span < values.len - lower) lower + span else values.len - 1;
+    if (values[upper] == target) return upper;
+    if (values[upper] < target) return values.len;
+
+    lower += span / 2;
+    while (lower + 1 != upper) {
+        const middle = lower + (upper - lower) / 2;
+        if (values[middle] == target) return middle;
+        if (values[middle] < target) {
+            lower = middle;
+        } else {
+            upper = middle;
+        }
+    }
+    return upper;
 }
 
 pub fn intersectCardMerge(a: []const u16, b: []const u16) u64 {
@@ -282,10 +325,32 @@ test "intersection kernels handle empty and disjoint inputs" {
 
     try std.testing.expectEqual(@as(usize, 0), intersectWriteGallop(&empty, &a, out[0..0]));
     try std.testing.expectEqual(@as(usize, 0), intersectWriteMerge(&a, &b, &out));
+    try std.testing.expectEqual(@as(u64, 0), intersectCardGallop(&empty, &a));
+    try std.testing.expectEqual(@as(u64, 0), intersectCardGallop(&a, &empty));
+    try std.testing.expectEqual(@as(u64, 0), intersectCardGallop(&empty, &empty));
     try std.testing.expectEqual(@as(u64, 0), intersectCardGallop(&a, &b));
     try std.testing.expectEqual(@as(u64, 0), intersectCardMerge(&a, &b));
     try std.testing.expect(!intersectBoolGallop(&a, &b));
     try std.testing.expect(!intersectBoolMerge(&a, &b));
+}
+
+test "cardinality gallop handles singleton and reversed inputs" {
+    const singleton_hit = [_]u16{7};
+    const singleton_miss = [_]u16{8};
+    const values = [_]u16{ 1, 3, 7, 9, 1000 };
+
+    try std.testing.expectEqual(@as(u64, 1), intersectCardGallop(&singleton_hit, &singleton_hit));
+    try std.testing.expectEqual(@as(u64, 0), intersectCardGallop(&singleton_hit, &singleton_miss));
+    try std.testing.expectEqual(@as(u64, 1), intersectCardGallop(&singleton_hit, &values));
+    try std.testing.expectEqual(@as(u64, 1), intersectCardGallop(&values, &singleton_hit));
+    try std.testing.expectEqual(@as(u64, 0), intersectCardGallop(&singleton_miss, &values));
+    try std.testing.expectEqual(@as(u64, 0), intersectCardGallop(&values, &singleton_miss));
+
+    const a = [_]u16{ 1, 2, 7, 20, 100, 1000 };
+    const b = [_]u16{ 0, 2, 3, 7, 8, 20, 21, 1000, 2000 };
+    const expected = intersectCardMerge(&a, &b);
+    try std.testing.expectEqual(expected, intersectCardGallop(&a, &b));
+    try std.testing.expectEqual(expected, intersectCardGallop(&b, &a));
 }
 
 test "intersection dispatch uses gallop at inclusive skew boundary" {
