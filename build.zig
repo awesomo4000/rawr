@@ -210,6 +210,32 @@ pub fn build(b: *std.Build) void {
     );
     bench_parity_step.dependOn(&b.addInstallArtifact(bench_parity_exe, .{}).step);
 
+    // Focused skewed array-cardinality diagnosis harness.
+    const bench_and_card_diag_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_and_cardinality_diag.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    addBenchmarkPlatformShim(b, bench_and_card_diag_mod, target);
+    addTranslatedCImport(b, bench_and_card_diag_mod, .{
+        .header = "tools/croaring_and_cardinality_diag.h",
+        .include_dir = "tools/",
+        .c_source = "tools/croaring_and_cardinality_diag.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_and_card_diag_exe = b.addExecutable(.{
+        .name = "bench_and_cardinality_diag",
+        .root_module = bench_and_card_diag_mod,
+    });
+    const bench_and_card_diag_step = b.step(
+        "bench-and-cardinality-diag",
+        "Build skewed andCardinality diagnosis benchmark",
+    );
+    bench_and_card_diag_step.dependOn(&b.addInstallArtifact(bench_and_card_diag_exe, .{}).step);
+
     // CRoaring validation executable
     const validate_mod = b.createModule(.{
         .root_source_file = b.path("src/validate_croaring.zig"),

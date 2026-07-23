@@ -84,6 +84,54 @@ cardinality is compared directly, before any timing is accepted.
 Ratios use the isolated five-process medians. The broad columns above use the anchored
 medians from commit `0599cae`; their original ranges remain recorded in spec `20a-01`.
 
+## Skewed `andCardinality` attribution
+
+The focused diagnosis separates the original full-API case from direct array-container
+kernel calls. It uses the exact 200-container bitmap shape from the parity board (180
+matching keys, `32x4096` all-hit arrays), validates both implementations' container types
+and cardinalities before timing, and batches the direct calls above one millisecond. The
+direct sweep covers all-hit, disjoint, and deterministic half-hit distributions across
+the ratio, fixed-ratio, extreme-small-side, and dispatch-boundary cases in spec 21.
+
+Environment: Zig 0.16.0, `ReleaseFast`, native Apple M4, macOS aarch64. Results are the
+median of five independent process medians with the full process range in brackets.
+
+| Layer | rawr | CRoaring | rawr / CRoaring |
+| --- | ---: | ---: | ---: |
+| Full API, original corpus | 0.020 [0.020, 0.021] ms | 0.014 [0.013, 0.014] ms | 1.43x |
+| Forced gallop, per matching array pair | 75.561 [74.157, 80.810] ns | 42.968 [40.191, 45.288] ns | 1.76x |
+| Normal array dispatch, per matching pair | 77.758 [73.486, 80.749] ns | 42.449 [40.313, 44.891] ns | 1.83x |
+
+The full-API difference is 6.000 microseconds. The direct dispatch difference is 35.309 ns
+per matching pair, or 6.356 microseconds across 180 matching containers. The resulting
+-0.356 microsecond **full-API measurement residual** is smaller than the full-API clock and
+process ranges. Amortizing the full time over the matching pairs leaves 33.353 ns/pair of
+rawr traversal and 35.329 ns/pair of CRoaring traversal after subtracting direct dispatch.
+Those figures also include the unmatched-key work, but show that surrounding traversal is
+at parity. The measurable gap is therefore in the galloping cardinality kernel; dispatch
+adds no material cost at the original point.
+
+The forced-gallop result generalizes. Representative rawr/CRoaring ratios are 2.09x at
+`8x1024` all-hit, 1.62x at `16x2048` all-hit, 1.76x at `32x4096` all-hit, and 1.24x-1.40x
+for their mixed counterparts. Disjoint ratios are larger, but the absolute CRoaring times
+are only about 5-6 ns and rawr remains below 29 ns in the measured matrix. The one-element
+mixed case is effectively parity. This is not specific to the original cardinalities or
+all-hit distribution.
+
+The boundary rows confirm dispatch selection rather than implicating it in the original
+case. Rawr changes from NEON to gallop at its inclusive 40:1 threshold; CRoaring changes to
+gallop only above its strict 64:1 threshold. Forced cross-checks show that the best boundary
+choice depends on overlap distribution, but both implementations already select gallop at
+the original 128:1 point.
+
+Source and generated-code inspection identifies a concrete implementation difference for
+the follow-up fix spec. Rawr applies the reusable `gallopSearch` lower-bound routine for
+every small-side value and then performs a separate equality check. CRoaring uses a fused
+two-array state machine with cached current values and an inlined `advanceUntil` primitive
+that has immediate-next and exact-match exits. The M4 disassembly preserves that structure;
+the benchmark establishes its throughput advantage, though it does not assign the cost to
+one individual instruction.
+
 ## Recommendation
 
 Keep `bench_croaring` as a broad regression dashboard, but qualify performance gaps in a
@@ -110,8 +158,15 @@ Build and run the focused corrected parity board:
 ./scripts/run-bench-parity-isolated.sh
 ```
 
-Both scripts build native `ReleaseFast` executables, retain individual process output under
+Build and run the five-process skewed `andCardinality` diagnosis:
+
+```sh
+./scripts/run-bench-and-cardinality-diag.sh
+```
+
+These scripts build native `ReleaseFast` executables, retain individual process output under
 `misc/`, and write an aggregate summary. The recorded runs are:
 
 - `misc/lazy-context-20260722-204248-summary.txt`
 - `misc/parity-isolated-20260722-184152-summary.txt`
+- `misc/and-cardinality-diag-20260723-011446-summary.txt`
