@@ -36,15 +36,28 @@ they say **how much of the 1.46x is kernel vs dispatch/traversal.**
 
 ## Sweep corpus (define exactly; confirm representations before timing)
 
-- Exact `(small, large)` cardinality pairs, **all ≤ 4096** so both stay arrays.
-- The original **32 × 4096 all-hit** case.
-- Three overlap distributions per pair: **all-hit**, **disjoint**, **deterministic
-  mixed/random-overlap**.
-- **Boundary pairs** (below / at / above each threshold):
-  - rawr NEON 40: `64×2496` (39:1), `64×2560` (40:1), `64×2624` (41:1);
-  - CRoaring 64: `32×2016` (63:1), `32×2048` (64:1), `32×2080` (65:1).
-- **Confirm container representations** (both arrays, expected cardinalities) before any
-  timing is accepted.
+All pairs have both sides **≤ 4096** so they stay arrays; **confirm representations** (both
+arrays, expected cardinalities) before any timing. Run the **three overlap distributions** —
+**all-hit**, **disjoint**, **deterministic mixed/random-overlap** — on the **direct-kernel**
+cases.
+
+**Generalization matrix** — does the kernel gap hold across ratios and small-side sizes, or
+is it specific to 32 × 4096 all-hit?
+
+- **ratio progression** (fixed small side): `32×256` (8:1), `32×1024` (32:1), `32×2048`
+  (64:1), `32×4096` (128:1);
+- **fixed 128:1 ratio, varying small side**: `8×1024`, `16×2048`, `32×4096`;
+- **extreme small sides**: `1×4096` (4096:1), `8×4096` (512:1).
+
+**Threshold boundary pairs** — dispatch selection near each crossover:
+
+- rawr NEON 40: `64×2496` (39:1), `64×2560` (40:1), `64×2624` (41:1);
+- CRoaring 64: `32×2016` (63:1), `32×2048` (64:1), `32×2080` (65:1).
+
+**Scope split:** the **direct-kernel** ns/container rows run across the whole matrix × the
+three overlap distributions (cheap, batched). The **full-API five-process** measurement only
+needs the **original 32 × 4096** case, plus any points where the direct results reveal
+something worth confirming at the API layer.
 
 ## Acceptance
 
