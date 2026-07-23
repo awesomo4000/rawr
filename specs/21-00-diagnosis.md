@@ -10,6 +10,14 @@ vs CRoaring **0.013 [0.012, 0.014] ms** (isolated). Threshold selection is alrea
 for the original 32 × 4096 point (both sides gallop); this chunk does **not** pre-attribute
 the rest.
 
+> **Outcome (2026-07-22) — GO for `21-01`; the gap is the kernel and it generalizes.** Full
+> API 1.43x (rawr 0.020 / CR 0.014 ms). **Forced gallop (true kernel-to-kernel): rawr 75.561
+> vs CR 42.968 ns/container = 1.76x.** Direct dispatch rawr 77.758 vs CR 42.449 — so
+> **traversal + dispatch are at parity; the galloping-count kernel explains essentially the
+> whole 6 µs gap**, and it holds across larger all-hit and mixed cases (generalizes). Likely
+> fix: a **fused cardinality loop** mirroring CRoaring's cached-cursor `advanceUntil`, instead
+> of rawr's generic lower-bound gallop + a separate equality check per value → `21-01`.
+
 ## Two-layer measurement (fresh process, five runs, median + range)
 
 ### Full API (the number of record)
