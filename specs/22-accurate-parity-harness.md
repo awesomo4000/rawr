@@ -48,15 +48,18 @@ parity, and **every row deserves the isolated treatment**. This spec operational
 6. **Batch tiny operations mechanically** → `ns/op`, not `0.00 ms`. A **fixed identical batch
    count** for rawr and CRoaring, total measured duration above a **stated floor (≥ 1 ms)**,
    normalized to ns/op. **Stateful ops** (`flip`, `removeRange`, in-place) recreate/reset their
-   state consistently between repetitions; **guard tiny pure queries** (`cardinality`,
-   `contains`) against compiler hoisting (`doNotOptimizeAway`).
-7. **Identical data, semantics, CPU features, and timing boundaries** for rawr and CRoaring —
-   same inputs, same `-Dcpu=native`, same warmup/timed protocol, same construct-vs-timed
-   boundaries. Mind the known interop equivalences (`addRange` inclusive vs CRoaring exclusive
-   → `end + 1`; `bitwiseDifference` ⇄ `andnot`). **Record the effective CRoaring feature
-   configuration** in the header — the build disables CRoaring AVX-512 by default, so report
-   **`croaring-avx512=on/off`** explicitly; `-Dcpu=native` alone does not describe the C
-   reference config.
+   state consistently between repetitions. **Tiny pure queries** (`cardinality`, `contains`)
+   need more than `doNotOptimizeAway` — it prevents *removal* but not *hoisting* an invariant
+   pure call, so require **equivalent non-inline / opaque call boundaries for rawr and CRoaring**
+   and **runtime-varying inputs** where applicable. (This avoids repeating the earlier
+   range-cardinality artifact where rawr inlined and the C reference did not.)
+7. **Identical data, semantics, requested target/CPU, and timing boundaries** for rawr and
+   CRoaring — same inputs, same `-Dcpu=native`, same warmup/timed protocol, same
+   construct-vs-timed boundaries. Mind the known interop equivalences (`addRange` inclusive vs
+   CRoaring exclusive → `end + 1`; `bitwiseDifference` ⇄ `andnot`). "Identical *features*" is
+   too strong — CRoaring AVX-512 may be disabled — so **record each implementation's effective
+   feature configuration** rather than assert they match: report **`croaring-avx512=on/off`**
+   and rawr's `-Dcpu=native` features in the header.
 8. **Retain `bench_croaring` only as a quick screening dashboard** — explicitly *not* the
    parity oracle.
 
@@ -69,7 +72,11 @@ it is the contract the harness executes. Each row records:
 - **corpus / seed**;
 - **rawr operation** and **CRoaring operation** (the matched pair);
 - **allocating / non-allocating** classification;
-- **allocator variants** measured (SMP, libc, CRoaring);
+- **allocator variants** measured — rawr SMP, rawr libc, CRoaring, and **rawr arena** for rows
+  that have an arena variant (`sparse AND arena`, `sparse OR arena`, `deserialize arena`).
+  Arena is a **supplemental rawr variant**; CRoaring has no arena mode, so an arena row's
+  CRoaring column **reuses the standard CRoaring baseline** (labeled as such), showing the
+  arena's effect on rawr against the same reference;
 - **setup and teardown timing boundaries** (what is inside vs outside the timed region);
 - **validation oracle** (byte-identity vs logical-equality, against what);
 - **batch count and reporting unit** (`ms` or `ns/op`).
@@ -79,17 +86,19 @@ full comparison table, every row trustworthy for target selection.
 
 ## Proposed chunk plan (confirm at review)
 
-- **`22-00` Harness architecture** — the per-`(row, implementation, allocator)` fresh-process
-  runner + ≥5-process median-with-range aggregation + validate-without-contaminating-timing
-  framework + the manifest-driven execution + the output-table format. The foundation the rest
-  build on; generalizes `bench_parity_isolated` / `run-bench-parity-isolated.sh` into the
-  standard runner.
-- **`22-01` Workload audit** — build the **row manifest** for every published `bench_croaring`
-  row, port each to the isolated harness, and confirm or correct its real number. The "audit
-  every row" deliverable; produces the manifest and the trustworthy full table.
-- **`22-02` Allocator parity** — matched-allocator handling: SMP and libc side by side for
-  allocating ops (identical SMP-built inputs, only the result allocator varied), single rawr
-  number for non-allocating ops.
+- **`22-00` Harness architecture** — **define the manifest schema**, and implement the per-`(row,
+  implementation, allocator)` fresh-process runner + ≥5-process median-with-range aggregation +
+  validate-without-contaminating-timing framework + output-table format, proven on **two
+  representative pilot rows** (one allocating, one tiny). The foundation the rest build on;
+  generalizes `bench_parity_isolated` / `run-bench-parity-isolated.sh` into the standard runner.
+- **`22-01` Workload audit** — **populate the complete manifest** for every published
+  `bench_croaring` row using `22-00`'s schema, port each to the isolated harness, and confirm or
+  correct its real number. The "audit every row" deliverable; produces the full trustworthy
+  table.
+- **`22-02` Allocator parity** — matched-allocator handling where **allocator scope follows the
+  row manifest** (result-allocator-only for set ops, whole-op for construction ops, named
+  boundaries for `serialize`/`toArrayAlloc`/`flip`/`removeRange`), plus the supplemental
+  **rawr-arena** variants; single rawr number for non-allocating ops.
 - **`22-03` Tiny-operation calibration** — batching + `ns/op` for the sub-clock ops that
   currently read `0.00 ms`; define batch sizes that clear clock resolution.
 - **`22-04` Cross-machine validation** — run the canonical table on the M4 and the x86-64 /
