@@ -132,6 +132,26 @@ that has immediate-next and exact-match exits. The M4 disassembly preserves that
 the benchmark establishes its throughput advantage, though it does not assign the cost to
 one individual instruction.
 
+### Fused-kernel result
+
+Commit `5dae1e1` replaced the count-only generic-search loop with the fused cached-cursor
+state machine while leaving write kernels, dispatch, and thresholds unchanged. On the M4,
+the original `32x4096` all-hit forced-gallop result moved from 75.561 ns/container to
+43.426 ns/container, equal to CRoaring's 43.426 ns/container median. The focused parity
+board reports both full APIs at 0.014 ms median (rawr range 0.014-0.015 ms, CRoaring range
+0.013-0.014 ms).
+
+The shared kernel was also validated natively on Windows x86-64 / Zen 4. At the original
+point rawr measured 41.958 [39.086, 42.123] ns/container versus CRoaring at
+42.755 [42.742, 43.051] ns/container. The full API measured 0.009 [0.008, 0.009] ms for
+rawr and 0.008 [0.008, 0.008] ms for CRoaring. The direct generalization matrix remained
+neutral-to-better across all-hit, disjoint, and mixed distributions on both hosts.
+
+Unit tests, the explicit empty/singleton/reversed-argument kernel cases, `bench_aa`,
+CRoaring differential validation, and full `ReleaseSafe` and `ReleaseFast` builds passed
+on the M4 and Zen 4 hosts. The skewed cardinality gap is closed at the kernel level; the
+remaining sub-microsecond full-API difference on Zen 4 is at the benchmark clock scale.
+
 ## Recommendation
 
 Keep `bench_croaring` as a broad regression dashboard, but qualify performance gaps in a
@@ -170,3 +190,6 @@ These scripts build native `ReleaseFast` executables, retain individual process 
 - `misc/lazy-context-20260722-204248-summary.txt`
 - `misc/parity-isolated-20260722-184152-summary.txt`
 - `misc/and-cardinality-diag-20260723-011446-summary.txt`
+- `misc/and-cardinality-diag-20260723-014315-summary.txt` (M4, fused kernel)
+- `misc/parity-isolated-20260723-014621-summary.txt` (M4, fused kernel)
+- `misc/and-cardinality-diag-20260723-192153-summary.txt` (Zen 4, fused kernel)
