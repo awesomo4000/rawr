@@ -5,8 +5,9 @@
 Draft, parked. A possible wider array∩array kernel on top of the shipped 128-bit
 SSE/NEON one (spec 11). **Prototype-first, decision-gated** — the deliverable is a
 measured answer to "does 512-bit beat the 128-bit kernel enough to justify a third
-per-arch code path?", not a commitment to ship. Sequenced **after spec 13**
-(allocation work is higher leverage and helps every architecture).
+per-arch code path?", not a commitment to ship. (The allocation-work initiatives that
+once out-prioritized this — specs 13/16/17 — have since concluded, so this is no longer
+sequenced behind them; it is a standalone parked experiment.)
 
 ## Why it's uncertain up front
 

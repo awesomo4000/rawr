@@ -41,8 +41,15 @@ arena for build-once/throw-away result bitmaps.
 - Iterator / builder ergonomics.
 - The `*Owned` API surface — which ops should have it, and is it discoverable.
 
-## Disposition of leftover perf items (parked, low value)
-- `orMany` ~2 µs residual — profile before any spec (the workspace guess regressed
-  it).
-- `lazyOr+repair (sparse)` ~3 ms gap — non-scenario; arena would cut time but blow
-  memory (above). No fix; usage guidance instead.
+## Disposition of leftover perf items
+CRoaring parity is **reached** (2026-07-23; see `done/22-...` once it lands and
+`docs/parity-measurement.md`) — rawr is at or ahead of CRoaring across the board. The
+earlier "leftover perf" list is largely resolved or was measurement artifact:
+- `lazyOr+repair (sparse)` ~3 ms gap — **was mostly a broad-harness artifact** (spec 20a),
+  and the lazy construction itself is at **algorithmic parity** (spec 16). The "arena would
+  cut time" idea was **falsified** (spec 17). No production fix; the inflate/deflate note
+  above stays as usage guidance, and the real allocation lever that did land is the
+  consuming union **`bitwiseOrInPlaceConsume`** (spec 19) — worth surfacing ergonomically in
+  this pass.
+- `orMany` ~2 µs residual — still noise-floor; confirm in a fresh-process focused executable
+  (per the spec-20a measurement discipline) before ever treating it as a target.
