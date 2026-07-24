@@ -17,6 +17,64 @@ const N_RANK_MANY_PROBES = 200_000;
 const N_MANY_BITMAPS = 32;
 const N_ARRAY_BENCH_CONTAINERS = 200;
 
+pub const ParityImplementation = enum {
+    rawr,
+    croaring,
+};
+
+pub const ParityAllocator = enum {
+    none,
+    smp,
+    libc,
+    arena,
+};
+
+pub const ParityTiming = enum {
+    external,
+    internal,
+};
+
+pub const ParityRow = enum {
+    add_random,
+    add_sequential,
+    add_many_random,
+    add_many_sequential,
+    add_range,
+    contains_hit,
+    contains_miss,
+    sparse_and,
+    sparse_and_arena,
+    dense_and,
+    sparse_or,
+    sparse_or_arena,
+    dense_or,
+    lazy_or_repair,
+    lazy_or_construction,
+    lazy_or_repair_only,
+    or_many,
+    or_many_heap,
+    xor_many,
+    array_balanced_and,
+    array_balanced_and_cardinality,
+    array_balanced_xor,
+    array_skewed_and,
+    array_skewed_and_cardinality,
+    iterate,
+    to_array,
+    to_array_alloc,
+    serialize,
+    deserialize,
+    deserialize_arena,
+    cardinality,
+    rank,
+    select,
+    rank_many,
+    range_cardinality_small,
+    range_cardinality_large,
+    flip,
+    remove_range,
+};
+
 const BenchResult = struct {
     median_ns: u64,
     p25_ns: u64,
@@ -388,7 +446,11 @@ fn benchRawrAndSparseWithAllocator(comptime result_allocator: std.mem.Allocator)
 }
 
 fn benchRawrAndArrayBalanced() void {
-    var result = rawr_array_balanced_a.?.bitwiseAnd(allocator, &rawr_array_balanced_b.?) catch unreachable;
+    benchRawrAndArrayBalancedWithAllocator(allocator);
+}
+
+fn benchRawrAndArrayBalancedWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var result = rawr_array_balanced_a.?.bitwiseAnd(result_allocator, &rawr_array_balanced_b.?) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
@@ -399,13 +461,21 @@ fn benchRawrAndCardinalityArrayBalanced() void {
 }
 
 fn benchRawrXorArrayBalanced() void {
-    var result = rawr_array_balanced_a.?.bitwiseXor(allocator, &rawr_array_balanced_b.?) catch unreachable;
+    benchRawrXorArrayBalancedWithAllocator(allocator);
+}
+
+fn benchRawrXorArrayBalancedWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var result = rawr_array_balanced_a.?.bitwiseXor(result_allocator, &rawr_array_balanced_b.?) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
 fn benchRawrAndArraySkewed() void {
-    var result = rawr_array_skewed_a.?.bitwiseAnd(allocator, &rawr_array_skewed_b.?) catch unreachable;
+    benchRawrAndArraySkewedWithAllocator(allocator);
+}
+
+fn benchRawrAndArraySkewedWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var result = rawr_array_skewed_a.?.bitwiseAnd(result_allocator, &rawr_array_skewed_b.?) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
@@ -486,19 +556,31 @@ fn benchRawrOrSparseArena() void {
 }
 
 fn benchRawrOrMany() void {
-    var result = RoaringBitmap.orMany(allocator, &rawr_many_inputs) catch unreachable;
+    benchRawrOrManyWithAllocator(allocator);
+}
+
+fn benchRawrOrManyWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var result = RoaringBitmap.orMany(result_allocator, &rawr_many_inputs) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
 fn benchRawrOrManyHeap() void {
-    var result = RoaringBitmap.orManyHeap(allocator, &rawr_many_inputs) catch unreachable;
+    benchRawrOrManyHeapWithAllocator(allocator);
+}
+
+fn benchRawrOrManyHeapWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var result = RoaringBitmap.orManyHeap(result_allocator, &rawr_many_inputs) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
 fn benchRawrXorMany() void {
-    var result = RoaringBitmap.xorMany(allocator, &rawr_many_inputs) catch unreachable;
+    benchRawrXorManyWithAllocator(allocator);
+}
+
+fn benchRawrXorManyWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var result = RoaringBitmap.xorMany(result_allocator, &rawr_many_inputs) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
@@ -545,9 +627,13 @@ fn benchRawrAndDenseWithAllocator(comptime result_allocator: std.mem.Allocator) 
 }
 
 fn benchRawrOrDense() void {
+    benchRawrOrDenseWithAllocator(allocator);
+}
+
+fn benchRawrOrDenseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const a = &rawr_dense_a.?;
     const b = &rawr_dense_b.?;
-    var result = a.bitwiseOr(allocator, b) catch unreachable;
+    var result = a.bitwiseOr(result_allocator, b) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
@@ -566,11 +652,19 @@ var rawr_to_array_out: ?[]u32 = null;
 var cr_to_array_out: ?[]u32 = null;
 
 fn initToArrayBuffers() void {
-    if (rawr_to_array_out != null) return;
+    initRawrToArrayBuffer();
+    initCRoaringToArrayBuffer();
+}
 
+fn initRawrToArrayBuffer() void {
+    if (rawr_to_array_out != null) return;
     const rawr_card: usize = @intCast(rawr_contains_bm.?.cardinality());
-    const cr_card: usize = @intCast(c.roaring_bitmap_get_cardinality(cr_contains_bm.?));
     rawr_to_array_out = allocator.alloc(u32, rawr_card) catch unreachable;
+}
+
+fn initCRoaringToArrayBuffer() void {
+    if (cr_to_array_out != null) return;
+    const cr_card: usize = @intCast(c.roaring_bitmap_get_cardinality(cr_contains_bm.?));
     cr_to_array_out = allocator.alloc(u32, cr_card) catch unreachable;
 }
 
@@ -588,17 +682,25 @@ fn benchCRoaringToArray() void {
 }
 
 fn benchRawrToArrayAlloc() void {
+    benchRawrToArrayAllocWithAllocator(allocator);
+}
+
+fn benchRawrToArrayAllocWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const bm = &rawr_contains_bm.?;
-    const values = bm.toArrayAlloc(allocator) catch unreachable;
-    defer allocator.free(values);
+    const values = bm.toArrayAlloc(result_allocator) catch unreachable;
+    defer result_allocator.free(values);
     std.mem.doNotOptimizeAway(values.ptr);
 }
 
 fn benchCRoaringToArrayAlloc() void {
+    benchCRoaringToArrayAllocWithAllocator(allocator);
+}
+
+fn benchCRoaringToArrayAllocWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const bm = cr_contains_bm.?;
     const card: usize = @intCast(c.roaring_bitmap_get_cardinality(bm));
-    const values = allocator.alloc(u32, card) catch unreachable;
-    defer allocator.free(values);
+    const values = result_allocator.alloc(u32, card) catch unreachable;
+    defer result_allocator.free(values);
     c.roaring_bitmap_to_uint32_array(bm, values.ptr);
     std.mem.doNotOptimizeAway(values.ptr);
 }
@@ -612,14 +714,22 @@ fn initRawrSerialized() void {
 }
 
 fn benchRawrSerialize() void {
+    benchRawrSerializeWithAllocator(allocator);
+}
+
+fn benchRawrSerializeWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const bm = &rawr_contains_bm.?;
-    const bytes = RoaringBitmap.serialize(bm, allocator) catch unreachable;
-    defer allocator.free(bytes);
+    const bytes = RoaringBitmap.serialize(bm, result_allocator) catch unreachable;
+    defer result_allocator.free(bytes);
     std.mem.doNotOptimizeAway(bytes.ptr);
 }
 
 fn benchRawrDeserialize() void {
-    var bm = RoaringBitmap.deserialize(allocator, rawr_serialized.?) catch unreachable;
+    benchRawrDeserializeWithAllocator(allocator);
+}
+
+fn benchRawrDeserializeWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    var bm = RoaringBitmap.deserialize(result_allocator, rawr_serialized.?) catch unreachable;
     defer bm.deinit();
     std.mem.doNotOptimizeAway(&bm);
 }
@@ -663,15 +773,23 @@ fn benchRawrRankManyDense() void {
 }
 
 fn benchRawrFlipWideDense() void {
+    benchRawrFlipWideDenseWithAllocator(allocator);
+}
+
+fn benchRawrFlipWideDenseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const bm = &rawr_dense_a.?;
-    var result = bm.flip(allocator, 100_000, 650_000) catch unreachable;
+    var result = bm.flip(result_allocator, 100_000, 650_000) catch unreachable;
     defer result.deinit();
     std.mem.doNotOptimizeAway(&result);
 }
 
 fn benchRawrRemoveRangeWideDense() void {
+    benchRawrRemoveRangeWideDenseWithAllocator(allocator);
+}
+
+fn benchRawrRemoveRangeWideDenseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const bm = &rawr_dense_a.?;
-    var result = bm.clone(allocator) catch unreachable;
+    var result = bm.clone(result_allocator) catch unreachable;
     defer result.deinit();
     const removed = result.removeRange(100_000, 650_000) catch unreachable;
     std.mem.doNotOptimizeAway(removed);
@@ -1035,10 +1153,14 @@ fn initCRoaringSerialized() void {
 }
 
 fn benchCRoaringSerialize() void {
+    benchCRoaringSerializeWithAllocator(allocator);
+}
+
+fn benchCRoaringSerializeWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const bm = cr_contains_bm.?;
     const size = c.roaring_bitmap_portable_size_in_bytes(bm);
-    const buf = allocator.alloc(u8, size) catch unreachable;
-    defer allocator.free(buf);
+    const buf = result_allocator.alloc(u8, size) catch unreachable;
+    defer result_allocator.free(buf);
     _ = c.roaring_bitmap_portable_serialize(bm, @ptrCast(buf.ptr));
     std.mem.doNotOptimizeAway(buf.ptr);
 }
@@ -1116,6 +1238,484 @@ fn benchCRoaringRangeCardinalityBitsetLarge() void {
         total +%= c.roaring_bitmap_range_cardinality_closed(bm, lo, hi);
     }
     std.mem.doNotOptimizeAway(total);
+}
+
+// ============================================================================
+// Isolated parity harness adapter
+// ============================================================================
+
+pub fn parityTiming(row: ParityRow) ParityTiming {
+    return switch (row) {
+        .lazy_or_construction, .lazy_or_repair_only => .internal,
+        else => .external,
+    };
+}
+
+pub fn parityPrepare(row: ParityRow, implementation: ParityImplementation) void {
+    initTestData();
+    switch (row) {
+        .add_random, .add_sequential, .add_many_random, .add_many_sequential, .add_range => {},
+        .contains_hit, .contains_miss, .iterate, .to_array, .to_array_alloc, .serialize, .cardinality => {
+            initContainsFor(implementation);
+            if (row == .to_array) initToArrayFor(implementation);
+        },
+        .deserialize, .deserialize_arena => {
+            initContainsFor(implementation);
+            initSerializedFor(implementation);
+        },
+        .sparse_and,
+        .sparse_and_arena,
+        .sparse_or,
+        .sparse_or_arena,
+        .lazy_or_repair,
+        .lazy_or_construction,
+        .lazy_or_repair_only,
+        => initSparseFor(implementation),
+        .dense_and, .dense_or, .rank, .select, .rank_many, .flip, .remove_range => initDenseFor(implementation),
+        .or_many, .or_many_heap, .xor_many => initManyFor(implementation),
+        .array_balanced_and,
+        .array_balanced_and_cardinality,
+        .array_balanced_xor,
+        .array_skewed_and,
+        .array_skewed_and_cardinality,
+        => initArraysFor(implementation),
+        .range_cardinality_small, .range_cardinality_large => initBitsetRangeFor(implementation),
+    }
+}
+
+fn initContainsFor(implementation: ParityImplementation) void {
+    switch (implementation) {
+        .rawr => initRawrContainsBm(),
+        .croaring => initCRoaringContainsBm(),
+    }
+}
+
+fn initSparseFor(implementation: ParityImplementation) void {
+    switch (implementation) {
+        .rawr => initRawrSparseBitmaps(),
+        .croaring => initCRoaringSparseBitmaps(),
+    }
+}
+
+fn initArraysFor(implementation: ParityImplementation) void {
+    switch (implementation) {
+        .rawr => initRawrArrayBitmaps(),
+        .croaring => initCRoaringArrayBitmaps(),
+    }
+}
+
+fn initDenseFor(implementation: ParityImplementation) void {
+    switch (implementation) {
+        .rawr => initRawrDenseBitmaps(),
+        .croaring => initCRoaringDenseBitmaps(),
+    }
+}
+
+fn initManyFor(implementation: ParityImplementation) void {
+    switch (implementation) {
+        .rawr => initRawrManyBitmaps(),
+        .croaring => initCRoaringManyBitmaps(),
+    }
+}
+
+fn initBitsetRangeFor(implementation: ParityImplementation) void {
+    switch (implementation) {
+        .rawr => initRawrBitsetRangeBm(),
+        .croaring => initCRoaringBitsetRangeBm(),
+    }
+}
+
+fn initToArrayFor(implementation: ParityImplementation) void {
+    switch (implementation) {
+        .rawr => initRawrToArrayBuffer(),
+        .croaring => initCRoaringToArrayBuffer(),
+    }
+}
+
+fn initSerializedFor(implementation: ParityImplementation) void {
+    switch (implementation) {
+        .rawr => initRawrSerialized(),
+        .croaring => initCRoaringSerialized(),
+    }
+}
+
+pub noinline fn parityRun(row: ParityRow, implementation: ParityImplementation, allocator_kind: ParityAllocator) u64 {
+    return switch (implementation) {
+        .rawr => parityRunRawr(row, allocator_kind),
+        .croaring => parityRunCRoaring(row),
+    };
+}
+
+noinline fn parityRunRawr(row: ParityRow, allocator_kind: ParityAllocator) u64 {
+    switch (row) {
+        .add_random => runRawrAllocator(allocator_kind, benchRawrAddRandomWithAllocator),
+        .add_sequential => runRawrAllocator(allocator_kind, benchRawrAddSequentialWithAllocator),
+        .add_many_random => runRawrAllocator(allocator_kind, benchRawrAddManyRandomWithAllocator),
+        .add_many_sequential => runRawrAllocator(allocator_kind, benchRawrAddManySequentialWithAllocator),
+        .add_range => runRawrAllocator(allocator_kind, benchRawrAddRangeWithAllocator),
+        .contains_hit => benchRawrContainsHit(),
+        .contains_miss => benchRawrContainsMiss(),
+        .sparse_and => runRawrAllocator(allocator_kind, benchRawrAndSparseWithAllocator),
+        .sparse_and_arena => benchRawrAndSparseArena(),
+        .dense_and => runRawrAllocator(allocator_kind, benchRawrAndDenseWithAllocator),
+        .sparse_or => runRawrAllocator(allocator_kind, benchRawrOrSparseWithAllocator),
+        .sparse_or_arena => benchRawrOrSparseArena(),
+        .dense_or => runRawrAllocator(allocator_kind, benchRawrOrDenseWithAllocator),
+        .lazy_or_repair => runRawrAllocator(allocator_kind, benchRawrLazyOrSparseRepairWithAllocator),
+        .lazy_or_construction => return runRawrLazyPhase(allocator_kind, .construction),
+        .lazy_or_repair_only => return runRawrLazyPhase(allocator_kind, .repair),
+        .or_many => runRawrAllocator(allocator_kind, benchRawrOrManyWithAllocator),
+        .or_many_heap => runRawrAllocator(allocator_kind, benchRawrOrManyHeapWithAllocator),
+        .xor_many => runRawrAllocator(allocator_kind, benchRawrXorManyWithAllocator),
+        .array_balanced_and => runRawrAllocator(allocator_kind, benchRawrAndArrayBalancedWithAllocator),
+        .array_balanced_and_cardinality => benchRawrAndCardinalityArrayBalanced(),
+        .array_balanced_xor => runRawrAllocator(allocator_kind, benchRawrXorArrayBalancedWithAllocator),
+        .array_skewed_and => runRawrAllocator(allocator_kind, benchRawrAndArraySkewedWithAllocator),
+        .array_skewed_and_cardinality => benchRawrAndCardinalityArraySkewed(),
+        .iterate => benchRawrIterate(),
+        .to_array => benchRawrToArray(),
+        .to_array_alloc => runRawrAllocator(allocator_kind, benchRawrToArrayAllocWithAllocator),
+        .serialize => runRawrAllocator(allocator_kind, benchRawrSerializeWithAllocator),
+        .deserialize => runRawrAllocator(allocator_kind, benchRawrDeserializeWithAllocator),
+        .deserialize_arena => benchRawrDeserializeArena(),
+        .cardinality => benchRawrCardinality(),
+        .rank => benchRawrRankDense(),
+        .select => benchRawrSelectDense(),
+        .rank_many => benchRawrRankManyDense(),
+        .range_cardinality_small => benchRawrRangeCardinalityBitset(),
+        .range_cardinality_large => benchRawrRangeCardinalityBitsetLarge(),
+        .flip => runRawrAllocator(allocator_kind, benchRawrFlipWideDenseWithAllocator),
+        .remove_range => runRawrAllocator(allocator_kind, benchRawrRemoveRangeWideDenseWithAllocator),
+    }
+    return 0;
+}
+
+fn runRawrAllocator(kind: ParityAllocator, comptime operation: anytype) void {
+    switch (kind) {
+        .smp => operation(std.heap.smp_allocator),
+        .libc => operation(libc_allocator),
+        else => unreachable,
+    }
+}
+
+fn runRawrLazyPhase(kind: ParityAllocator, comptime phase: LazyPhase) u64 {
+    return switch (kind) {
+        .smp => timeRawrLazyOrSparseWithAllocator(phase, std.heap.smp_allocator),
+        .libc => timeRawrLazyOrSparseWithAllocator(phase, libc_allocator),
+        else => unreachable,
+    };
+}
+
+noinline fn parityRunCRoaring(row: ParityRow) u64 {
+    switch (row) {
+        .add_random => benchCRoaringAddRandom(),
+        .add_sequential => benchCRoaringAddSequential(),
+        .add_many_random => benchCRoaringAddManyRandom(),
+        .add_many_sequential => benchCRoaringAddManySequential(),
+        .add_range => benchCRoaringAddRange(),
+        .contains_hit => benchCRoaringContainsHit(),
+        .contains_miss => benchCRoaringContainsMiss(),
+        .sparse_and, .sparse_and_arena => benchCRoaringAndSparse(),
+        .dense_and => benchCRoaringAndDense(),
+        .sparse_or, .sparse_or_arena => benchCRoaringOrSparse(),
+        .dense_or => benchCRoaringOrDense(),
+        .lazy_or_repair => benchCRoaringLazyOrSparseRepair(),
+        .lazy_or_construction => return timeCRoaringLazyOrSparse(.construction),
+        .lazy_or_repair_only => return timeCRoaringLazyOrSparse(.repair),
+        .or_many => benchCRoaringOrMany(),
+        .or_many_heap => benchCRoaringOrManyHeap(),
+        .xor_many => benchCRoaringXorMany(),
+        .array_balanced_and => benchCRoaringAndArrayBalanced(),
+        .array_balanced_and_cardinality => benchCRoaringAndCardinalityArrayBalanced(),
+        .array_balanced_xor => benchCRoaringXorArrayBalanced(),
+        .array_skewed_and => benchCRoaringAndArraySkewed(),
+        .array_skewed_and_cardinality => benchCRoaringAndCardinalityArraySkewed(),
+        .iterate => benchCRoaringIterate(),
+        .to_array => benchCRoaringToArray(),
+        .to_array_alloc => benchCRoaringToArrayAllocWithAllocator(libc_allocator),
+        .serialize => benchCRoaringSerializeWithAllocator(libc_allocator),
+        .deserialize, .deserialize_arena => benchCRoaringDeserialize(),
+        .cardinality => benchCRoaringCardinality(),
+        .rank => benchCRoaringRankDense(),
+        .select => benchCRoaringSelectDense(),
+        .rank_many => benchCRoaringRankManyDense(),
+        .range_cardinality_small => benchCRoaringRangeCardinalityBitset(),
+        .range_cardinality_large => benchCRoaringRangeCardinalityBitsetLarge(),
+        .flip => benchCRoaringFlipWideDense(),
+        .remove_range => benchCRoaringRemoveRangeWideDense(),
+    }
+    return 0;
+}
+
+pub noinline fn parityValidate(row: ParityRow, allocator_kind: ParityAllocator) !void {
+    parityPrepare(row, .rawr);
+    parityPrepare(row, .croaring);
+
+    switch (row) {
+        .contains_hit, .contains_miss => try validateContains(row),
+        .array_balanced_and_cardinality, .array_skewed_and_cardinality => try validateAndCardinality(row),
+        .cardinality => try validateCardinalityParity(),
+        .rank, .select, .range_cardinality_small, .range_cardinality_large => try validateQueries(row),
+        .rank_many => try validateRankManyParity(),
+        .iterate, .to_array, .to_array_alloc => try validateArrayParity(row, allocator_kind),
+        .serialize => try expectPortableEqual(&rawr_contains_bm.?, cr_contains_bm.?),
+        else => try validateBitmapResult(row, allocator_kind),
+    }
+}
+
+fn validateContains(row: ParityRow) !void {
+    for (random_values[0..]) |value| {
+        const query = if (row == .contains_hit) value else value | 0x80000000;
+        if (rawr_contains_bm.?.contains(query) != c.roaring_bitmap_contains(cr_contains_bm.?, query)) {
+            return error.ContainsMismatch;
+        }
+    }
+}
+
+fn validateAndCardinality(row: ParityRow) !void {
+    const rawr_cardinality, const cr_cardinality = switch (row) {
+        .array_balanced_and_cardinality => .{
+            rawr_array_balanced_a.?.andCardinality(&rawr_array_balanced_b.?),
+            c.roaring_bitmap_and_cardinality(cr_array_balanced_a.?, cr_array_balanced_b.?),
+        },
+        .array_skewed_and_cardinality => .{
+            rawr_array_skewed_a.?.andCardinality(&rawr_array_skewed_b.?),
+            c.roaring_bitmap_and_cardinality(cr_array_skewed_a.?, cr_array_skewed_b.?),
+        },
+        else => unreachable,
+    };
+    if (rawr_cardinality != cr_cardinality) return error.CardinalityMismatch;
+}
+
+fn validateCardinalityParity() !void {
+    if (rawr_contains_bm.?.cardinality() != c.roaring_bitmap_get_cardinality(cr_contains_bm.?)) {
+        return error.CardinalityMismatch;
+    }
+}
+
+fn validateQueries(row: ParityRow) !void {
+    switch (row) {
+        .rank => for (rank_queries[0..]) |query| {
+            if (rawr_dense_a.?.rank(query) != c.roaring_bitmap_rank(cr_dense_a.?, query)) return error.QueryMismatch;
+        },
+        .select => for (select_queries[0..]) |query| {
+            var cr_value: u32 = undefined;
+            if (!c.roaring_bitmap_select(cr_dense_a.?, query, &cr_value)) return error.QueryMismatch;
+            if (rawr_dense_a.?.select(query).? != cr_value) return error.QueryMismatch;
+        },
+        .range_cardinality_small => for (range_query_lo[0..], range_query_hi[0..]) |lo, hi| {
+            if (rawr_bitset_range_bm.?.rangeCardinality(lo, hi) !=
+                c.roaring_bitmap_range_cardinality_closed(cr_bitset_range_bm.?, lo, hi)) return error.QueryMismatch;
+        },
+        .range_cardinality_large => for (range_large_query_lo[0..], range_large_query_hi[0..]) |lo, hi| {
+            if (rawr_bitset_range_bm.?.rangeCardinality(lo, hi) !=
+                c.roaring_bitmap_range_cardinality_closed(cr_bitset_range_bm.?, lo, hi)) return error.QueryMismatch;
+        },
+        else => unreachable,
+    }
+}
+
+noinline fn validateRankManyParity() !void {
+    rawr_dense_a.?.rankMany(rank_many_probes[0..], rank_many_out[0..]);
+    var cr_out: [N_RANK_MANY_PROBES]u64 = undefined;
+    c.roaring_bitmap_rank_many(
+        cr_dense_a.?,
+        rank_many_probes[0..].ptr,
+        rank_many_probes[rank_many_probes.len..].ptr,
+        cr_out[0..].ptr,
+    );
+    if (!std.mem.eql(u64, rank_many_out[0..], cr_out[0..])) return error.QueryMismatch;
+}
+
+fn validateArrayParity(row: ParityRow, allocator_kind: ParityAllocator) !void {
+    const cardinality: usize = @intCast(rawr_contains_bm.?.cardinality());
+    if (cardinality != c.roaring_bitmap_get_cardinality(cr_contains_bm.?)) return error.CardinalityMismatch;
+    const validation_allocator = std.heap.page_allocator;
+    const rawr_values = switch (row) {
+        .to_array_alloc => try rawr_contains_bm.?.toArrayAlloc(switch (allocator_kind) {
+            .libc => libc_allocator,
+            else => std.heap.smp_allocator,
+        }),
+        else => try validation_allocator.alloc(u32, cardinality),
+    };
+    defer switch (row) {
+        .to_array_alloc => switch (allocator_kind) {
+            .libc => libc_allocator.free(rawr_values),
+            else => std.heap.smp_allocator.free(rawr_values),
+        },
+        else => validation_allocator.free(rawr_values),
+    };
+    const cr_values = try validation_allocator.alloc(u32, cardinality);
+    defer validation_allocator.free(cr_values);
+
+    switch (row) {
+        .iterate => {
+            var iterator = rawr_contains_bm.?.iterator();
+            var index: usize = 0;
+            while (iterator.next()) |value| : (index += 1) rawr_values[index] = value;
+            if (index != rawr_values.len) return error.ArrayMismatch;
+        },
+        .to_array => _ = rawr_contains_bm.?.toArray(rawr_values),
+        .to_array_alloc => {},
+        else => unreachable,
+    }
+    c.roaring_bitmap_to_uint32_array(cr_contains_bm.?, cr_values.ptr);
+    if (!std.mem.eql(u32, rawr_values, cr_values)) return error.ArrayMismatch;
+}
+
+fn validateBitmapResult(row: ParityRow, allocator_kind: ParityAllocator) !void {
+    const cr_result = try makeCRoaringResult(row);
+    defer c.roaring_bitmap_free(cr_result);
+
+    if (allocator_kind == .arena) {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        var rawr_result = try makeRawrResult(row, arena.allocator());
+        try expectPortableEqual(&rawr_result, cr_result);
+        return;
+    }
+
+    const result_allocator = switch (allocator_kind) {
+        .libc => libc_allocator,
+        else => std.heap.smp_allocator,
+    };
+    var rawr_result = try makeRawrResult(row, result_allocator);
+    defer rawr_result.deinit();
+    try expectPortableEqual(&rawr_result, cr_result);
+}
+
+fn makeRawrResult(row: ParityRow, result_allocator: std.mem.Allocator) !RoaringBitmap {
+    return switch (row) {
+        .add_random => result: {
+            var result = try RoaringBitmap.init(result_allocator);
+            errdefer result.deinit();
+            for (random_values[0..]) |value| _ = try result.add(value);
+            break :result result;
+        },
+        .add_sequential => result: {
+            var result = try RoaringBitmap.init(result_allocator);
+            errdefer result.deinit();
+            for (sequential_values[0..]) |value| _ = try result.add(value);
+            break :result result;
+        },
+        .add_many_random => result: {
+            var result = try RoaringBitmap.init(result_allocator);
+            errdefer result.deinit();
+            try result.addMany(random_values[0..]);
+            break :result result;
+        },
+        .add_many_sequential => result: {
+            var result = try RoaringBitmap.init(result_allocator);
+            errdefer result.deinit();
+            try result.addMany(sequential_values[0..]);
+            break :result result;
+        },
+        .add_range => result: {
+            var result = try RoaringBitmap.init(result_allocator);
+            errdefer result.deinit();
+            _ = try result.addRange(0, N_VALUES - 1);
+            break :result result;
+        },
+        .sparse_and, .sparse_and_arena => try rawr_sparse_a.?.bitwiseAnd(result_allocator, &rawr_sparse_b.?),
+        .dense_and => try rawr_dense_a.?.bitwiseAnd(result_allocator, &rawr_dense_b.?),
+        .sparse_or, .sparse_or_arena => try rawr_sparse_a.?.bitwiseOr(result_allocator, &rawr_sparse_b.?),
+        .dense_or => try rawr_dense_a.?.bitwiseOr(result_allocator, &rawr_dense_b.?),
+        .lazy_or_repair, .lazy_or_construction, .lazy_or_repair_only => result: {
+            var result = try rawr_sparse_a.?.lazyOr(result_allocator, &rawr_sparse_b.?, true);
+            errdefer result.deinit();
+            try result.repairAfterLazy();
+            break :result result;
+        },
+        .or_many => try RoaringBitmap.orMany(result_allocator, &rawr_many_inputs),
+        .or_many_heap => try RoaringBitmap.orManyHeap(result_allocator, &rawr_many_inputs),
+        .xor_many => try RoaringBitmap.xorMany(result_allocator, &rawr_many_inputs),
+        .array_balanced_and => try rawr_array_balanced_a.?.bitwiseAnd(result_allocator, &rawr_array_balanced_b.?),
+        .array_balanced_xor => try rawr_array_balanced_a.?.bitwiseXor(result_allocator, &rawr_array_balanced_b.?),
+        .array_skewed_and => try rawr_array_skewed_a.?.bitwiseAnd(result_allocator, &rawr_array_skewed_b.?),
+        .deserialize, .deserialize_arena => try RoaringBitmap.deserialize(result_allocator, rawr_serialized.?),
+        .flip => try rawr_dense_a.?.flip(result_allocator, 100_000, 650_000),
+        .remove_range => result: {
+            var result = try rawr_dense_a.?.clone(result_allocator);
+            errdefer result.deinit();
+            _ = try result.removeRange(100_000, 650_000);
+            break :result result;
+        },
+        else => unreachable,
+    };
+}
+
+fn makeCRoaringResult(row: ParityRow) !*c.roaring_bitmap_t {
+    return switch (row) {
+        .add_random => result: {
+            const result = c.roaring_bitmap_create() orelse return error.OutOfMemory;
+            for (random_values[0..]) |value| c.roaring_bitmap_add(result, value);
+            break :result result;
+        },
+        .add_sequential => result: {
+            const result = c.roaring_bitmap_create() orelse return error.OutOfMemory;
+            for (sequential_values[0..]) |value| c.roaring_bitmap_add(result, value);
+            break :result result;
+        },
+        .add_many_random => result: {
+            const result = c.roaring_bitmap_create() orelse return error.OutOfMemory;
+            c.roaring_bitmap_add_many(result, N_VALUES, random_values[0..].ptr);
+            break :result result;
+        },
+        .add_many_sequential => result: {
+            const result = c.roaring_bitmap_create() orelse return error.OutOfMemory;
+            c.roaring_bitmap_add_many(result, N_VALUES, sequential_values[0..].ptr);
+            break :result result;
+        },
+        .add_range => result: {
+            const result = c.roaring_bitmap_create() orelse return error.OutOfMemory;
+            c.roaring_bitmap_add_range(result, 0, N_VALUES);
+            break :result result;
+        },
+        .sparse_and, .sparse_and_arena => c.roaring_bitmap_and(cr_sparse_a.?, cr_sparse_b.?) orelse error.OutOfMemory,
+        .dense_and => c.roaring_bitmap_and(cr_dense_a.?, cr_dense_b.?) orelse error.OutOfMemory,
+        .sparse_or, .sparse_or_arena => c.roaring_bitmap_or(cr_sparse_a.?, cr_sparse_b.?) orelse error.OutOfMemory,
+        .dense_or => c.roaring_bitmap_or(cr_dense_a.?, cr_dense_b.?) orelse error.OutOfMemory,
+        .lazy_or_repair, .lazy_or_construction, .lazy_or_repair_only => result: {
+            const result = c.roaring_bitmap_lazy_or(cr_sparse_a.?, cr_sparse_b.?, true) orelse return error.OutOfMemory;
+            c.roaring_bitmap_repair_after_lazy(result);
+            break :result result;
+        },
+        .or_many => c.roaring_bitmap_or_many(N_MANY_BITMAPS, @ptrCast(&cr_many_inputs)) orelse error.OutOfMemory,
+        .or_many_heap => c.roaring_bitmap_or_many_heap(N_MANY_BITMAPS, @ptrCast(&cr_many_inputs)) orelse error.OutOfMemory,
+        .xor_many => c.roaring_bitmap_xor_many(N_MANY_BITMAPS, @ptrCast(&cr_many_inputs)) orelse error.OutOfMemory,
+        .array_balanced_and => c.roaring_bitmap_and(cr_array_balanced_a.?, cr_array_balanced_b.?) orelse error.OutOfMemory,
+        .array_balanced_xor => c.roaring_bitmap_xor(cr_array_balanced_a.?, cr_array_balanced_b.?) orelse error.OutOfMemory,
+        .array_skewed_and => c.roaring_bitmap_and(cr_array_skewed_a.?, cr_array_skewed_b.?) orelse error.OutOfMemory,
+        .deserialize, .deserialize_arena => c.roaring_bitmap_portable_deserialize_safe(
+            @ptrCast(cr_serialized.?.ptr),
+            cr_serialized.?.len,
+        ) orelse error.OutOfMemory,
+        .flip => c.roaring_bitmap_flip_closed(cr_dense_a.?, 100_000, 650_000) orelse error.OutOfMemory,
+        .remove_range => result: {
+            const result = c.roaring_bitmap_copy(cr_dense_a.?) orelse return error.OutOfMemory;
+            c.roaring_bitmap_remove_range_closed(result, 100_000, 650_000);
+            break :result result;
+        },
+        else => unreachable,
+    };
+}
+
+fn expectPortableEqual(rawr_result: *const RoaringBitmap, cr_result: *const c.roaring_bitmap_t) !void {
+    const validation_allocator = std.heap.page_allocator;
+    const rawr_bytes = try rawr_result.serialize(validation_allocator);
+    defer validation_allocator.free(rawr_bytes);
+    const cr_len = c.roaring_bitmap_portable_size_in_bytes(cr_result);
+    if (rawr_bytes.len != cr_len) return error.SerializedSizeMismatch;
+    const cr_bytes = try validation_allocator.alloc(u8, cr_len);
+    defer validation_allocator.free(cr_bytes);
+    if (c.roaring_bitmap_portable_serialize(cr_result, @ptrCast(cr_bytes.ptr)) != cr_len) {
+        return error.SerializedSizeMismatch;
+    }
+    if (!std.mem.eql(u8, rawr_bytes, cr_bytes)) return error.CRoaringMismatch;
+}
+
+pub fn parityCleanup() void {
+    cleanupBenchmarks();
 }
 
 // ============================================================================

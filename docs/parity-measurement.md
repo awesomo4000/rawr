@@ -161,22 +161,29 @@ exactly one `(row, implementation, allocator)` tuple per process. Each process u
 validation succeeds. The controller runs five independent processes per tuple and reports the
 median of process medians with the full process range.
 
-The initial architecture pilot covers sparse AND (rawr SMP, rawr libc, and CRoaring libc) and
+The initial architecture pilot covered sparse AND (rawr SMP, rawr libc, and CRoaring libc) and
 cardinality (rawr and CRoaring). On the Apple M4 pilot, sparse AND measured 0.581
 [0.577, 0.612] ms for rawr SMP, 0.931 [0.917, 0.935] ms for rawr libc, and 0.690
 [0.680, 0.752] ms for CRoaring. Cardinality is normalized to `ns/op`; its final cross-host
 batch calibration belongs to spec 22-03. The same controller passed under Windows Git Bash on
 Zen 4, where sparse AND measured 0.780 [0.778, 0.787] ms for rawr SMP, 2.102
 [2.054, 2.164] ms for rawr libc, and 1.554 [1.522, 1.867] ms for CRoaring. These two rows prove
-the worker and aggregation protocol and are not yet the canonical 38-row parity board.
+the worker and aggregation protocol.
 
-During the rollout, run the pilot explicitly:
+Spec 22-01 extends that architecture to all 38 rows published by `bench_croaring`. The manifest
+now records the exact corpus, operation pair, allocation class, timing boundaries, validation
+oracle, and remaining allocator/calibration work for every row. Bitmap-producing operations
+validate portable bytes; query, scalar, and array operations validate their exact outputs. The
+38-row table is functionally complete, but allocator side-by-side completion and tiny-operation
+calibration remain assigned to specs 22-02 and 22-03.
+
+During the rollout, run the complete functional table explicitly:
 
 ```sh
-./scripts/run-compare-bench.sh --parity-pilot
+./scripts/run-compare-bench.sh --parity
 ```
 
-Without `--parity-pilot`, the script retains the existing broad screening-dashboard behavior
+Without `--parity`, the script retains the existing broad screening-dashboard behavior
 until the complete manifest becomes canonical in spec 22-04.
 
 ## Recommendation

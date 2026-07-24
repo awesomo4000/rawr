@@ -166,6 +166,7 @@ Run benchmarks (results saved to `misc/`):
 ```bash
 ./scripts/run-bench.sh           # rawr benchmarks
 ./scripts/run-compare-bench.sh   # rawr vs CRoaring comparison
+./scripts/run-compare-bench.sh --parity # isolated 38-row functional table
 ./scripts/run-bench-alloc.sh     # allocator matrix experiment
 ```
 

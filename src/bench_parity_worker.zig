@@ -6,28 +6,16 @@
 //! one worker process for exactly one `(row, implementation, allocator)` tuple.
 
 const std = @import("std");
-const rawr = @import("rawr");
 const c = @import("c");
 const bench_time = @import("bench_time.zig");
-
-const RoaringBitmap = rawr.RoaringBitmap;
+const dashboard = @import("bench_croaring.zig");
 
 const warmup_runs = 3;
 const timed_runs = 21;
-const sparse_value_count = 500_000;
-const cardinality_value_count = 1_000_000;
 
-const Implementation = enum {
-    rawr,
-    croaring,
-};
-
-const AllocatorKind = enum {
-    none,
-    smp,
-    libc,
-    arena,
-};
+const Implementation = dashboard.ParityImplementation;
+const AllocatorKind = dashboard.ParityAllocator;
+const Operation = dashboard.ParityRow;
 
 const ReportingUnit = enum {
     ms,
@@ -46,14 +34,18 @@ const AllocationClass = enum {
     non_allocating,
 };
 
-const Operation = enum {
-    sparse_and,
-    cardinality,
-};
-
 const ValidationOracle = enum {
     portable_bytes,
-    cardinality,
+    exact_queries,
+    exact_array,
+    exact_scalar,
+};
+
+const Followup = enum {
+    complete,
+    allocator_pending,
+    calibration_pending,
+    allocator_and_calibration_pending,
 };
 
 const TupleKey = struct {
@@ -84,9 +76,15 @@ const ManifestRow = struct {
     setup_boundary: []const u8,
     teardown_boundary: []const u8,
     validation_oracle: ValidationOracle,
-    batch_count: usize,
-    reporting_unit: ReportingUnit,
+    batch_count: usize = 1,
+    reporting_unit: ReportingUnit = .ms,
+    followup: Followup = .complete,
     operation: Operation,
+};
+
+const allocating_variants = [_]Variant{
+    .{ .implementation = .rawr, .allocator = .smp },
+    .{ .implementation = .croaring, .allocator = .libc },
 };
 
 const sparse_and_variants = [_]Variant{
@@ -95,27 +93,465 @@ const sparse_and_variants = [_]Variant{
     .{ .implementation = .croaring, .allocator = .libc },
 };
 
-const cardinality_variants = [_]Variant{
+const non_allocating_variants = [_]Variant{
     .{ .implementation = .rawr, .allocator = .none },
     .{ .implementation = .croaring, .allocator = .none },
 };
 
+const arena_variant = [_]Variant{
+    .{ .implementation = .rawr, .allocator = .arena },
+};
+
+const allocating_setup = "input construction outside timing; result construction inside timing";
+const allocating_teardown = "result deinit/free inside timing";
+const query_setup = "input construction outside timing; query operation inside timing";
+const query_teardown = "input deinit/free outside timing";
+
 const manifest = [_]ManifestRow{
+    .{
+        .id = "add-random",
+        .display_name = "add (random 1M)",
+        .corpus = "1000000 deterministic random u32 values",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.add loop",
+        .croaring_operation = "roaring_bitmap_add loop",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "value corpus outside timing; bitmap construction and inserts inside timing",
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_pending,
+        .operation = .add_random,
+    },
+    .{
+        .id = "add-sequential",
+        .display_name = "add (sequential 1M)",
+        .corpus = "u32 values 0 through 999999 in ascending order",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.add loop",
+        .croaring_operation = "roaring_bitmap_add loop",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "value corpus outside timing; bitmap construction and inserts inside timing",
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_pending,
+        .operation = .add_sequential,
+    },
+    .{
+        .id = "add-many-random",
+        .display_name = "addMany (random 1M)",
+        .corpus = "1000000 deterministic random u32 values",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.addMany",
+        .croaring_operation = "roaring_bitmap_add_many",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "value corpus outside timing; bitmap construction and bulk insert inside timing",
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_pending,
+        .operation = .add_many_random,
+    },
+    .{
+        .id = "add-many-sequential",
+        .display_name = "addMany (sequential 1M)",
+        .corpus = "u32 values 0 through 999999 in ascending order",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.addMany",
+        .croaring_operation = "roaring_bitmap_add_many",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "value corpus outside timing; bitmap construction and bulk insert inside timing",
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_pending,
+        .operation = .add_many_sequential,
+    },
+    .{
+        .id = "add-range",
+        .display_name = "addRange (1M)",
+        .corpus = "inclusive range 0 through 999999",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.addRange",
+        .croaring_operation = "roaring_bitmap_add_range",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "empty bitmap construction and range insert inside timing",
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .add_range,
+    },
+    .{
+        .id = "contains-hit",
+        .display_name = "contains (hit)",
+        .corpus = "1000000 inserted deterministic random values queried as hits",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.contains",
+        .croaring_operation = "roaring_bitmap_contains",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = query_setup,
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_queries,
+        .operation = .contains_hit,
+    },
+    .{
+        .id = "contains-miss",
+        .display_name = "contains (miss)",
+        .corpus = "1000000 deterministic random values transformed with high bit for misses",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.contains",
+        .croaring_operation = "roaring_bitmap_contains",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = query_setup,
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_queries,
+        .operation = .contains_miss,
+    },
     .{
         .id = "sparse-and",
         .display_name = "bitwiseAnd (sparse)",
-        .corpus = "500000 deterministic sorted/deduplicated u32 values split into overlapping halves",
+        .corpus = "500000 deterministic sorted and deduplicated u32 values split into overlapping halves",
         .seed = 54321,
         .rawr_operation = "RoaringBitmap.bitwiseAnd",
         .croaring_operation = "roaring_bitmap_and",
         .allocation_class = .allocating,
         .variants = &sparse_and_variants,
-        .setup_boundary = "input construction outside timing; result construction inside timing",
-        .teardown_boundary = "result deinit/free inside timing",
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .batch_count = 1,
-        .reporting_unit = .ms,
+        .followup = .allocator_pending,
         .operation = .sparse_and,
+    },
+    .{
+        .id = "sparse-and-arena",
+        .display_name = "bitwiseAnd (sparse, arena)",
+        .corpus = "same sparse corpus and operation as sparse-and with arena result allocation",
+        .seed = 54321,
+        .rawr_operation = "RoaringBitmap.bitwiseAnd",
+        .croaring_operation = "roaring_bitmap_and reference from sparse-and",
+        .allocation_class = .allocating,
+        .variants = &arena_variant,
+        .reference = .{ .row_id = "sparse-and", .variant = .{ .implementation = .croaring, .allocator = .libc } },
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = "arena deinit inside timing",
+        .validation_oracle = .portable_bytes,
+        .operation = .sparse_and_arena,
+    },
+    .{
+        .id = "dense-and",
+        .display_name = "bitwiseAnd (dense)",
+        .corpus = "ranges 0..499999 and 250000..749999",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.bitwiseAnd",
+        .croaring_operation = "roaring_bitmap_and",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .dense_and,
+    },
+    .{
+        .id = "sparse-or",
+        .display_name = "bitwiseOr (sparse)",
+        .corpus = "500000 deterministic sorted and deduplicated u32 values split into overlapping halves",
+        .seed = 54321,
+        .rawr_operation = "RoaringBitmap.bitwiseOr",
+        .croaring_operation = "roaring_bitmap_or",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_pending,
+        .operation = .sparse_or,
+    },
+    .{
+        .id = "sparse-or-arena",
+        .display_name = "bitwiseOr (sparse, arena)",
+        .corpus = "same sparse corpus and operation as sparse-or with arena result allocation",
+        .seed = 54321,
+        .rawr_operation = "RoaringBitmap.bitwiseOr",
+        .croaring_operation = "roaring_bitmap_or reference from sparse-or",
+        .allocation_class = .allocating,
+        .variants = &arena_variant,
+        .reference = .{ .row_id = "sparse-or", .variant = .{ .implementation = .croaring, .allocator = .libc } },
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = "arena deinit inside timing",
+        .validation_oracle = .portable_bytes,
+        .operation = .sparse_or_arena,
+    },
+    .{
+        .id = "dense-or",
+        .display_name = "bitwiseOr (dense)",
+        .corpus = "ranges 0..499999 and 250000..749999",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.bitwiseOr",
+        .croaring_operation = "roaring_bitmap_or",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .dense_or,
+    },
+    .{
+        .id = "lazy-or-repair",
+        .display_name = "lazyOr+repair (sparse)",
+        .corpus = "same sparse corpus as sparse-or",
+        .seed = 54321,
+        .rawr_operation = "RoaringBitmap.lazyOr plus repairAfterLazy",
+        .croaring_operation = "roaring_bitmap_lazy_or plus roaring_bitmap_repair_after_lazy",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_pending,
+        .operation = .lazy_or_repair,
+    },
+    .{
+        .id = "lazy-or-construction",
+        .display_name = "lazyOr construction (sparse)",
+        .corpus = "same sparse corpus as sparse-or",
+        .seed = 54321,
+        .rawr_operation = "RoaringBitmap.lazyOr construction only",
+        .croaring_operation = "roaring_bitmap_lazy_or construction only",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "inputs outside timing; lazy result construction inside timing",
+        .teardown_boundary = "result deinit/free outside the internally timed interval",
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_pending,
+        .operation = .lazy_or_construction,
+    },
+    .{
+        .id = "lazy-or-repair-only",
+        .display_name = "lazyOr repair (sparse)",
+        .corpus = "same sparse corpus as sparse-or",
+        .seed = 54321,
+        .rawr_operation = "RoaringBitmap.repairAfterLazy",
+        .croaring_operation = "roaring_bitmap_repair_after_lazy",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = "inputs and lazy result construction outside timing; repair inside timing",
+        .teardown_boundary = "result deinit/free outside the internally timed interval",
+        .validation_oracle = .portable_bytes,
+        .operation = .lazy_or_repair_only,
+    },
+    .{
+        .id = "or-many",
+        .display_name = "orMany (32 mixed)",
+        .corpus = "32 deterministic mixed array, bitset, and run-heavy bitmaps",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.orMany",
+        .croaring_operation = "roaring_bitmap_or_many",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .or_many,
+    },
+    .{
+        .id = "or-many-heap",
+        .display_name = "orManyHeap (32 mixed)",
+        .corpus = "32 deterministic mixed array, bitset, and run-heavy bitmaps",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.orManyHeap",
+        .croaring_operation = "roaring_bitmap_or_many_heap",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .or_many_heap,
+    },
+    .{
+        .id = "xor-many",
+        .display_name = "xorMany (32 mixed)",
+        .corpus = "32 deterministic mixed array, bitset, and run-heavy bitmaps",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.xorMany",
+        .croaring_operation = "roaring_bitmap_xor_many",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .xor_many,
+    },
+    .{
+        .id = "array-balanced-and",
+        .display_name = "bitwiseAnd (array balanced)",
+        .corpus = "200 overlapping array-container pairs of 2048 values",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.bitwiseAnd",
+        .croaring_operation = "roaring_bitmap_and",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .array_balanced_and,
+    },
+    .{
+        .id = "array-balanced-and-cardinality",
+        .display_name = "andCardinality (array balanced)",
+        .corpus = "200 overlapping array-container pairs of 2048 values",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.andCardinality",
+        .croaring_operation = "roaring_bitmap_and_cardinality",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = query_setup,
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_scalar,
+        .followup = .calibration_pending,
+        .operation = .array_balanced_and_cardinality,
+    },
+    .{
+        .id = "array-balanced-xor",
+        .display_name = "bitwiseXor (array balanced)",
+        .corpus = "200 overlapping array-container pairs of 2048 values",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.bitwiseXor",
+        .croaring_operation = "roaring_bitmap_xor",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .array_balanced_xor,
+    },
+    .{
+        .id = "array-skewed-and",
+        .display_name = "bitwiseAnd (array skewed)",
+        .corpus = "200 sparse 32-value arrays intersected with offset 4096-value arrays",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.bitwiseAnd",
+        .croaring_operation = "roaring_bitmap_and",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .array_skewed_and,
+    },
+    .{
+        .id = "array-skewed-and-cardinality",
+        .display_name = "andCardinality (array skewed)",
+        .corpus = "200 sparse 32-value arrays intersected with offset 4096-value arrays",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.andCardinality",
+        .croaring_operation = "roaring_bitmap_and_cardinality",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = query_setup,
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_scalar,
+        .followup = .calibration_pending,
+        .operation = .array_skewed_and_cardinality,
+    },
+    .{
+        .id = "iterate",
+        .display_name = "iterate (1M values)",
+        .corpus = "bitmap built from 1000000 deterministic random u32 values",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.Iterator",
+        .croaring_operation = "roaring_iterate",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = query_setup,
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_array,
+        .operation = .iterate,
+    },
+    .{
+        .id = "to-array",
+        .display_name = "toArray (1M values)",
+        .corpus = "bitmap built from 1000000 deterministic random u32 values",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.toArray",
+        .croaring_operation = "roaring_bitmap_to_uint32_array",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = "bitmap and output buffer construction outside timing; conversion inside timing",
+        .teardown_boundary = "bitmap and output buffer deinit/free outside timing",
+        .validation_oracle = .exact_array,
+        .operation = .to_array,
+    },
+    .{
+        .id = "to-array-alloc",
+        .display_name = "toArrayAlloc (1M values)",
+        .corpus = "bitmap built from 1000000 deterministic random u32 values",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.toArrayAlloc",
+        .croaring_operation = "allocate plus roaring_bitmap_to_uint32_array",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "bitmap construction outside timing; output allocation and conversion inside timing",
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .exact_array,
+        .followup = .allocator_pending,
+        .operation = .to_array_alloc,
+    },
+    .{
+        .id = "serialize",
+        .display_name = "serialize",
+        .corpus = "bitmap built from 1000000 deterministic random u32 values",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.serialize",
+        .croaring_operation = "roaring_bitmap_portable_serialize",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "bitmap construction outside timing; output allocation and serialization inside timing",
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_pending,
+        .operation = .serialize,
+    },
+    .{
+        .id = "deserialize",
+        .display_name = "deserialize",
+        .corpus = "portable bytes from the 1000000-value deterministic random bitmap",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.deserialize",
+        .croaring_operation = "roaring_bitmap_portable_deserialize_safe",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "serialized input construction outside timing; bitmap construction inside timing",
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_pending,
+        .operation = .deserialize,
+    },
+    .{
+        .id = "deserialize-arena",
+        .display_name = "deserialize (arena)",
+        .corpus = "same portable bytes and operation as deserialize with arena result allocation",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.deserialize",
+        .croaring_operation = "roaring_bitmap_portable_deserialize_safe reference from deserialize",
+        .allocation_class = .allocating,
+        .variants = &arena_variant,
+        .reference = .{ .row_id = "deserialize", .variant = .{ .implementation = .croaring, .allocator = .libc } },
+        .setup_boundary = "serialized input construction outside timing; bitmap construction inside timing",
+        .teardown_boundary = "arena deinit inside timing",
+        .validation_oracle = .portable_bytes,
+        .operation = .deserialize_arena,
     },
     .{
         .id = "cardinality",
@@ -125,39 +561,116 @@ const manifest = [_]ManifestRow{
         .rawr_operation = "RoaringBitmap.cardinality",
         .croaring_operation = "roaring_bitmap_get_cardinality",
         .allocation_class = .non_allocating,
-        .variants = &cardinality_variants,
+        .variants = &non_allocating_variants,
         .setup_boundary = "bitmap construction outside timing; batched cardinality calls inside timing",
-        .teardown_boundary = "bitmap deinit/free outside timing",
-        .validation_oracle = .cardinality,
-        // This proves normalized ns/op reporting. Spec 22-03 performs the final
-        // cross-host >=1 ms batch calibration for all tiny rows.
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_scalar,
         .batch_count = 1024,
         .reporting_unit = .ns_per_op,
+        .followup = .calibration_pending,
         .operation = .cardinality,
     },
-};
-
-var sparse_values: [sparse_value_count]u32 = undefined;
-var cardinality_values: [cardinality_value_count]u32 = undefined;
-
-const RawrSparseInputs = struct {
-    a: RoaringBitmap,
-    b: RoaringBitmap,
-
-    fn deinit(self: *RawrSparseInputs) void {
-        self.a.deinit();
-        self.b.deinit();
-    }
-};
-
-const CRoaringSparseInputs = struct {
-    a: *c.roaring_bitmap_t,
-    b: *c.roaring_bitmap_t,
-
-    fn deinit(self: *CRoaringSparseInputs) void {
-        c.roaring_bitmap_free(self.a);
-        c.roaring_bitmap_free(self.b);
-    }
+    .{
+        .id = "rank",
+        .display_name = "rank (dense)",
+        .corpus = "1000000 deterministic rank probes over dense range 0..499999",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.rank",
+        .croaring_operation = "roaring_bitmap_rank",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = query_setup,
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_queries,
+        .operation = .rank,
+    },
+    .{
+        .id = "select",
+        .display_name = "select (dense)",
+        .corpus = "1000000 deterministic select probes over dense range 0..499999",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.select",
+        .croaring_operation = "roaring_bitmap_select",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = query_setup,
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_queries,
+        .operation = .select,
+    },
+    .{
+        .id = "rank-many",
+        .display_name = "rankMany (dense)",
+        .corpus = "200000 ascending probes over dense range 0..499999",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.rankMany",
+        .croaring_operation = "roaring_bitmap_rank_many",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = "bitmap, probes, and output buffer outside timing; rankMany inside timing",
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_array,
+        .followup = .calibration_pending,
+        .operation = .rank_many,
+    },
+    .{
+        .id = "range-cardinality-small",
+        .display_name = "rangeCardinality small (bitset)",
+        .corpus = "1000000 deterministic ranges up to 1023 values over a bitset container",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.rangeCardinality",
+        .croaring_operation = "roaring_bitmap_range_cardinality_closed",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = query_setup,
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_queries,
+        .operation = .range_cardinality_small,
+    },
+    .{
+        .id = "range-cardinality-large",
+        .display_name = "rangeCardinality large (bitset)",
+        .corpus = "1000000 deterministic ranges of 30000 to 49999 values over a bitset container",
+        .seed = 12345,
+        .rawr_operation = "RoaringBitmap.rangeCardinality",
+        .croaring_operation = "roaring_bitmap_range_cardinality_closed",
+        .allocation_class = .non_allocating,
+        .variants = &non_allocating_variants,
+        .setup_boundary = query_setup,
+        .teardown_boundary = query_teardown,
+        .validation_oracle = .exact_queries,
+        .operation = .range_cardinality_large,
+    },
+    .{
+        .id = "flip",
+        .display_name = "flip wide range (dense)",
+        .corpus = "flip closed range 100000..650000 over dense range 0..499999",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.flip",
+        .croaring_operation = "roaring_bitmap_flip_closed",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .flip,
+    },
+    .{
+        .id = "remove-range",
+        .display_name = "removeRange wide (dense)",
+        .corpus = "clone dense range 0..499999 then remove closed range 100000..650000",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.clone plus removeRange",
+        .croaring_operation = "roaring_bitmap_copy plus roaring_bitmap_remove_range_closed",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "input construction outside timing; clone and range removal inside timing",
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .followup = .allocator_and_calibration_pending,
+        .operation = .remove_range,
+    },
 };
 
 const RequestedTuple = struct {
@@ -187,9 +700,9 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.startsWith(u8, arg, "--row=")) {
             row_id = arg[6..];
         } else if (std.mem.startsWith(u8, arg, "--implementation=")) {
-            implementation = parseImplementation(arg[17..]) orelse return error.UnknownImplementation;
+            implementation = std.meta.stringToEnum(Implementation, arg[17..]) orelse return error.UnknownImplementation;
         } else if (std.mem.startsWith(u8, arg, "--allocator=")) {
-            allocator = parseAllocator(arg[12..]) orelse return error.UnknownAllocator;
+            allocator = std.meta.stringToEnum(AllocatorKind, arg[12..]) orelse return error.UnknownAllocator;
         } else {
             return error.UnknownArgument;
         }
@@ -225,6 +738,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn validateManifest() !void {
+    if (manifest.len != 38) return error.InvalidManifestRowCount;
     for (&manifest, 0..) |*row, i| {
         if (row.id.len == 0 or row.variants.len == 0 or row.batch_count == 0) return error.InvalidManifestRow;
         if (hasProtocolDelimiter(row.id) or
@@ -237,7 +751,6 @@ fn validateManifest() !void {
         {
             return error.InvalidManifestText;
         }
-
         for (manifest[i + 1 ..]) |other| {
             if (std.mem.eql(u8, row.id, other.id)) return error.DuplicateManifestRow;
         }
@@ -248,7 +761,6 @@ fn validateManifest() !void {
                 }
             }
         }
-
         if (row.reference) |reference| {
             if (!manifestHasTuple(reference.row_id, reference.variant)) return error.InvalidManifestReference;
         } else if (hasRawrVariant(row) and findCRoaringVariant(row) == null) {
@@ -257,14 +769,12 @@ fn validateManifest() !void {
     }
 }
 
-fn hasProtocolDelimiter(text: []const u8) bool {
-    return std.mem.indexOfAny(u8, text, "\t\r\n") != null;
+fn hasProtocolDelimiter(value: []const u8) bool {
+    return std.mem.indexOfAny(u8, value, "\t\r\n") != null;
 }
 
 fn hasRawrVariant(row: *const ManifestRow) bool {
-    for (row.variants) |variant| {
-        if (variant.implementation == .rawr) return true;
-    }
+    for (row.variants) |variant| if (variant.implementation == .rawr) return true;
     return false;
 }
 
@@ -290,44 +800,29 @@ fn printHeader() void {
 
 fn printManifest() void {
     for (&manifest) |*row| {
-        if (row.reference) |reference| {
-            bench_time.print("ROW\t{s}\t{s}\t{s}\t{d}\t{s}\t{s}\t{s}\t{s}\t{d}\t{s}\t{s}\t{s}\t{s}\t{s}-{s}\n", .{
-                row.id,
-                row.display_name,
-                row.corpus,
-                row.seed,
-                row.rawr_operation,
-                row.croaring_operation,
-                @tagName(row.allocation_class),
-                row.reporting_unit.name(),
-                row.batch_count,
-                row.setup_boundary,
-                row.teardown_boundary,
-                @tagName(row.validation_oracle),
-                reference.row_id,
-                @tagName(reference.variant.implementation),
-                @tagName(reference.variant.allocator),
-            });
-        } else {
-            bench_time.print("ROW\t{s}\t{s}\t{s}\t{d}\t{s}\t{s}\t{s}\t{s}\t{d}\t{s}\t{s}\t{s}\t-\t-\n", .{
-                row.id,
-                row.display_name,
-                row.corpus,
-                row.seed,
-                row.rawr_operation,
-                row.croaring_operation,
-                @tagName(row.allocation_class),
-                row.reporting_unit.name(),
-                row.batch_count,
-                row.setup_boundary,
-                row.teardown_boundary,
-                @tagName(row.validation_oracle),
-            });
-        }
+        const reference = row.reference;
+        bench_time.print("ROW\t{s}\t{s}\t{s}\t{d}\t{s}\t{s}\t{s}\t{s}\t{d}\t{s}\t{s}\t{s}\t{s}\t{s}\t{s}\t{s}\n", .{
+            row.id,
+            row.display_name,
+            row.corpus,
+            row.seed,
+            row.rawr_operation,
+            row.croaring_operation,
+            @tagName(row.allocation_class),
+            row.reporting_unit.name(),
+            row.batch_count,
+            row.setup_boundary,
+            row.teardown_boundary,
+            @tagName(row.validation_oracle),
+            if (reference) |value| value.row_id else "-",
+            if (reference) |value| @tagName(value.variant.implementation) else "-",
+            if (reference) |value| @tagName(value.variant.allocator) else "-",
+            @tagName(row.followup),
+        });
 
         for (row.variants) |variant| {
             if (variant.implementation == .rawr) {
-                const reference = row.reference orelse Reference{
+                const comparison = row.reference orelse Reference{
                     .row_id = row.id,
                     .variant = findCRoaringVariant(row) orelse unreachable,
                 };
@@ -335,9 +830,9 @@ fn printManifest() void {
                     row.id,
                     @tagName(variant.implementation),
                     @tagName(variant.allocator),
-                    reference.row_id,
-                    @tagName(reference.variant.implementation),
-                    @tagName(reference.variant.allocator),
+                    comparison.row_id,
+                    @tagName(comparison.variant.implementation),
+                    @tagName(comparison.variant.allocator),
                 });
             } else {
                 bench_time.print("TUPLE\t{s}\t{s}\t{s}\t-\t-\t-\n", .{
@@ -372,239 +867,45 @@ fn resolveTuple(row_id: []const u8, implementation: Implementation, allocator: A
     return error.UnknownRow;
 }
 
-fn parseImplementation(name: []const u8) ?Implementation {
-    if (std.mem.eql(u8, name, "rawr")) return .rawr;
-    if (std.mem.eql(u8, name, "croaring")) return .croaring;
-    return null;
-}
-
-fn parseAllocator(name: []const u8) ?AllocatorKind {
-    if (std.mem.eql(u8, name, "none")) return .none;
-    if (std.mem.eql(u8, name, "smp")) return .smp;
-    if (std.mem.eql(u8, name, "libc")) return .libc;
-    if (std.mem.eql(u8, name, "arena")) return .arena;
-    return null;
-}
-
 fn runTuple(requested: RequestedTuple) !u64 {
-    return switch (requested.row.operation) {
-        .sparse_and => runSparseAndTuple(requested),
-        .cardinality => runCardinalityTuple(requested),
-    };
-}
+    dashboard.parityPrepare(requested.row.operation, requested.variant.implementation);
+    defer dashboard.parityCleanup();
 
-fn initSparseValues(seed: u64) usize {
-    var prng = std.Random.DefaultPrng.init(seed);
-    for (sparse_values[0..]) |*value| value.* = prng.random().int(u32);
-    std.mem.sort(u32, sparse_values[0..], {}, std.sort.asc(u32));
-
-    var len: usize = 1;
-    for (sparse_values[1..]) |value| {
-        if (value != sparse_values[len - 1]) {
-            sparse_values[len] = value;
-            len += 1;
-        }
-    }
-    return len;
-}
-
-fn buildRawrSparseInputs(sparse_len: usize) !RawrSparseInputs {
-    var a = try RoaringBitmap.init(std.heap.smp_allocator);
-    errdefer a.deinit();
-    var b = try RoaringBitmap.init(std.heap.smp_allocator);
-    errdefer b.deinit();
-
-    const half = sparse_len / 2;
-    try a.addMany(sparse_values[0..half]);
-    try b.addMany(sparse_values[half / 2 .. sparse_len]);
-    return .{ .a = a, .b = b };
-}
-
-fn buildCRoaringSparseInputs(sparse_len: usize) !CRoaringSparseInputs {
-    const a = c.roaring_bitmap_create() orelse return error.OutOfMemory;
-    errdefer c.roaring_bitmap_free(a);
-    const b = c.roaring_bitmap_create() orelse return error.OutOfMemory;
-    errdefer c.roaring_bitmap_free(b);
-
-    const half = sparse_len / 2;
-    c.roaring_bitmap_add_many(a, half, sparse_values[0..half].ptr);
-    c.roaring_bitmap_add_many(b, sparse_len - half / 2, sparse_values[half / 2 .. sparse_len].ptr);
-    return .{ .a = a, .b = b };
-}
-
-fn runSparseAndTuple(requested: RequestedTuple) !u64 {
-    const sparse_len = initSparseValues(requested.row.seed);
-    const median_ns = switch (requested.variant.implementation) {
-        .rawr => rawr: {
-            var inputs = try buildRawrSparseInputs(sparse_len);
-            defer inputs.deinit();
-            const allocator = switch (requested.variant.allocator) {
-                .smp => std.heap.smp_allocator,
-                .libc => bench_time.cAllocator(),
-                else => return error.UnsupportedAllocator,
-            };
-            break :rawr try measure(runRawrSparseAnd, .{ &inputs, allocator }, requested.row.batch_count);
-        },
-        .croaring => croaring: {
-            var inputs = try buildCRoaringSparseInputs(sparse_len);
-            defer inputs.deinit();
-            break :croaring try measure(runCRoaringSparseAnd, .{&inputs}, requested.row.batch_count);
-        },
-    };
-
-    try validateSparseAnd(requested, sparse_len);
+    const median_ns = measure(requested);
+    try dashboard.parityValidate(requested.row.operation, requested.variant.allocator);
     return median_ns;
 }
 
-noinline fn runRawrSparseAnd(inputs: *const RawrSparseInputs, allocator: std.mem.Allocator) !u64 {
-    var result = try inputs.a.bitwiseAnd(allocator, &inputs.b);
-    defer result.deinit();
-    const cardinality = result.cardinality();
-    std.mem.doNotOptimizeAway(&result);
-    return cardinality;
-}
-
-noinline fn runCRoaringSparseAnd(inputs: *const CRoaringSparseInputs) !u64 {
-    const result = c.roaring_bitmap_and(inputs.a, inputs.b) orelse return error.OutOfMemory;
-    defer c.roaring_bitmap_free(result);
-    const cardinality = c.roaring_bitmap_get_cardinality(result);
-    std.mem.doNotOptimizeAway(result);
-    return cardinality;
-}
-
-fn validateSparseAnd(requested: RequestedTuple, sparse_len: usize) !void {
-    switch (requested.variant.implementation) {
-        .rawr => {
-            var rawr_inputs = try buildRawrSparseInputs(sparse_len);
-            defer rawr_inputs.deinit();
-            const allocator = switch (requested.variant.allocator) {
-                .smp => std.heap.smp_allocator,
-                .libc => bench_time.cAllocator(),
-                else => return error.UnsupportedAllocator,
-            };
-            var rawr_result = try rawr_inputs.a.bitwiseAnd(allocator, &rawr_inputs.b);
-            defer rawr_result.deinit();
-
-            var cr_inputs = try buildCRoaringSparseInputs(sparse_len);
-            defer cr_inputs.deinit();
-            const cr_result = c.roaring_bitmap_and(cr_inputs.a, cr_inputs.b) orelse return error.OutOfMemory;
-            defer c.roaring_bitmap_free(cr_result);
-            try expectPortableEqual(&rawr_result, cr_result);
-        },
-        .croaring => {
-            var cr_inputs = try buildCRoaringSparseInputs(sparse_len);
-            defer cr_inputs.deinit();
-            const cr_result = c.roaring_bitmap_and(cr_inputs.a, cr_inputs.b) orelse return error.OutOfMemory;
-            defer c.roaring_bitmap_free(cr_result);
-
-            var rawr_inputs = try buildRawrSparseInputs(sparse_len);
-            defer rawr_inputs.deinit();
-            var rawr_result = try rawr_inputs.a.bitwiseAnd(std.heap.smp_allocator, &rawr_inputs.b);
-            defer rawr_result.deinit();
-            try expectPortableEqual(&rawr_result, cr_result);
-        },
-    }
-}
-
-fn expectPortableEqual(rawr_result: *const RoaringBitmap, cr_result: *const c.roaring_bitmap_t) !void {
-    const allocator = std.heap.page_allocator;
-    const rawr_bytes = try rawr_result.serialize(allocator);
-    defer allocator.free(rawr_bytes);
-
-    const cr_len = c.roaring_bitmap_portable_size_in_bytes(cr_result);
-    if (rawr_bytes.len != cr_len) return error.SerializedSizeMismatch;
-    const cr_bytes = try allocator.alloc(u8, cr_len);
-    defer allocator.free(cr_bytes);
-    if (c.roaring_bitmap_portable_serialize(cr_result, @ptrCast(cr_bytes.ptr)) != cr_len) {
-        return error.SerializedSizeMismatch;
-    }
-    if (!std.mem.eql(u8, rawr_bytes, cr_bytes)) return error.CRoaringMismatch;
-}
-
-fn initCardinalityValues(seed: u64) void {
-    var prng = std.Random.DefaultPrng.init(seed);
-    for (cardinality_values[0..]) |*value| value.* = prng.random().int(u32);
-}
-
-fn buildRawrCardinalityBitmap() !RoaringBitmap {
-    var bitmap = try RoaringBitmap.init(std.heap.smp_allocator);
-    errdefer bitmap.deinit();
-    for (cardinality_values[0..]) |value| _ = try bitmap.add(value);
-    return bitmap;
-}
-
-fn buildCRoaringCardinalityBitmap() !*c.roaring_bitmap_t {
-    const bitmap = c.roaring_bitmap_create() orelse return error.OutOfMemory;
-    errdefer c.roaring_bitmap_free(bitmap);
-    for (cardinality_values[0..]) |value| c.roaring_bitmap_add(bitmap, value);
-    return bitmap;
-}
-
-fn runCardinalityTuple(requested: RequestedTuple) !u64 {
-    initCardinalityValues(requested.row.seed);
-    const median_ns = switch (requested.variant.implementation) {
-        .rawr => rawr: {
-            var bitmap = try buildRawrCardinalityBitmap();
-            defer bitmap.deinit();
-            break :rawr try measure(runRawrCardinality, .{&bitmap}, requested.row.batch_count);
-        },
-        .croaring => croaring: {
-            const bitmap = try buildCRoaringCardinalityBitmap();
-            defer c.roaring_bitmap_free(bitmap);
-            break :croaring try measure(runCRoaringCardinality, .{bitmap}, requested.row.batch_count);
-        },
-    };
-
-    try validateCardinality(requested);
-    return median_ns;
-}
-
-noinline fn runRawrCardinality(bitmap: *const RoaringBitmap) !u64 {
-    return bitmap.cardinality();
-}
-
-noinline fn runCRoaringCardinality(bitmap: *const c.roaring_bitmap_t) !u64 {
-    return c.roaring_bitmap_get_cardinality(bitmap);
-}
-
-fn validateCardinality(requested: RequestedTuple) !void {
-    switch (requested.variant.implementation) {
-        .rawr => {
-            var rawr_bitmap = try buildRawrCardinalityBitmap();
-            defer rawr_bitmap.deinit();
-            const cr_bitmap = try buildCRoaringCardinalityBitmap();
-            defer c.roaring_bitmap_free(cr_bitmap);
-            if (rawr_bitmap.cardinality() != c.roaring_bitmap_get_cardinality(cr_bitmap)) {
-                return error.CardinalityMismatch;
-            }
-        },
-        .croaring => {
-            const cr_bitmap = try buildCRoaringCardinalityBitmap();
-            defer c.roaring_bitmap_free(cr_bitmap);
-            var rawr_bitmap = try buildRawrCardinalityBitmap();
-            defer rawr_bitmap.deinit();
-            if (rawr_bitmap.cardinality() != c.roaring_bitmap_get_cardinality(cr_bitmap)) {
-                return error.CardinalityMismatch;
-            }
-        },
-    }
-}
-
-fn measure(comptime operation: anytype, args: anytype, batch_count: usize) !u64 {
-    for (0..warmup_runs) |_| try runBatch(operation, args, batch_count);
+fn measure(requested: RequestedTuple) u64 {
+    for (0..warmup_runs) |_| _ = runBatch(requested);
 
     var times: [timed_runs]u64 = undefined;
-    for (&times) |*elapsed| {
-        const start = bench_time.monotonicNanos();
-        try runBatch(operation, args, batch_count);
-        elapsed.* = bench_time.monotonicNanos() - start;
-    }
+    for (&times) |*elapsed| elapsed.* = runBatch(requested);
     std.mem.sort(u64, &times, {}, std.sort.asc(u64));
     return times[timed_runs / 2];
 }
 
-fn runBatch(comptime operation: anytype, args: anytype, batch_count: usize) !void {
-    var checksum: u64 = 0;
-    for (0..batch_count) |_| checksum +%= try @call(.auto, operation, args);
-    std.mem.doNotOptimizeAway(checksum);
+fn runBatch(requested: RequestedTuple) u64 {
+    if (dashboard.parityTiming(requested.row.operation) == .internal) {
+        var elapsed: u64 = 0;
+        for (0..requested.row.batch_count) |_| {
+            elapsed +%= dashboard.parityRun(
+                requested.row.operation,
+                requested.variant.implementation,
+                requested.variant.allocator,
+            );
+        }
+        std.mem.doNotOptimizeAway(elapsed);
+        return elapsed;
+    }
+
+    const start = bench_time.monotonicNanos();
+    for (0..requested.row.batch_count) |_| {
+        _ = dashboard.parityRun(
+            requested.row.operation,
+            requested.variant.implementation,
+            requested.variant.allocator,
+        );
+    }
+    return bench_time.monotonicNanos() - start;
 }

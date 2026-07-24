@@ -15,11 +15,11 @@ case "${1:-}" in
         printf '\nSaved to: %s\n' "$outfile"
         exit 0
         ;;
-    --parity-pilot) shift ;;
-    *) printf 'usage: %s [--parity-pilot]\n' "$0" >&2; exit 2 ;;
+    --parity|--parity-pilot) shift ;;
+    *) printf 'usage: %s [--parity]\n' "$0" >&2; exit 2 ;;
 esac
 if (( $# != 0 )); then
-    printf 'usage: %s [--parity-pilot]\n' "$0" >&2
+    printf 'usage: %s [--parity]\n' "$0" >&2
     exit 2
 fi
 
@@ -60,7 +60,13 @@ summary="${prefix}-summary.txt"
 : >"$process_rows"
 
 tuple_count="$(awk -F '\t' '$1 == "TUPLE" { count++ } END { print count + 0 }' "$manifest_file")"
-printf 'Accurate parity pilot: %s tuples, %s independent processes each\n' "$tuple_count" "$runs"
+row_count="$(awk -F '\t' '$1 == "ROW" { count++ } END { print count + 0 }' "$manifest_file")"
+if [[ "$row_count" != 38 ]]; then
+    printf 'expected 38 manifest rows, got %s\n' "$row_count" >&2
+    exit 1
+fi
+printf 'Accurate parity table: %s rows, %s tuples, %s independent processes each\n' \
+    "$row_count" "$tuple_count" "$runs"
 
 while IFS=$'\t' read -r kind row implementation allocator reference_row reference_impl reference_allocator; do
     [[ "$kind" == "TUPLE" ]] || continue
@@ -119,7 +125,7 @@ sort -t $'\t' -k1,1 -k2,2 -k3,3 -k6,6n "$process_rows" | awk -F '\t' '
 ' >"$aggregate_rows"
 
 {
-    printf 'Accurate Rawr vs CRoaring parity pilot\n'
+    printf 'Accurate Rawr vs CRoaring parity table\n'
     printf '======================================\n'
     printf 'Processes per tuple: %s\n' "$runs"
     cat "$header_file"
