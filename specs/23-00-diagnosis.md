@@ -31,6 +31,10 @@ the input that decides whether `23-01` does a perf fix or just corrects the row.
 - Canonical spec-22 protocol: **3 warmup / 21 timed / median**, **≥5 fresh processes**, full
   min/max range, on **M4 and Zen 4**. Iteration does not allocate → the single **rawr
   non-allocating** tuple vs CRoaring.
+- **One path per fresh worker process per run.** Each of the four paths is its own isolated
+  measurement — do **not** time all four sequentially in a single process, which would
+  reintroduce the process-sharing/allocator-history bias spec 22 eliminated. (Each path is a
+  distinct tuple in the per-`(row, impl, allocator)` isolation model.)
 - Normalize by the **actual deduplicated cardinality**, not the 1,000,000 attempted inserts →
   report **ns/value**.
 
