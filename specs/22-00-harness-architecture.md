@@ -27,8 +27,19 @@ these fields per row:
 - **One fresh process per `(row, implementation, allocator)` tuple** — the runner spawns a
   separate process for each, so rawr-SMP / rawr-libc / CRoaring never share process or
   allocator state.
-- **≥ 5 independent processes per tuple**, aggregated to the **median of per-process medians +
-  full min/max range** (range, not IQR — matching `run-bench-parity-isolated.sh`).
+- **Two-level aggregation.** Each process runs a **pinned internal protocol**; the controller
+  runs **≥ 5 independent processes per tuple** and aggregates the **median of per-process
+  medians + full min/max range** (range, not IQR — matching `run-bench-parity-isolated.sh`).
+- **Pin the internal timing protocol — not an implementation choice.** Fix the warmup count,
+  timed-sample count, and median calculation (**3 warmup / 21 timed / median** unless a
+  documented reason changes it), because earlier work proved 2/9 vs 3/21 materially changes SMP
+  results. **Print it in the header** (e.g. `protocol=3w/21t median`), identical across every
+  tuple and both hosts.
+- **The manifest is the executable source of truth.** One **machine-readable registry**
+  consumed by the worker; the controller enumerates rows via a **`--list`** (or equivalent)
+  mode; **no duplicated row list hardcoded in the shell script**. The worker emits **structured
+  output** per measurement containing: row ID, implementation, allocator, unit, batch count,
+  median.
 - **Validate without contaminating timing** — either a **separate validation process**, or
   **time first then validate untimed** before emitting the row. Never validate (which may
   allocate) before the timed region.
@@ -55,8 +66,18 @@ header. The complete inventory is `22-01`.
 - **Benchmark-only:** no production/library or vendored-source change; full build green under
   `ReleaseSafe` and `ReleaseFast`.
 
+## Validation
+
+- `zig build test`
+- `zig build -Doptimize=ReleaseSafe` and `zig build -Doptimize=ReleaseFast`
+- worker `--list` mode enumerates rows (here: the two pilot rows) — the controller consumes
+  this, and no row list is hardcoded in the shell
+- `scripts/run-compare-bench.sh` (or the pilot invocation) runs the two pilot rows per-tuple in
+  fresh processes and emits the table + header (`protocol=…`, `croaring-avx512=on/off`)
+- confirm on macOS Bash and Windows Git Bash
+
 ## Result to record
 
 The manifest schema and the working framework — `22-01`..`22-04` build on it. Findings and the
-canonical table land in the named durable artifact (e.g. `docs/parity-measurement.md`),
-not ignored `misc/`.
+canonical table land in the durable artifact **`docs/parity-measurement.md`**, not ignored
+`misc/`.

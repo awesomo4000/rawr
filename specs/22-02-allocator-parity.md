@@ -33,7 +33,16 @@ correct, matched allocator conditions.
   allocator scope (result-only / whole-op / named-boundary) matching its manifest entry.
 - Arena rows present and labeled, CRoaring baseline reused as specified.
 - Non-allocating rows report a single rawr number.
-- All rows still validated outside timing; results unchanged in value from `22-01` except where
-  the corrected allocator scope legitimately changes them (documented).
+- All rows still validated outside timing; **validated logical outputs remain unchanged** —
+  timing results are *expected* to change once the allocator scope is corrected, and that is
+  fine; only the computed set/cardinality must stay identical.
 - **Benchmark-only:** no production/library or vendored-source change; build green under
   `ReleaseSafe` and `ReleaseFast`.
+
+## Validation
+
+- `zig build test`; `zig build -Doptimize=ReleaseSafe`; `zig build -Doptimize=ReleaseFast`
+- `scripts/run-compare-bench.sh` shows rawr-SMP and rawr-libc columns for every allocating row,
+  arena rows labeled with the reused CRoaring baseline, and a single rawr number for
+  non-allocating rows
+- each row's logical output still validates against its oracle
