@@ -28,7 +28,10 @@ investigate codegen/harness shape, don't accept the ratio):
 - the board ratios (**1.675x M4, 1.20x Zen 4**) are a **lower-bound per host** for
   rawr-noinline / CR-in-C — the fair number must not come out *better* for rawr than the
   FFI-inflated board on either host.
-Disassembly confirms both canonical paths keep **one non-inlined public call per query**.
+Disassembly confirms both canonical paths keep **one non-inlined function boundary around the
+public operation per query** — not necessarily a call whose symbol is the public method: the
+rawr path calls a benchmark-only `noinline` wrapper, and `RoaringBitmap.select` may inline inside
+it. The point is one enforced non-inlined boundary per query on each side.
 
 ## Where rawr's select cost lives
 
@@ -51,8 +54,8 @@ residual.
 - The **matrix-selected public-API select ratio** on both hosts, with the four-path matrix +
   directional sanity checks passing (or a flagged codegen/harness issue), rawr's cost split
   container-skip vs intra-container, container/rank mix recorded.
-- **Benchmark-only:** no library API added; `zig build test`, `ReleaseSafe`, `ReleaseFast` green;
-  results in `docs/parity-measurement.md`.
+- **No production behavior / public API change:** `zig build test`; `zig build difftest`;
+  `ReleaseSafe` / `ReleaseFast` green; results in `docs/parity-measurement.md`.
 
 ## Result to record (feeds `24-01`)
 

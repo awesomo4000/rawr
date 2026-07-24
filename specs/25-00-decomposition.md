@@ -52,8 +52,15 @@ isolation; absolute medians + ranges; ns-level where applicable.
   and **enough attribution to choose a `25-01` fix or an explicit NO-GO**.
 - Whether any subset shares a single cause is **stated, not assumed**, on both hosts.
 - Codegen inspection (command / symbol / asm) recorded in `docs/parity-measurement.md`.
-- **Benchmark-only:** no production/library or vendored-source change; `zig build test`,
-  `ReleaseSafe`, `ReleaseFast` green.
+- **No production behavior or public API change during diagnosis.** Because the kernels under
+  test (`simdBitsetOp` / `simdBitsetOpLazy` / `countWords`) are private production source,
+  internal refactoring — or exposing them to the benchmark and gating the A/B variants
+  (inline-popcount on/off, `VEC_SIZE` sweep) — **is allowed provided the default production path
+  and public API stay unchanged**. (Prefer exercising the real kernels; if a benchmark-local
+  replica is used instead, disassembly must prove it matches production codegen.)
+- **Validation:** `zig build test`; `zig build difftest`; `ReleaseSafe` / `ReleaseFast` green;
+  and **re-run the six canonical rows on both hosts** after diagnostics to confirm the changes
+  did not alter their normal shape.
 
 ## Result to record (feeds `25-01`)
 
