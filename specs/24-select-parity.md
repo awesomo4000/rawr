@@ -27,7 +27,9 @@ so the fairness step is a **call-boundary matrix**, not a single wrapper.
 
 1. **Call-boundary matrix (four paths).** Separate language-boundary, ordinary function-call,
    and implementation costs:
-   - **rawr inline loop** — `bm.select(query)` inlined into the loop;
+   - **rawr inline loop** — `select` **forced-inline** (`@call(.always_inline, …)` or equivalent),
+     **confirmed by disassembly** to be incorporated into the loop (a bare `bm.select()` does not
+     guarantee inlining);
    - **rawr via a `noinline` select wrapper** — same rawr kernel, forced non-inlined call;
    - **CRoaring via the current Zig loop** — per-query Zig→C FFI (the board's current path);
    - **CRoaring via an in-C loop** — one FFI call, loop in C.
@@ -38,8 +40,9 @@ so the fairness step is a **call-boundary matrix**, not a single wrapper.
    materially, investigate codegen/harness shape rather than accept the ratio:
    - rawr-inline **no slower** than rawr-noinline;
    - CR-in-C **no slower** than the repeated Zig→C path (or their ranges overlap);
-   - the existing **1.675x is a lower-bound expectation** for rawr-noinline / CR-in-C — the fair
-     comparison should not come out *better* for rawr than the FFI-inflated board number.
+   - the existing board ratios (**1.675x M4, 1.20x Zen 4**) are a **lower-bound expectation per
+     host** for rawr-noinline / CR-in-C — the fair comparison should not come out *better* for
+     rawr than the FFI-inflated board number on **either** host.
    Confirm by **disassembly** that both selected canonical paths retain **one non-inlined public
    call per query**.
 2. **Where rawr's select cost goes.** `select(rank)` finds the value at sorted position `rank`:

@@ -114,9 +114,11 @@ it" is the deliverable.
 
 ## Acceptance
 
-- **Phase 1 GO:** each of the six rows' M4 gap attributed to a **component** (alloc / clone /
-  traversal / word kernel / cardinality-repair / conversion) **and** a cause, with **whether any
-  subset shares a single cause** stated (not assumed), on both hosts, and the codegen inspection
+- **Phase 1 GO:** for each of the six rows — **supported attribution where the evidence exists**
+  (component: alloc / clone / traversal / word kernel / cardinality-repair / conversion, + cause),
+  **every remaining residual quantified and named** (do **not** invent a speculative cause to fill
+  the checklist), and **enough attribution to choose a production fix or an explicit NO-GO**;
+  whether any subset shares a single cause stated (not assumed), on both hosts, codegen inspection
   recorded in `docs/parity-measurement.md`.
 - **Phase 2 GO (if attempted):** the affected rows reach **≤ 1.10x on M4** with **no regression
   on Zen 4** (and no other canonical row worsening >5% vs the **latest committed corrected parity
