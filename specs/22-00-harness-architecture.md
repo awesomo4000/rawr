@@ -18,6 +18,9 @@ these fields per row:
 - **rawr operation** and **CRoaring operation** (the matched pair);
 - **allocating / non-allocating** classification;
 - **allocator variants** (rawr SMP, rawr libc, CRoaring, rawr arena where applicable);
+- **reference row** (optional) — `reference_row_id` + `reference_variant`, for rows that reuse
+  another row's result. The three arena rows reuse their base row's CRoaring baseline, so the
+  controller reads it from here rather than hardcoding the mapping;
 - **setup / teardown timing boundaries** (what is inside vs outside the timed region);
 - **validation oracle** (byte-identity vs logical-equality, against what);
 - **batch count + reporting unit** (`ms` or `ns/op`).
@@ -30,11 +33,10 @@ these fields per row:
 - **Two-level aggregation.** Each process runs a **pinned internal protocol**; the controller
   runs **≥ 5 independent processes per tuple** and aggregates the **median of per-process
   medians + full min/max range** (range, not IQR — matching `run-bench-parity-isolated.sh`).
-- **Pin the internal timing protocol — not an implementation choice.** Fix the warmup count,
-  timed-sample count, and median calculation (**3 warmup / 21 timed / median** unless a
-  documented reason changes it), because earlier work proved 2/9 vs 3/21 materially changes SMP
-  results. **Print it in the header** (e.g. `protocol=3w/21t median`), identical across every
-  tuple and both hosts.
+- **Pin the internal timing protocol — exactly `3 warmup / 21 timed / median`.** Not an
+  implementation choice and not "unless": earlier work proved 2/9 vs 3/21 materially changes SMP
+  results, so changing this requires a **spec amendment and rerunning both hosts**. **Print it in
+  the header** (`protocol=3w/21t median`), identical across every tuple and both hosts.
 - **The manifest is the executable source of truth.** One **machine-readable registry**
   consumed by the worker; the controller enumerates rows via a **`--list`** (or equivalent)
   mode; **no duplicated row list hardcoded in the shell script**. The worker emits **structured
@@ -49,10 +51,10 @@ these fields per row:
 
 ### Two pilot rows (prove the framework)
 
-Implement the schema + framework end-to-end on **one allocating row** (e.g. `bitwiseAnd
-(sparse)`, with SMP + libc) and **one tiny row** (e.g. `cardinality`, batched → ns/op) — enough
-to exercise per-tuple isolation, validation-outside-timing, both reporting units, and the
-header. The complete inventory is `22-01`.
+Implement the schema + framework end-to-end on exactly these two rows — **`bitwiseAnd (sparse)`**
+(allocating, SMP + libc) and **`cardinality`** (tiny, batched → ns/op) — enough to exercise
+per-tuple isolation, validation-outside-timing, both reporting units, and the header. The
+complete inventory is `22-01`.
 
 ## Acceptance
 
@@ -75,6 +77,19 @@ header. The complete inventory is `22-01`.
 - `scripts/run-compare-bench.sh` (or the pilot invocation) runs the two pilot rows per-tuple in
   fresh processes and emits the table + header (`protocol=…`, `croaring-avx512=on/off`)
 - confirm on macOS Bash and Windows Git Bash
+
+## Checklist
+
+- [ ] Manifest schema defined (fields incl. optional `reference_row_id`/`reference_variant`)
+- [ ] Machine-readable registry + worker `--list` mode; no row list hardcoded in shell
+- [ ] Per-`(row, impl, allocator)` fresh-process runner; ≥5 processes/tuple
+- [ ] Aggregation = median of per-process medians + full min/max range
+- [ ] Internal protocol fixed at `3w/21t median`, printed in header
+- [ ] Validation runs outside the timed region
+- [ ] Header records target/CPU + `croaring-avx512=on/off`
+- [ ] Pilot rows `bitwiseAnd (sparse)` and `cardinality` produce validated table rows
+- [ ] Runs under macOS Bash and Windows Git Bash
+- [ ] `zig build test`, ReleaseSafe, ReleaseFast all green; benchmark-only
 
 ## Result to record
 

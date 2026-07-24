@@ -52,3 +52,15 @@ final trustworthiness.**
   row reports `ns/op` with ≥ 1 ms per timed sample on each host
 - validate that tiny-query results still match their oracle (anti-hoisting did not change the
   computed value)
+
+## Checklist
+
+- [ ] Sub-clock rows identified and batched → `ns/op`; batch count recorded in the manifest
+- [ ] Fixed identical batch count both sides; ≥ 1 ms **per timed sample on both** M4 and Zen 4
+      (raise shared count and rerun both if under)
+- [ ] Stateful ops (`flip`/`removeRange`/in-place) reset state consistently between repetitions
+- [ ] Genuinely tiny invariant queries (`cardinality`): symmetric non-inline/opaque call
+      boundaries + runtime-varying inputs
+- [ ] `contains` and other already-substantial rows keep their existing workload (not batched)
+- [ ] No `0.00 ms` rows remain; calibrated rows still validate against their oracle
+- [ ] `zig build test`, ReleaseSafe, ReleaseFast all green; benchmark-only

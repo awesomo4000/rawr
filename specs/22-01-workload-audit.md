@@ -71,3 +71,13 @@ matching a previous figure.
   above
 - `scripts/run-compare-bench.sh` produces the complete functional table; every row shows a
   validated result (no unhandled/oracle-failing rows)
+
+## Checklist
+
+- [ ] Manifest populated for all 38 rows (each: corpus/seed, matched op pair, allocating class,
+      allocator variants, oracle, timing boundaries)
+- [ ] `--list` emits exactly 38 rows matching the inventory
+- [ ] Every row ported; runs per-tuple in ≥5 fresh processes; validated outside timing
+- [ ] Complete functional table produced
+- [ ] Rows needing allocator side-by-side / `ns/op` flagged for `22-02` / `22-03`
+- [ ] `zig build test`, ReleaseSafe, ReleaseFast all green; benchmark-only

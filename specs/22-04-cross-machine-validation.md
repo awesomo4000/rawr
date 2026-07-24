@@ -45,6 +45,16 @@ accurate runner.
 - both per-host tables committed to `docs/parity-measurement.md`; `bench_croaring` demoted to a
   screening dashboard in the docs
 
+## Checklist
+
+- [ ] Full 38-row table runs and validates on **both** M4 and Zen 4
+- [ ] Each host's header records its effective feature config (`croaring-avx512=on/off`, rawr
+      `-Dcpu=native`)
+- [ ] `run-compare-bench.sh` canonical and portable (macOS Bash + Windows Git Bash)
+- [ ] Per-host tables committed to `docs/parity-measurement.md`
+- [ ] `bench_croaring` documented as a screening dashboard, not the oracle
+- [ ] `zig build test`, ReleaseSafe, ReleaseFast green on both hosts; benchmark-only
+
 ## Result
 
 The accurate, cross-validated parity board becomes the standing record — every row measured

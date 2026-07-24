@@ -30,8 +30,11 @@ correct, matched allocator conditions.
 ## Acceptance
 
 - Every allocating row reports **rawr-SMP and rawr-libc** against CRoaring-libc, with the
-  allocator scope (result-only / whole-op / named-boundary) matching its manifest entry.
-- Arena rows present and labeled, CRoaring baseline reused as specified.
+  allocator scope (result-only / whole-op / named-boundary) matching its manifest entry. **The
+  supplemental arena rows are the exception** — each is a single `rawr-arena` variant; their
+  SMP/libc columns come from the corresponding **base row**, not repeated on the arena row.
+- Arena rows present and labeled; the CRoaring baseline is read from the arena row's
+  `reference_row_id` / `reference_variant`, not hardcoded.
 - Non-allocating rows report a single rawr number.
 - All rows still validated outside timing; **validated logical outputs remain unchanged** —
   timing results are *expected* to change once the allocator scope is corrected, and that is
@@ -46,3 +49,14 @@ correct, matched allocator conditions.
   arena rows labeled with the reused CRoaring baseline, and a single rawr number for
   non-allocating rows
 - each row's logical output still validates against its oracle
+
+## Checklist
+
+- [ ] Allocator scope per row follows the manifest (result-only / whole-op / named-boundary)
+- [ ] Every allocating row (except arena) reports rawr-SMP + rawr-libc vs CRoaring-libc
+- [ ] Construction ops (`add`/`addMany`/`deserialize`) run wholly under the variant allocator
+- [ ] Arena rows: single `rawr-arena` variant; base row provides SMP/libc; CRoaring baseline via
+      `reference_row_id`/`reference_variant`
+- [ ] Non-allocating rows report a single rawr number
+- [ ] Validated logical outputs unchanged (timing may change)
+- [ ] `zig build test`, ReleaseSafe, ReleaseFast all green; benchmark-only
