@@ -28,7 +28,7 @@ not a rawr kernel deficiency. This must be resolved before attributing anything 
 
 ## Phase 1 — Diagnosis (benchmark-only; canonical harness + focused split)
 
-Measure **four** paths so the model tax and the like-for-like kernel gap are both quantifiable.
+Measure **four** paths so the within-implementation pull-vs-push API-model delta and the like-for-like kernel gap are both quantifiable.
 All measured correctly:
 
 - **rawr pull** — `iterator().next()` loop, local checksum, iterator state built **inside** the
@@ -38,7 +38,7 @@ All measured correctly:
   the shape a real `forEach` would take. Note this is not identical work to CRoaring push: rawr
   can **inline** its sink where `roaring_iterate` uses a **runtime function pointer** — a real
   (language) difference to **report explicitly**, not hide. Without this path there is no rawr
-  push number and the model tax cannot be computed; Phase 2 decides whether it deserves a public
+  push number and the within-implementation pull-vs-push API-model delta cannot be computed; Phase 2 decides whether it deserves a public
   API.
 - **CRoaring pull** — a benchmark-only **C wrapper** that stack-initializes a
   `roaring_uint32_iterator_t`, runs the **complete** pull loop **in C**, and returns a **local**
@@ -57,9 +57,10 @@ untimed validation pass** (see Constraints). Normalize by the **actual deduplica
 cardinality**, not the 1,000,000 attempted inserts → report **ns/value**.
 
 From these:
-- **within-implementation pull-vs-push delta** = pull − push on each side (rawr, CRoaring) — the
-  complete **API-model** difference **including callback dispatch** (rawr's inline comptime sink,
-  CRoaring's runtime function-pointer callback), **not** a pure iterator-state tax;
+- **within-implementation pull-vs-push API-model delta** = pull − push on each side (rawr,
+  CRoaring) — the complete **API-model** difference **including callback dispatch** (rawr's
+  inline comptime sink, CRoaring's runtime function-pointer callback), **not** a pure
+  iterator-state tax;
 - **like-for-like iterator comparison** = **rawr-pull vs CRoaring-pull** — the clean kernel
   comparison (both pull, both accumulate directly);
 - **push API comparison** = **rawr-push vs CRoaring-push** — **not** like-for-like: rawr's
@@ -78,7 +79,7 @@ hosts" is the deliverable even if no fix follows.
 
 ## Phase 2 — Fix (conditional; lever follows the attribution)
 
-- **If the model tax dominates:** add a **bulk push API** (a `forEach`-style call mirroring the
+- **If the within-implementation pull-vs-push API-model delta dominates:** add a **bulk push API** (a `forEach`-style call mirroring the
   diagnostic per-container traversal). Additive — the existing pull `iterator()` semantics are
   unchanged. It does **not** auto-accelerate `toArray`/serialization (dedicated loops).
 - **If rawr's pull iterator is genuinely slower like-for-like:** tighten `next()` — reduce
@@ -102,7 +103,7 @@ hosts" is the deliverable even if no fix follows.
   traversed values into a caller-provided buffer** — an aggregate oracle like
   `roaring_bitmap_to_uint32_array` alone does **not** prove the new C wrappers *themselves*
   traverse correctly. Compare **each path's buffer** to the **sorted-value oracle** (equal count,
-  full sequence equality); the timed paths' count + rolling hash must agree too. Differential
+  full sequence equality); the timed paths' count + wrapping sum must agree too (rolling hash and full-sequence comparison remain untimed). Differential
   (rawr iteration == CRoaring order == sorted values) stays green.
 - **If Phase 2 changes `Iterator.next()`:** correctness coverage for **array, bitset, and run**
   containers (and a mixed bitmap), even though the canonical perf corpus is array-dominated — a
