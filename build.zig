@@ -210,6 +210,33 @@ pub fn build(b: *std.Build) void {
     );
     bench_parity_step.dependOn(&b.addInstallArtifact(bench_parity_exe, .{}).step);
 
+    // Manifest-backed fresh-process parity worker used by run-compare-bench.sh.
+    const bench_parity_worker_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_parity_worker.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_parity_worker_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_parity_worker_mod, target);
+    addTranslatedCImport(b, bench_parity_worker_mod, .{
+        .header = "tools/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_parity_worker_exe = b.addExecutable(.{
+        .name = "bench_parity_worker",
+        .root_module = bench_parity_worker_mod,
+    });
+    const bench_parity_worker_step = b.step(
+        "bench-parity-worker",
+        "Build manifest-backed CRoaring parity worker",
+    );
+    bench_parity_worker_step.dependOn(&b.addInstallArtifact(bench_parity_worker_exe, .{}).step);
+
     // Focused skewed array-cardinality diagnosis harness.
     const bench_and_card_diag_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_and_cardinality_diag.zig"),

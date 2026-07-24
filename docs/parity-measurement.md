@@ -152,6 +152,33 @@ CRoaring differential validation, and full `ReleaseSafe` and `ReleaseFast` build
 on the M4 and Zen 4 hosts. The skewed cardinality gap is closed at the kernel level; the
 remaining sub-microsecond full-API difference on Zen 4 is at the benchmark clock scale.
 
+## Accurate harness rollout
+
+The spec 22 harness replaces process-shared parity measurements incrementally. Its worker
+owns a machine-readable row manifest, exposes rows and tuples through `--list`, and accepts
+exactly one `(row, implementation, allocator)` tuple per process. Each process uses a fixed
+3-warmup/21-timed protocol, validates only after timing, and emits one structured result after
+validation succeeds. The controller runs five independent processes per tuple and reports the
+median of process medians with the full process range.
+
+The initial architecture pilot covers sparse AND (rawr SMP, rawr libc, and CRoaring libc) and
+cardinality (rawr and CRoaring). On the Apple M4 pilot, sparse AND measured 0.581
+[0.577, 0.612] ms for rawr SMP, 0.931 [0.917, 0.935] ms for rawr libc, and 0.690
+[0.680, 0.752] ms for CRoaring. Cardinality is normalized to `ns/op`; its final cross-host
+batch calibration belongs to spec 22-03. The same controller passed under Windows Git Bash on
+Zen 4, where sparse AND measured 0.780 [0.778, 0.787] ms for rawr SMP, 2.102
+[2.054, 2.164] ms for rawr libc, and 1.554 [1.522, 1.867] ms for CRoaring. These two rows prove
+the worker and aggregation protocol and are not yet the canonical 38-row parity board.
+
+During the rollout, run the pilot explicitly:
+
+```sh
+./scripts/run-compare-bench.sh --parity-pilot
+```
+
+Without `--parity-pilot`, the script retains the existing broad screening-dashboard behavior
+until the complete manifest becomes canonical in spec 22-04.
+
 ## Recommendation
 
 Keep `bench_croaring` as a broad regression dashboard, but qualify performance gaps in a
