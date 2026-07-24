@@ -2,92 +2,109 @@
 
 # Spec 23: Iterate parity — diagnosis-first
 
-Close the largest real default-SMP gap on the accurate parity board: **iterate**, 1.52x
-(M4) / 1.88x (Zen 4) rawr/CRoaring. Persistent on **both** architectures, so it is a
-genuine implementation gap, not an M4 codegen quirk — and high-leverage, since iteration
-underlies `toArray`, serialization walks, and any consumer scanning the set.
+Address the **largest persistent reported gap** on the accurate parity board: **iterate**,
+1.52x (M4) / 1.88x (Zen 4) rawr/CRoaring, present on **both** architectures. Whether it is a
+*real* rawr gap is exactly what this spec determines — so it is **diagnosis first, no
+preselected cause** (the 20a / 21 discipline: verify the comparison is fair and attribute the
+cost before touching code). A fix is a conditional second phase.
 
-**Diagnosis first, no preselected cause** (the 20a / 21 discipline: verify the comparison
-is fair and attribute the cost before touching code). A fix is a conditional second phase.
+Scope note: `iterate` is the idiomatic pull-iteration path (`while (it.next()) |v|`). It does
+**not** underlie `toArray` or serialization — those use their own dedicated per-container
+loops, not `Iterator.next()` — so closing this gap helps the pull-iteration path, not those
+rows.
 
 ## The first thing to check — are we comparing like for like?
 
 The two benched paths use **different iteration models**:
 
 - **rawr** — `bm.iterator()` then a pull `while (it.next()) |v|` loop (`src/bitmap.zig:2218`,
-  `:2325`): one `next()` call per value, saving/restoring iterator state (container index,
-  intra-container position) across every value.
+  `:2325`): one `next()` call per value, saving/restoring iterator state across every value.
 - **CRoaring** — `roaring_iterate(bm, callback, …)` (`src/bench_croaring.zig:1164`): a **push**
-  model where CRoaring drives a tight per-container inner loop and calls the callback per
-  value, with no per-value state save/restore between values in a container.
+  model where CRoaring drives a tight per-container inner loop, no per-value state save/restore.
 
-CRoaring's **push** `roaring_iterate` is typically faster than its **pull**
-`roaring_uint32_iterator`. So an unknown share of the 1.5–1.9x may be a **model mismatch in
-the benchmark**, not a rawr kernel deficiency — the same shape as the sparse-AND/OR harness
-artifacts. This must be resolved before attributing anything to rawr's iterator.
+CRoaring's **push** `roaring_iterate` is typically faster than its own **pull** iterator, so an
+unknown share of the 1.5–1.9x may be a **benchmark model mismatch** (the sparse-AND/OR shape),
+not a rawr kernel deficiency. This must be resolved before attributing anything to rawr.
 
-## Phase 1 — Diagnosis (on the canonical harness + a focused split)
+## Phase 1 — Diagnosis (benchmark-only; canonical harness + focused split)
 
-1. **Iteration-model parity.** Measure both comparisons, per-value normalized:
-   - rawr pull `next()` **vs CRoaring `roaring_uint32_iterator`** (pull ↔ pull, apples-to-apples);
-   - rawr's bulk/callback path *if one exists* (else note its absence) **vs CRoaring
-     `roaring_iterate`** (push ↔ push).
-   Quantify how much of the board's 1.5–1.9x is the pull-vs-push model vs a real
-   like-for-like gap. If a large share is model mismatch, the board row and/or rawr's API —
-   not its kernel — is the thing to change.
-2. **Container mix of the corpus.** The 1M-value iterate corpus — is it bitset-, array-, or
-   run-dominated? That decides which inner loop dominates the number (bitset word-scan vs
-   array walk vs run expansion).
-3. **Where the time goes (kernel-level).** Within the dominant container type, split
-   **per-value `next()` state overhead** (the pull-model tax) from the **container inner
-   loop** (bitset `ctz` word-advance / array copy). Compare rawr's per-container iteration
-   against CRoaring's equivalent. Inspect generated code for the hot loop where useful.
-   Report absolute medians + ranges (and ns/value) with a **named residual**, not forced-100%.
+Measure **four** paths so the model tax and the like-for-like kernel gap are both quantifiable.
+All measured correctly:
 
-Phase 1 stands alone: "how much is model vs kernel, and where the kernel cost is" is the
-deliverable even if no fix follows.
+- **rawr pull** — `iterator().next()` loop, local checksum, iterator state built **inside** the
+  timed region.
+- **rawr push (diagnostic)** — a **benchmark-only direct per-container traversal** in Zig
+  (walk containers, emit values, context-owned checksum). Without this there is no rawr push
+  number and the model tax cannot be computed; Phase 2 decides whether it deserves a public API.
+- **CRoaring pull** — measured via a **small benchmark-only C wrapper** that stack-initializes
+  `roaring_uint32_iterator`, runs the **complete** pull loop **in C**, and returns its checksum.
+  Do **not** call `roaring_uint32_iterator_advance` per value from Zig — that measures a million
+  Zig→C FFI calls, not iteration.
+- **CRoaring push** — `roaring_iterate` (the current board path).
 
-## Phase 2 — Fix (conditional on Phase 1, lever follows the attribution)
+Symmetry requirements on every path: **local/context-owned checksums** (not a global),
+iterator/scan state constructed **inside** the timed scan, and **identical checksums validated
+afterward** (outside timing). Normalize by the **actual deduplicated cardinality**, not the
+1,000,000 attempted inserts → report **ns/value**.
 
-- **If a large share is the pull-vs-push model:** add a **bulk / callback iteration path** to
-  rawr (a `forEach`-style API mirroring `roaring_iterate`'s tight per-container loop). The
-  idiomatic pull `iterator()` stays; the bulk path closes the benchmark *and* speeds real
-  consumers (`toArray`, serialization). This is an **additive public API**, not a change to
-  the existing iterator's semantics.
-- **If rawr's pull iterator is genuinely slower than CRoaring's pull iterator:** tighten
-  `next()` — reduce per-value state work, faster bitset word-advance, a per-container fast
-  path — without changing iteration semantics.
-- Threshold/dispatch and other container types only if the attribution implicates them.
+From these:
+- **model tax** = pull − push on each side (rawr, CRoaring);
+- **like-for-like kernel gap** = rawr-pull vs CRoaring-pull, and rawr-push vs CRoaring-push.
 
-## Constraints
+### Corpus characterization (expect array-dominated)
 
-- **Correctness:** iteration yields the same sorted value sequence; a differential check
-  (rawr iteration == CRoaring order == `toArray`) stays green. Any new bulk API is validated
-  against the pull iterator and CRoaring.
-- Measured on the **canonical spec-22 harness**, default **rawr-SMP** vs CRoaring, five
-  fresh-process runs median + range, on **M4 and Zen 4** (the gap must close on both, since
-  it is present on both).
-- **No regression** on `toArray` / serialization / other rows; existing `iterator()` semantics
-  unchanged (a fix is additive or an internal tightening).
+The corpus inserts ~1M random values across 65,536 high keys — averaging ~15 values/container,
+so it should be **overwhelmingly array containers**. Record exact **array / bitset / run
+counts** mechanically, but the dominant inner loop is the **array walk** — do **not** spend
+effort on bitset `ctz` attribution unless the counts actually implicate bitsets.
+
+Phase 1 stands alone: "how much is model vs like-for-like kernel, on array containers, on both
+hosts" is the deliverable even if no fix follows.
+
+## Phase 2 — Fix (conditional; lever follows the attribution)
+
+- **If the model tax dominates:** add a **bulk push API** (a `forEach`-style call mirroring the
+  diagnostic per-container traversal). Additive — the existing pull `iterator()` semantics are
+  unchanged. It does **not** auto-accelerate `toArray`/serialization (dedicated loops).
+- **If rawr's pull iterator is genuinely slower like-for-like:** tighten `next()` — reduce
+  per-value state work, per-container fast path — without changing iteration semantics.
+- Other container types / dispatch only if the counts and attribution implicate them.
+
+### Canonical-row outcome (pin it)
+
+- If **model mismatch is confirmed**, the existing `iterate` row becomes **rawr pull vs
+  CRoaring pull** (like-for-like), correcting the comparison.
+- If a **public push API** is added, push iteration gets a **separate manifest row**. That
+  changes the current **38-row** manifest/count checks (`--list` → 39) and the canonical
+  `docs/parity-measurement.md` — call it out explicitly and update both.
+
+## Constraints / measurement
+
+- **Correctness:** every path yields the same value sequence — checksums validated equal, and a
+  differential check (rawr iteration == CRoaring order) stays green.
+- Canonical spec-22 protocol: **3 warmup / 21 timed / median**, **≥5 fresh processes**, full
+  min/max range, default **rawr-SMP** vs CRoaring, on **M4 and Zen 4** (the gap is on both).
+- Phase 1 is **benchmark-only** (the C wrapper and the rawr diagnostic traversal add no library
+  API); a Phase-2 `forEach` would be an additive production API.
 
 ## Acceptance
 
-- **Phase 1 GO:** the 1.5–1.9x is split into model-mismatch vs like-for-like kernel gap, with
-  the container mix and the dominant cost named, on both hosts.
-- **Phase 2 GO (if attempted):** the default rawr-SMP iterate ratio moves materially toward
-  parity on **both** M4 and Zen 4, no regression elsewhere, differential green. If the honest
-  finding is "the board compared pull-vs-push and like-for-like is already near parity," that
-  is a valid terminal outcome — correct the row's comparison and record it rather than
-  optimizing a phantom.
+- **Phase 1 GO:** the reported 1.5–1.9x is decomposed into **model tax vs like-for-like kernel
+  gap** (all four paths), with the container mix recorded, on both hosts.
+- **Phase 2 GO (if attempted):** the like-for-like default rawr-SMP iterate ratio is **≤ 1.10x
+  on both M4 and Zen 4**, with **no adjacent canonical row worsening by >5%**, differential
+  green. If the finding is "like-for-like is already near parity and the board was comparing
+  pull-vs-push," that is a valid terminal outcome — **correct the row** and record it rather
+  than optimizing a kernel that isn't slow.
 
 ## NO-GO
 
-- Phase 1 shows the gap is essentially a benchmark model mismatch and like-for-like iteration
-  is at parity → fix the row's comparison (or add the bulk API purely for consumer ergonomics),
-  do not chase a kernel that isn't slow.
+- Phase 1 shows the gap is essentially the benchmark model mismatch and like-for-like iteration
+  is already at/near parity → fix the row's comparison (and optionally add the bulk API for
+  ergonomics), do not chase a kernel that isn't slow.
 
 ## Estimate
 
-S for Phase 1 (model-parity + attribution on the existing harness). Phase 2 is S–M: a bulk
-`forEach` API is small and additive; a `next()` tightening is a focused kernel change — chosen
-by the diagnosis.
+S for Phase 1 (four measured paths incl. the C pull wrapper + rawr diagnostic traversal, on the
+existing harness). Phase 2 is S–M: a bulk `forEach` is small and additive; a `next()` tightening
+is a focused kernel change — chosen by the diagnosis.
