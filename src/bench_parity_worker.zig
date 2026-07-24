@@ -338,11 +338,12 @@ const manifest = [_]ManifestRow{
         .seed = 54321,
         .rawr_operation = "RoaringBitmap.repairAfterLazy",
         .croaring_operation = "roaring_bitmap_repair_after_lazy",
-        .allocation_class = .non_allocating,
-        .variants = &non_allocating_variants,
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
         .setup_boundary = "inputs and lazy result construction outside timing; repair inside timing",
         .teardown_boundary = "result deinit/free outside the internally timed interval",
         .validation_oracle = .portable_bytes,
+        .followup = .allocator_pending,
         .operation = .lazy_or_repair_only,
     },
     .{
@@ -741,6 +742,9 @@ fn validateManifest() !void {
     if (manifest.len != 38) return error.InvalidManifestRowCount;
     for (&manifest, 0..) |*row, i| {
         if (row.id.len == 0 or row.variants.len == 0 or row.batch_count == 0) return error.InvalidManifestRow;
+        if (dashboard.parityRequiresAllocator(row.operation) != (row.allocation_class == .allocating)) {
+            return error.InvalidAllocationClass;
+        }
         if (hasProtocolDelimiter(row.id) or
             hasProtocolDelimiter(row.display_name) or
             hasProtocolDelimiter(row.corpus) or
@@ -755,6 +759,9 @@ fn validateManifest() !void {
             if (std.mem.eql(u8, row.id, other.id)) return error.DuplicateManifestRow;
         }
         for (row.variants, 0..) |variant, variant_index| {
+            if ((row.allocation_class == .allocating) == (variant.allocator == .none)) {
+                return error.InvalidAllocatorVariant;
+            }
             for (row.variants[variant_index + 1 ..]) |other| {
                 if (variant.implementation == other.implementation and variant.allocator == other.allocator) {
                     return error.DuplicateManifestVariant;

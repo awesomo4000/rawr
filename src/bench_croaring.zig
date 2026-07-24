@@ -1251,6 +1251,25 @@ pub fn parityTiming(row: ParityRow) ParityTiming {
     };
 }
 
+pub fn parityRequiresAllocator(row: ParityRow) bool {
+    return switch (row) {
+        .contains_hit,
+        .contains_miss,
+        .array_balanced_and_cardinality,
+        .array_skewed_and_cardinality,
+        .iterate,
+        .to_array,
+        .cardinality,
+        .rank,
+        .select,
+        .rank_many,
+        .range_cardinality_small,
+        .range_cardinality_large,
+        => false,
+        else => true,
+    };
+}
+
 pub fn parityPrepare(row: ParityRow, implementation: ParityImplementation) void {
     initTestData();
     switch (row) {
