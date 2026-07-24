@@ -7,6 +7,16 @@ skewed `andCardinality` is the **one remaining real gap** — rawr is at or ahea
 everywhere else. It is a genuine algorithm/kernel gap (the op does **not allocate** in its
 timed path, so it never carried the broad-harness allocator-history penalty).
 
+> **Outcome (2026-07-23) — CLOSED; parity reached across the board.** `21-00` attributed the
+> gap to the galloping-count kernel (dispatch at parity, generalizes across ratios/overlaps);
+> `21-01`'s fused cached-cursor kernel (commit `5dae1e1`, count-only — write kernels,
+> dispatch, and thresholds unchanged) closed it. M4 forced-gallop **75.561 → 43.426
+> ns/container = CRoaring's 43.426**; full API both 0.014 ms. Natively validated on x86-64 /
+> Zen 4 (rawr 41.958 vs CR 42.755 ns/container — slightly ahead). Empty/singleton/reversed-arg
+> tests, `bench_aa`, CRoaring differential, and `ReleaseSafe`/`ReleaseFast` all green on both
+> hosts. **With this, rawr is at or ahead of CRoaring across the entire parity board.** Full
+> data: [`docs/parity-measurement.md`](../../docs/parity-measurement.md).
+
 **Size honesty up front:** this is a ~6 µs, ratio-only target — isolated **~1.46x**
 (rawr-SMP **0.019 [0.018, 0.019] ms** vs CRoaring **0.013 [0.012, 0.014] ms**, ranges
 non-overlapping so the ratio is real). We scope it to *finish parity cleanly*, not because
