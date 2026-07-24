@@ -17,15 +17,23 @@ able); `benchCRoaringSelectDense` loops `roaring_bitmap_select(bm, query, …)` 
 FFI calls** (`:1224`). Both iterate the same `select_queries` (1M random ranks < 500k).
 
 That per-call FFI overhead **inflates CRoaring's** measured time, so it **understates** rawr's
-gap. Removing it (measure CRoaring select through an in-C loop wrapper) will most likely make
-rawr's ratio **worse than 1.675x**, not better — the opposite of iterate's pull-vs-push. So the
-fairness check here is to get the *true* number before optimizing, not to look for a phantom.
+gap — removing it *raises* rawr/CRoaring, it does not lower it (the opposite of iterate's
+pull-vs-push). But an in-C loop removes only the **Zig→C crossings**, not the **public
+function-call** asymmetry: CRoaring's `roaring_bitmap_select` is a **non-inlined** call per
+query, while rawr's `select` may **inline** into its loop. A fair comparison must separate those,
+so the fairness step is a **call-boundary matrix**, not a single wrapper.
 
 ## Phase 1 — Diagnosis (benchmark-only, canonical harness + focused split)
 
-1. **True like-for-like select.** Measure CRoaring select via a **benchmark-only C wrapper**
-   that runs the whole `select_queries` loop **in C** (one FFI call, local checksum) vs rawr's
-   Zig loop. This removes the per-call FFI asymmetry and gives the real ratio, on both hosts.
+1. **Call-boundary matrix (four paths).** Separate language-boundary, ordinary function-call,
+   and implementation costs:
+   - **rawr inline loop** — `bm.select(query)` inlined into the loop;
+   - **rawr via a `noinline` select wrapper** — same rawr kernel, forced non-inlined call;
+   - **CRoaring via the current Zig loop** — per-query Zig→C FFI (the board's current path);
+   - **CRoaring via an in-C loop** — one FFI call, loop in C.
+   The **canonical-row comparison follows from this** — likely **rawr-noinline vs CRoaring-in-C**
+   (both a non-inlined public call, neither paying a Zig→C tax), the honest public-API
+   like-for-like. Report on both hosts.
 2. **Where rawr's select cost goes.** `select(rank)` finds the value at sorted position `rank`:
    skip containers by cardinality until the one holding `rank`, then index within it. Split
    the **container-skip** cost (cumulative-cardinality walk across the top-level array —
@@ -36,11 +44,11 @@ fairness check here is to get the *true* number before optimizing, not to look f
    rank distribution of `select_queries`), so the dominant path is attributed, not assumed.
    Report absolute medians + ranges and **ns/query** with a named residual.
 
-Symmetry: local/context-owned checksums, identical minimal work per query, state built inside
-the timed scan; validate identical results untimed (rawr `select` == CRoaring `select` for
-every query). Canonical spec-22 protocol: 3w/21t median, ≥5 fresh processes, one path per fresh
-process, on M4 and Zen 4. Iteration/select does not allocate → the single **rawr non-allocating**
-tuple vs CRoaring.
+Symmetry: only the **accumulator/checksum state is local to the timed loop**; the bitmap and the
+`select_queries` are built **outside** timing. Identical minimal work per query; validate
+identical results untimed (rawr `select` == CRoaring `select` for every query). Canonical spec-22
+protocol: 3w/21t median, ≥5 fresh processes, one path per fresh process, on M4 and Zen 4. Select
+does not allocate → the single **rawr non-allocating** tuple vs CRoaring.
 
 Phase 1 stands alone: the true like-for-like ratio + where rawr's select cost lives is the
 deliverable.
@@ -58,27 +66,29 @@ Threshold (true like-for-like rawr vs CRoaring select):
 
 ## Canonical-row note
 
-Even if a real gap is confirmed, the `select` row's CRoaring side should move to the **in-C
-loop wrapper** (removing the benchmarked per-call FFI), so the canonical number reflects
-like-for-like select, not FFI overhead. If that changes the row's shape, update
-`docs/parity-measurement.md`; it does not add a manifest row (still one `select` row).
+Even if a real gap is confirmed, the `select` row should move to the **public-API like-for-like
+comparison the matrix identifies** (likely rawr-noinline vs CRoaring-in-C), so the canonical
+number reflects a fair public select call, not the Zig→C FFI or an inline-vs-noinline mismatch.
+If that changes the row's shape, update `docs/parity-measurement.md`; it does not add a manifest
+row (still one `select` row).
 
 ## Acceptance
 
 - **Phase 1 GO:** the true like-for-like select ratio (FFI removed) reported on both hosts, with
   rawr's cost split into container-skip vs intra-container and the container/rank mix recorded.
 - **Phase 2 GO (if attempted):** true like-for-like select **≤ 1.10x on both M4 and Zen 4**, no
-  canonical row regressing >5% vs the committed spec-22 baseline (rerun on range overlap),
-  differential green.
+  canonical row regressing >5% vs the **latest committed corrected parity baseline** (spec 23
+  changed the iterate row) — rerun on range overlap — differential green.
 - Benchmark-only for Phase 1; a Phase-2 kernel change is production, differential-covered.
 - Validation: `zig build test`; `zig build difftest`; the canonical `run-compare-bench.sh` on
   both hosts; `ReleaseSafe` / `ReleaseFast` green.
 
 ## NO-GO
 
-- The true like-for-like ratio is already ≤ 1.10x on both hosts (the 1.675x was mostly the
-  per-call FFI) → correct the row, no kernel change. (Considered less likely here than for
-  iterate, given the asymmetry direction.)
+- The public-API like-for-like ratio turns out ≤ 1.10x on both hosts → correct the row to the
+  chosen comparison, no kernel change. (Considered **less likely** here than for iterate: the FFI
+  asymmetry *inflated* CRoaring, so removing it **raises** rawr/CRoaring — it does not lower it —
+  and the inline-vs-noinline matrix isolates whatever remains.)
 
 ## Estimate
 

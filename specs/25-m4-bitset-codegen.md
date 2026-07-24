@@ -2,8 +2,9 @@
 
 # Spec 25: M4 bitset-kernel codegen cluster — diagnosis-first
 
-Six default-SMP rows are slow on **M4 only** while rawr is at/ahead on Zen 4 — the classic
-signature of an **aarch64/NEON codegen** issue, not an algorithm gap:
+Six default-SMP rows are slow on **M4 only** while rawr is at/ahead on Zen 4 — a signature that
+**points to aarch64/NEON codegen** as the leading hypothesis rather than an algorithm gap, but
+the actual cause is what this spec determines:
 
 | op | M4 | Zen 4 |
 |---|---:|---:|
@@ -19,39 +20,63 @@ share **one** NEON codegen root cause, because a single fix could move all six r
 running lesson each row still gets a like-for-like check; the cross-arch signature — rawr
 *ahead* on Zen 4 — argues these are real M4 gaps, not benchmark artifacts.)
 
-## The shared pathway (confirmed)
+## Candidate pathways (attribute per row — these are NOT one shared kernel)
 
-All the bitwise-dense/lazy/n-way rows funnel through **`simdBitsetOp`**
-(`src/bitset_container.zig:213`): a `@Vector(VEC_SIZE, u64)` word loop with **`VEC_SIZE = 8`**
-(512-bit) that **also computes cardinality inline** — `card_vec += @popCount(result)` on every
-iteration. `bitwiseAnd/Or` (dense), `orMany`, and `lazyOr construction` all use it. `flip`/
-`removeRange` (wide) use the `setRange`/`clearRange` word-range fill loops
-(`:97`, `:130`). So there are two candidate kernels, and the AND/OR/lazy/n-way cluster shares
-the first.
+The rows take **different** paths, so inline popcount alone cannot explain the cluster —
+attribute each **dynamically** before grouping:
+
+- **eager dense AND/OR** → `simdBitsetOp` (`src/bitset_container.zig:213`): a `@Vector(VEC_SIZE=8,
+  u64)` word loop that **also computes cardinality inline** (`card_vec += @popCount(result)`).
+- **lazy bitset accumulation** (in lazy construction / n-way) → `simdBitsetOpLazy` — **no inline
+  popcount**.
+- **sparse lazy construction** → may use **scalar `setList`** for array containers (not a bitset
+  word loop at all).
+- **`orMany`** → lazy accumulation **+ `repairAfterLazy`**, where cardinality is computed
+  **separately** in repair.
+- **flip** → `toggleRange`; **removeRange** → `clearRange` — both reached via **mask-based bitmap
+  operations** (clone + mask + XOR/difference + recompute + maybe demote), **not** direct
+  top-level range fills.
+
+So the inline-popcount hypothesis applies **only to eager dense AND/OR**. Whether the six rows
+share *any* single cause is a Phase-1 question, not an assumption.
 
 ## Phase 1 — Diagnosis (benchmark-only; both hosts)
 
-Hypotheses to **test, not assume** (in rough suspicion order):
+### First: per-row full-operation decomposition (not just the word kernel)
 
-1. **Inline vector `@popCount` (cardinality-per-op).** rawr computes cardinality on *every*
-   bitset op; CRoaring has `_nocard` bitset variants and skips it where not needed. `@popCount`
-   on a wide u64 `@Vector` has **no native aarch64 instruction** (NEON `cnt` is byte-wise +
-   reductions), so it may lower far worse on M4 than on x86. **Test:** measure `simdBitsetOp`
-   with vs without the inline popcount, on both hosts — if the M4 gap largely closes without it,
-   this is the cause.
-2. **`VEC_SIZE = 8` (512-bit) pessimal on NEON.** 512-bit splits into **4×128-bit** NEON ops per
-   iteration; a width tuned for x86 AVX2 may be a poor aarch64 choice. **Test:** sweep VEC_SIZE
-   (2/4/8) on both hosts and compare.
-3. **`setRange`/`clearRange` word-range fills** (flip/removeRange) not vectorized on aarch64 —
-   the middle-word `for` fills should become NEON stores/memset; confirm they do.
-4. **Codegen inspection.** Disassemble `simdBitsetOp` and the range fills on **aarch64 (M4)** vs
-   **x86 (Zen 4)**, and compare against CRoaring's aarch64 bitset kernels (does CRoaring use
-   explicit NEON intrinsics or `_nocard` paths where rawr does not?). Record exact build command,
-   symbol, and the relevant asm.
+Every one of the six rows **allocates and does work beyond the named kernel**, so a fast isolated
+NEON kernel would not explain the canonical gap. For each row, dynamically attribute its path
+(above) and split the M4 time across components:
 
-Attribute the M4 gap per op to (1)/(2)/(3)/other, and report **whether the AND/OR/lazy/n-way
-rows share a single cause**. Measure on the canonical spec-22 harness, both hosts, 3w/21t median,
-≥5 fresh processes, per-path process isolation; absolute medians + ranges with a named residual.
+- **allocation / init**, **clone / copy**, **top-level container traversal**, **word kernel**,
+  **cardinality / repair**, **representation conversion** (demote/promote).
+
+Concretely: `flip`/`removeRange` clone + build a mask + XOR/difference + recompute cardinality +
+maybe demote; lazy construction adds top-level merge + many container allocations; `orMany` adds
+cursor scanning + allocation + accumulation + repair. Counters + per-phase timing say **which
+component carries the M4 gap** on each row — the word kernel may be a minor part.
+
+### Then: kernel/codegen hypotheses (test, not assume)
+
+1. **Inline vector `@popCount` — eager dense AND/OR only.** `simdBitsetOp` computes cardinality
+   per op via wide-u64 `@popCount`, which has **no native aarch64 instruction** (NEON `cnt` is
+   byte-wise + reductions) and may lower far worse on M4. CRoaring has `_nocard` variants. **Test:**
+   `simdBitsetOp` with vs without the inline popcount, both hosts. (Does **not** apply to the lazy /
+   `setList` / repair paths.)
+2. **`VEC_SIZE = 8` (512-bit) width on NEON** — the `simdBitsetOp` / `simdBitsetOpLazy` /
+   `countWords` loops split 512-bit into **4×128-bit** NEON ops; a width tuned for x86 may be a
+   poor aarch64 choice. **Test:** sweep VEC_SIZE (2/4/8) on both hosts.
+3. **Mask-based range ops** — `flip`→`toggleRange`, `removeRange`→`clearRange` reached via
+   clone+mask+op: attribute the M4 cost to the word kernel vs the clone vs the mask build vs the
+   cardinality recompute (per the decomposition) before assuming a NEON kernel.
+4. **Codegen inspection** — aarch64 (M4) vs x86 (Zen 4) disassembly of the implicated kernels, and
+   vs CRoaring's aarch64 bitset paths (explicit NEON intrinsics / `_nocard` where rawr is not?).
+   Record exact build command, symbol, and the relevant asm.
+
+Attribute the M4 gap per row to a component + cause, and report **whether any subset shares a
+single cause** (do not assume the six do). Measure on the canonical spec-22 harness, both hosts,
+3w/21t median, ≥5 fresh processes, per-path process isolation; absolute medians + ranges with a
+named residual.
 
 Phase 1 stands alone: "do these six share a NEON codegen cause, and which kernel/construct is
 it" is the deliverable.
@@ -63,9 +88,10 @@ it" is the deliverable.
   correctness of the `-1` cached-cardinality invariant preserved. One change, multiple rows.
 - **If width dominates:** a **per-arch `VEC_SIZE`** (comptime), or restructure so aarch64 lowers
   cleanly.
-- **If the range fills dominate:** vectorize `setRange`/`clearRange` (or lower to memset) on
-  aarch64.
-- Rows that don't share the cause fall back to their own attribution.
+- **If a mask-based range-op component dominates** (`toggleRange`/`clearRange` word kernel, or the
+  clone/mask/recompute around it): fix the implicated component — vectorize the aarch64 word loop,
+  avoid the clone, or defer the cardinality recompute.
+- Rows that don't share the cause fall back to their own component attribution.
 
 ## Constraints
 
@@ -79,12 +105,13 @@ it" is the deliverable.
 
 ## Acceptance
 
-- **Phase 1 GO:** each of the six rows' M4 gap attributed (popcount / width / range-fill / other),
-  and whether the AND/OR/lazy/n-way subset shares one cause, on both hosts, with the codegen
-  inspection recorded in `docs/parity-measurement.md`.
+- **Phase 1 GO:** each of the six rows' M4 gap attributed to a **component** (alloc / clone /
+  traversal / word kernel / cardinality-repair / conversion) **and** a cause, with **whether any
+  subset shares a single cause** stated (not assumed), on both hosts, and the codegen inspection
+  recorded in `docs/parity-measurement.md`.
 - **Phase 2 GO (if attempted):** the affected rows reach **≤ 1.10x on M4** with **no regression
-  on Zen 4** (and no other canonical row worsening >5% vs the committed spec-22 baseline, rerun on
-  range overlap), differential green including cardinality.
+  on Zen 4** (and no other canonical row worsening >5% vs the **latest committed corrected parity
+  baseline**, rerun on range overlap), differential green including cardinality.
 - Validation: `zig build test`; `zig build difftest`; canonical `run-compare-bench.sh` on both
   hosts; `ReleaseSafe` / `ReleaseFast` green.
 
