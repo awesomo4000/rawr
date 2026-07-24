@@ -49,15 +49,20 @@ All measured correctly:
   global — that is asymmetric FFI/global work).
 
 Symmetry requirements on every path: **local/context-owned accumulation** (never a global);
-iterator/scan state constructed **inside** the timed scan; and during timing accumulate a
-**count**, a **sum/checksum**, **and an order-sensitive rolling hash** (a scalar checksum alone
-does not catch a wrong sequence or order). For correctness, a **full untimed sequence-equality**
-check across paths afterward. Normalize by the **actual deduplicated cardinality**, not the
-1,000,000 attempted inserts → report **ns/value**.
+iterator/scan state constructed **inside** the timed scan. The **timed sink is minimal and
+identical** on every path — **count + wrapping sum only**. Do **not** put an order-sensitive
+rolling hash in the timed loop: a dependent hash can dominate a simple array walk and hide the
+iterator overhead being measured. The **rolling hash and full sequence comparison run in the
+untimed validation pass** (see Constraints). Normalize by the **actual deduplicated
+cardinality**, not the 1,000,000 attempted inserts → report **ns/value**.
 
 From these:
 - **model tax** = pull − push on each side (rawr, CRoaring);
-- **like-for-like kernel gap** = rawr-pull vs CRoaring-pull, and rawr-push vs CRoaring-push.
+- **like-for-like iterator comparison** = **rawr-pull vs CRoaring-pull** — the true kernel
+  comparison (both pull iterators);
+- **push API comparison** = **rawr-push vs CRoaring-push** — **not** like-for-like: rawr's
+  inline comptime sink vs CRoaring's runtime callback, so attribute any difference to the
+  **traversal + callback model**, not a rawr kernel deficiency.
 
 ### Corpus characterization (expect array-dominated)
 
@@ -89,9 +94,15 @@ hosts" is the deliverable even if no fix follows.
 
 ## Constraints / measurement
 
-- **Correctness:** every path yields the same value sequence — verified by **full untimed
-  sequence equality** (not just an equal scalar checksum), and a differential check (rawr
-  iteration == CRoaring order == sorted values) stays green.
+- **Correctness (untimed):** the timed sink accumulates only count + sum, so full sequence
+  equality runs **outside timing**. The C wrappers return aggregates, so validation uses either
+  a **separate untimed C mode that writes values into a caller-provided buffer**, or comparison
+  against **`roaring_bitmap_to_uint32_array`** and rawr's `toArray`. Verify equal **count**,
+  equal **order-sensitive rolling hash**, and **full sequence equality** across all paths;
+  differential (rawr iteration == CRoaring order == sorted values) stays green.
+- **If Phase 2 changes `Iterator.next()`:** correctness coverage for **array, bitset, and run**
+  containers (and a mixed bitmap), even though the canonical perf corpus is array-dominated — a
+  `next()` change touches every container type.
 - Canonical spec-22 protocol: **3 warmup / 21 timed / median**, **≥5 fresh processes**, full
   min/max range, on **M4 and Zen 4** (the gap is on both). Iteration **does not allocate**, so
   the measured tuple is the **single rawr non-allocating tuple** vs CRoaring — no SMP/libc split.
@@ -100,8 +111,10 @@ hosts" is the deliverable even if no fix follows.
 
 ## Acceptance
 
-- **Phase 1 GO:** the reported 1.5–1.9x is decomposed into **model tax vs like-for-like kernel
-  gap** (all four paths), with the container mix recorded, on both hosts.
+- **Phase 1 GO:** the reported 1.5–1.9x is decomposed across all four paths into the
+  **pull-vs-pull like-for-like iterator comparison**, the **push API comparison** (traversal +
+  callback model), and the **model tax** (pull − push per side), with the container mix
+  recorded, on both hosts.
 - **Phase 2 GO (if attempted):** the like-for-like iterate ratio (the single **rawr
   non-allocating** tuple vs CRoaring) is **≤ 1.10x on both M4 and Zen 4**, with **no canonical
   row regressing by more than 5%**, differential green. If the finding is "like-for-like is
