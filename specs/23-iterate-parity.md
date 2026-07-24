@@ -57,11 +57,13 @@ untimed validation pass** (see Constraints). Normalize by the **actual deduplica
 cardinality**, not the 1,000,000 attempted inserts → report **ns/value**.
 
 From these:
-- **model tax** = pull − push on each side (rawr, CRoaring);
-- **like-for-like iterator comparison** = **rawr-pull vs CRoaring-pull** — the true kernel
-  comparison (both pull iterators);
+- **within-implementation pull-vs-push delta** = pull − push on each side (rawr, CRoaring) — the
+  complete **API-model** difference **including callback dispatch** (rawr's inline comptime sink,
+  CRoaring's runtime function-pointer callback), **not** a pure iterator-state tax;
+- **like-for-like iterator comparison** = **rawr-pull vs CRoaring-pull** — the clean kernel
+  comparison (both pull, both accumulate directly);
 - **push API comparison** = **rawr-push vs CRoaring-push** — **not** like-for-like: rawr's
-  inline comptime sink vs CRoaring's runtime callback, so attribute any difference to the
+  inline comptime sink vs CRoaring's runtime callback; attribute any difference to the
   **traversal + callback model**, not a rawr kernel deficiency.
 
 ### Corpus characterization (expect array-dominated)
@@ -95,11 +97,13 @@ hosts" is the deliverable even if no fix follows.
 ## Constraints / measurement
 
 - **Correctness (untimed):** the timed sink accumulates only count + sum, so full sequence
-  equality runs **outside timing**. The C wrappers return aggregates, so validation uses either
-  a **separate untimed C mode that writes values into a caller-provided buffer**, or comparison
-  against **`roaring_bitmap_to_uint32_array`** and rawr's `toArray`. Verify equal **count**,
-  equal **order-sensitive rolling hash**, and **full sequence equality** across all paths;
-  differential (rawr iteration == CRoaring order == sorted values) stays green.
+  equality runs **outside timing**. **Every one of the four diagnostic paths** (rawr pull, rawr
+  push, CRoaring pull, CRoaring push) must have an **untimed validation mode that writes its
+  traversed values into a caller-provided buffer** — an aggregate oracle like
+  `roaring_bitmap_to_uint32_array` alone does **not** prove the new C wrappers *themselves*
+  traverse correctly. Compare **each path's buffer** to the **sorted-value oracle** (equal count,
+  full sequence equality); the timed paths' count + rolling hash must agree too. Differential
+  (rawr iteration == CRoaring order == sorted values) stays green.
 - **If Phase 2 changes `Iterator.next()`:** correctness coverage for **array, bitset, and run**
   containers (and a mixed bitmap), even though the canonical perf corpus is array-dominated — a
   `next()` change touches every container type.
@@ -113,13 +117,15 @@ hosts" is the deliverable even if no fix follows.
 
 - **Phase 1 GO:** the reported 1.5–1.9x is decomposed across all four paths into the
   **pull-vs-pull like-for-like iterator comparison**, the **push API comparison** (traversal +
-  callback model), and the **model tax** (pull − push per side), with the container mix
-  recorded, on both hosts.
+  callback model), and the **within-implementation pull-vs-push delta** (pull − push per side,
+  including callback dispatch), with the container mix recorded, on both hosts.
 - **Phase 2 GO (if attempted):** the like-for-like iterate ratio (the single **rawr
   non-allocating** tuple vs CRoaring) is **≤ 1.10x on both M4 and Zen 4**, with **no canonical
-  row regressing by more than 5%**, differential green. If the finding is "like-for-like is
-  already near parity and the board was comparing pull-vs-push," that is a valid terminal
-  outcome — **correct the row** and record it rather than optimizing a kernel that isn't slow.
+  row regressing by more than 5%** vs the **committed spec-22 canonical table** (the baseline) —
+  and **rerun any row whose min/max ranges overlap the 5% threshold** before calling it a
+  regression. Differential green. If the finding is "like-for-like is already near parity and the
+  board was comparing pull-vs-push," that is a valid terminal outcome — **correct the row** and
+  record it rather than optimizing a kernel that isn't slow.
 
 ## NO-GO
 
