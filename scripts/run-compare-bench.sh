@@ -6,20 +6,28 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 case "${1:-}" in
-    "")
+    ""|--parity|--parity-pilot)
+        if [[ -n "${1:-}" ]]; then shift; fi
+        ;;
+    --dashboard)
+        shift
+        if (( $# != 0 )); then
+            printf 'usage: %s [--dashboard]\n' "$0" >&2
+            exit 2
+        fi
         zig build bench-compare
         mkdir -p misc
 
         outfile="misc/bench-croaring-$(date +%Y%m%d-%H%M%S).txt"
+        printf 'Screening dashboard only; use the default runner for parity decisions.\n\n'
         ./zig-out/bin/bench_croaring 2>&1 | tee "$outfile"
         printf '\nSaved to: %s\n' "$outfile"
         exit 0
         ;;
-    --parity|--parity-pilot) shift ;;
-    *) printf 'usage: %s [--parity]\n' "$0" >&2; exit 2 ;;
+    *) printf 'usage: %s [--dashboard]\n' "$0" >&2; exit 2 ;;
 esac
 if (( $# != 0 )); then
-    printf 'usage: %s [--parity]\n' "$0" >&2
+    printf 'usage: %s [--dashboard]\n' "$0" >&2
     exit 2
 fi
 

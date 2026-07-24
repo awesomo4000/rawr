@@ -382,7 +382,7 @@ pub fn build(b: *std.Build) void {
         .name = "bench_croaring",
         .root_module = bench_cr_mod,
     });
-    const bench_cr_step = b.step("bench-compare", "Build CRoaring comparison benchmarks");
+    const bench_cr_step = b.step("bench-compare", "Build CRoaring screening dashboard");
     bench_cr_step.dependOn(&b.addInstallArtifact(bench_cr_exe, .{}).step);
 
     // Allocator matrix benchmark

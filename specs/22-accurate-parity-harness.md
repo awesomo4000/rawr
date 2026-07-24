@@ -45,10 +45,12 @@ parity, and **every row deserves the isolated treatment**. This spec operational
    ops** (`add`, `addMany`, `deserialize`) allocate *throughout*, so the whole op runs under
    the variant's allocator; `serialize`, `toArrayAlloc`, `flip`, `removeRange` have distinct
    allocation boundaries the manifest states explicitly.
-6. **Batch tiny operations mechanically** → `ns/op`, not `0.00 ms`. A **fixed identical batch
-   count** for rawr and CRoaring, total measured duration above a **stated floor (≥ 1 ms)**,
-   normalized to ns/op. **Stateful ops** (`flip`, `removeRange`, in-place) recreate/reset their
-   state consistently between repetitions. **Tiny pure queries** (`cardinality`, `contains`)
+6. **Batch tiny operations mechanically** → `ns/op`, not `0.00 ms`. Use a fixed batch count
+   per implementation, identical by default, with a manifest-recorded override when measured
+   algorithmic asymmetry makes a shared count impractical. Each timed sample must exceed the
+   **stated floor (≥ 1 ms)** and results are normalized to ns/op. **Stateful ops** (`flip`,
+   `removeRange`, in-place) recreate/reset their state consistently between repetitions.
+   **Tiny pure queries** (`cardinality`, `contains`)
    need more than `doNotOptimizeAway` — it prevents *removal* but not *hoisting* an invariant
    pure call, so require **equivalent non-inline / opaque call boundaries for rawr and CRoaring**
    and **runtime-varying inputs** where applicable. (This avoids repeating the earlier

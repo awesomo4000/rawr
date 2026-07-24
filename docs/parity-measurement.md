@@ -4,17 +4,18 @@
 
 ## Verdict
 
-The all-in-one `bench_croaring` executable is useful for broad screening, but its rawr-SMP
-set-operation timings are sensitive to timing protocol and prior allocator history. It
-must not be the sole basis for selecting optimization targets. Performance decisions
-should use a focused executable in a fresh process, report five-process median and range,
-and show both rawr's default SMP allocator and libc when the timed operation allocates.
+The canonical parity runner is `./scripts/run-compare-bench.sh`. It measures every tuple in
+fresh processes, reports the median and full range across five process medians, and shows both
+rawr's default SMP allocator and libc when the timed operation allocates. The all-in-one
+`bench_croaring` executable is retained only as a quick screening dashboard; its rawr-SMP
+set-operation timings are sensitive to timing protocol and prior allocator history and are not
+authoritative parity measurements.
 
 The remaining broad sparse-AND and sparse-OR gaps are harness artifacts for rawr's default
 allocator: both operations beat CRoaring when isolated. Their allocation-matched libc
 variants remain slower than CRoaring and are valid, narrower allocator/code-path targets.
-The skewed `andCardinality` gap survives isolation and is the clearest general parity
-target because the timed operation does not allocate.
+The corrected cross-machine board puts skewed `andCardinality` at parity. Remaining gaps are
+operation- and architecture-specific and should be selected from the canonical per-host tables.
 
 ## Broad-harness residual
 
@@ -177,33 +178,203 @@ Zen 4, where sparse AND measured 0.780 [0.778, 0.787] ms for rawr SMP, 2.102
 [2.054, 2.164] ms for rawr libc, and 1.554 [1.522, 1.867] ms for CRoaring. These two rows prove
 the worker and aggregation protocol.
 
-Spec 22-01 extends that architecture to all 38 rows published by `bench_croaring`. The manifest
-now records the exact corpus, operation pair, allocation class, timing boundaries, validation
-oracle, and remaining allocator/calibration work for every row. Bitmap-producing operations
-validate portable bytes; query, scalar, and array operations validate their exact outputs. The
-38-row table is functionally complete, but allocator side-by-side completion and tiny-operation
-calibration remain assigned to specs 22-02 and 22-03.
+The spec 22 manifest covers all 38 rows published by `bench_croaring` and records the exact
+corpus, operation pair, allocation class, timing boundaries, validation oracle, allocator
+variants, and effective batch count for every row. Bitmap-producing operations validate portable
+bytes; query, scalar, and array operations validate their exact outputs. Allocator parity and
+tiny-operation calibration are complete.
 
-During the rollout, run the complete functional table explicitly:
+Run the canonical accurate parity table:
 
 ```sh
-./scripts/run-compare-bench.sh --parity
+./scripts/run-compare-bench.sh
 ```
 
-Without `--parity`, the script retains the existing broad screening-dashboard behavior
-until the complete manifest becomes canonical in spec 22-04.
+Run the retained broad screening dashboard only when a quick, non-authoritative signal is useful:
+
+```sh
+./scripts/run-compare-bench.sh --dashboard
+```
+
+## Canonical cross-machine tables
+
+Captured 07/24/2026 from the canonical runner. Each value is the median of five
+independent process medians, with the full process range in brackets. A ratio below 1.0 means
+rawr is faster; a ratio above 1.0 means CRoaring is faster.
+
+### Apple M4
+
+```text
+Accurate Rawr vs CRoaring parity table
+======================================
+Processes per tuple: 5
+# rawr bench env (compiled target)
+# zig 0.16.0 | ReleaseFast | macos aarch64
+# cpu: apple_m4 | features: neon
+# array-intersect kernel: neon
+
+# requested-cpu: native
+# protocol: 3w/21t median
+# croaring-avx512: off
+
+operation                    variant          unit     rawr median [min,max]         unit       CR median [min,max]    ratio
+---------------------------- -------- ------------ ------------------------- ------------ ------------------------- --------
+add (random 1M)              smp                ms  264.115 [257.741,284.541]           ms  284.943 [284.420,287.696]    0.9269x
+add (random 1M)              libc               ms  264.471 [263.396,280.098]           ms  284.943 [284.420,287.696]    0.9282x
+add (sequential 1M)          smp                ms    3.241 [  3.228,  3.288]           ms    3.179 [  3.174,  3.239]      1.02x
+add (sequential 1M)          libc               ms    3.278 [  3.230,  3.398]           ms    3.179 [  3.174,  3.239]     1.031x
+addMany (random 1M)          smp                ms  245.073 [244.381,247.649]           ms  286.728 [286.047,289.252]    0.8547x
+addMany (random 1M)          libc               ms  243.666 [242.862,244.941]           ms  286.728 [286.047,289.252]    0.8498x
+addMany (sequential 1M)      smp                ms    2.184 [  2.169,  2.222]           ms    2.029 [  2.024,  2.033]     1.076x
+addMany (sequential 1M)      libc               ms    2.180 [  2.161,  2.190]           ms    2.029 [  2.024,  2.033]     1.074x
+addRange (1M)                smp             ns/op  239.624 [234.131,241.699]        ns/op  334.839 [328.613,344.238]    0.7156x
+addRange (1M)                libc            ns/op  486.206 [484.253,500.610]        ns/op  334.839 [328.613,344.238]     1.452x
+contains (hit)               default            ms   86.885 [ 86.155, 88.877]           ms   91.760 [ 89.986, 96.603]    0.9469x
+contains (miss)              default            ms   83.805 [ 83.398, 84.605]           ms   81.432 [ 81.196, 82.689]     1.029x
+bitwiseAnd (sparse)          smp                ms    0.600 [  0.590,  0.602]           ms    0.678 [  0.675,  0.692]     0.885x
+bitwiseAnd (sparse)          libc               ms    0.962 [  0.952,  1.051]           ms    0.678 [  0.675,  0.692]     1.419x
+bitwiseAnd (sparse, arena)   arena              ms    0.564 [  0.559,  0.566]           ms    0.678 [  0.675,  0.692]    0.8319x
+bitwiseAnd (dense)           smp             ns/op  297.974 [292.603,313.110]        ns/op  167.725 [158.936,175.659]     1.777x
+bitwiseAnd (dense)           libc            ns/op  292.358 [290.283,297.852]        ns/op  167.725 [158.936,175.659]     1.743x
+bitwiseOr (sparse)           smp                ms    1.758 [  1.738,  1.760]           ms    2.390 [  2.382,  2.438]    0.7356x
+bitwiseOr (sparse)           libc               ms    3.216 [  3.187,  3.259]           ms    2.390 [  2.382,  2.438]     1.346x
+bitwiseOr (sparse, arena)    arena              ms    1.572 [  1.558,  1.584]           ms    2.390 [  2.382,  2.438]    0.6577x
+bitwiseOr (dense)            smp             ns/op  388.794 [365.967,398.071]        ns/op  314.941 [308.350,323.730]     1.234x
+bitwiseOr (dense)            libc            ns/op  498.413 [480.713,512.207]        ns/op  314.941 [308.350,323.730]     1.583x
+lazyOr+repair (sparse)       smp                ms   14.735 [ 14.415, 15.446]           ms   12.643 [ 12.504, 13.172]     1.165x
+lazyOr+repair (sparse)       libc               ms   12.995 [ 12.984, 13.394]           ms   12.643 [ 12.504, 13.172]     1.028x
+lazyOr construction (sparse) smp                ms    5.747 [  5.696,  5.944]           ms    3.404 [  3.370,  3.450]     1.688x
+lazyOr construction (sparse) libc               ms    3.775 [  3.741,  3.816]           ms    3.404 [  3.370,  3.450]     1.109x
+lazyOr repair (sparse)       smp                ms    8.265 [  8.184,  8.624]           ms    8.388 [  8.152,  8.483]    0.9853x
+lazyOr repair (sparse)       libc               ms    8.152 [  8.068,  8.391]           ms    8.388 [  8.152,  8.483]    0.9719x
+orMany (32 mixed)            smp             ns/op 14195.312 [14109.375,14226.562]        ns/op 11570.312 [11460.938,11726.562]     1.227x
+orMany (32 mixed)            libc            ns/op 14921.875 [14796.875,15312.500]        ns/op 11570.312 [11460.938,11726.562]      1.29x
+orManyHeap (32 mixed)        smp             ns/op 14265.625 [14148.438,14460.938]        ns/op 27945.312 [27640.625,28164.062]    0.5105x
+orManyHeap (32 mixed)        libc            ns/op 14796.875 [14757.812,14859.375]        ns/op 27945.312 [27640.625,28164.062]    0.5295x
+xorMany (32 mixed)           smp             ns/op 16226.562 [16140.625,16343.750]        ns/op 29625.000 [29421.875,29703.125]    0.5477x
+xorMany (32 mixed)           libc            ns/op 16867.188 [16804.688,16914.062]        ns/op 29625.000 [29421.875,29703.125]    0.5694x
+bitwiseAnd (array balanced)  smp             ns/op 140562.500 [139187.500,141750.000]        ns/op 199687.500 [196562.500,199750.000]    0.7039x
+bitwiseAnd (array balanced)  libc            ns/op 150812.500 [149625.000,152312.500]        ns/op 199687.500 [196562.500,199750.000]    0.7552x
+andCardinality (array balanced) default         ns/op 113812.500 [112406.250,114625.000]        ns/op 186281.250 [183593.750,186812.500]     0.611x
+bitwiseXor (array balanced)  smp             ns/op 211750.000 [210250.000,223250.000]        ns/op 420625.000 [410875.000,447500.000]    0.5034x
+bitwiseXor (array balanced)  libc            ns/op 227000.000 [214250.000,227250.000]        ns/op 420625.000 [410875.000,447500.000]    0.5397x
+bitwiseAnd (array skewed)    smp             ns/op 22156.250 [21171.875,22460.938]        ns/op 44429.688 [42726.562,45132.812]    0.4987x
+bitwiseAnd (array skewed)    libc            ns/op 25289.062 [24875.000,26101.562]        ns/op 44429.688 [42726.562,45132.812]    0.5692x
+andCardinality (array skewed) default         ns/op 12710.938 [12429.688,13328.125]        ns/op 13078.125 [12507.812,13890.625]    0.9719x
+iterate (1M values)          default            ms    2.137 [  2.121,  2.177]           ms    1.404 [  1.388,  1.415]     1.522x
+toArray (1M values)          default            ms    0.895 [  0.887,  0.934]           ms    1.041 [  1.020,  1.063]    0.8598x
+toArrayAlloc (1M values)     smp                ms    1.081 [  1.065,  1.117]           ms    1.086 [  1.066,  1.116]    0.9954x
+toArrayAlloc (1M values)     libc               ms    0.899 [  0.873,  0.927]           ms    1.086 [  1.066,  1.116]    0.8278x
+serialize                    smp                ms    1.118 [  1.101,  1.148]           ms    0.996 [  0.992,  1.021]     1.122x
+serialize                    libc               ms    1.004 [  0.997,  1.017]           ms    0.996 [  0.992,  1.021]     1.008x
+deserialize                  smp                ms    1.500 [  1.488,  1.512]           ms    2.474 [  2.416,  2.508]    0.6063x
+deserialize                  libc               ms    3.029 [  2.997,  3.086]           ms    2.474 [  2.416,  2.508]     1.224x
+deserialize (arena)          arena              ms    1.344 [  1.326,  1.385]           ms    2.474 [  2.416,  2.508]    0.5432x
+cardinality                  default         ns/op    2.487 [  2.478,  2.520]        ns/op 35703.125 [31359.375,37906.250] 6.966e-05x
+rank (dense)                 default            ms   10.583 [ 10.245, 10.817]           ms    9.246 [  9.115,  9.381]     1.145x
+select (dense)               default            ms   16.567 [ 16.228, 17.103]           ms    9.908 [  9.646, 10.150]     1.672x
+rankMany (dense)             default         ns/op 179375.000 [179000.000,180625.000]        ns/op 171375.000 [165125.000,172500.000]     1.047x
+rangeCardinality small (bitset) default            ms   12.391 [ 12.178, 12.526]           ms  104.211 [103.542,104.680]    0.1189x
+rangeCardinality large (bitset) default            ms   63.121 [ 63.031, 63.208]           ms  122.276 [121.619,122.494]    0.5162x
+flip wide range (dense)      smp             ns/op  648.193 [620.972,656.616]        ns/op  359.375 [357.910,383.179]     1.804x
+flip wide range (dense)      libc            ns/op 1077.759 [1038.574,1111.938]        ns/op  359.375 [357.910,383.179]     2.999x
+removeRange wide (dense)     smp             ns/op  503.784 [493.042,506.470]        ns/op  227.173 [215.942,227.783]     2.218x
+removeRange wide (dense)     libc            ns/op  939.697 [923.462,953.125]        ns/op  227.173 [215.942,227.783]     4.136x
+```
+
+### AMD Zen 4
+
+```text
+pyenv: cannot rehash: /Users/aarhodes/.pyenv/shims isn't writable
+Accurate Rawr vs CRoaring parity table
+======================================
+Processes per tuple: 5
+# rawr bench env (compiled target)
+# zig 0.16.0 | ReleaseFast | windows x86_64
+# cpu: znver4 | features: sse2 ssse3 sse4_2 avx avx2
+# array-intersect kernel: x86-simd
+
+# requested-cpu: native
+# protocol: 3w/21t median
+# croaring-avx512: off
+
+operation                    variant          unit     rawr median [min,max]         unit       CR median [min,max]    ratio
+---------------------------- -------- ------------ ------------------------- ------------ ------------------------- --------
+add (random 1M)              smp                ms  211.464 [201.769,286.547]           ms  311.024 [305.836,315.348]    0.6799x
+add (random 1M)              libc               ms  252.455 [236.778,280.167]           ms  311.024 [305.836,315.348]    0.8117x
+add (sequential 1M)          smp                ms    4.883 [  4.846,  5.012]           ms    4.665 [  4.638,  4.787]     1.047x
+add (sequential 1M)          libc               ms    4.949 [  4.880,  5.095]           ms    4.665 [  4.638,  4.787]     1.061x
+addMany (random 1M)          smp                ms  204.611 [200.666,320.908]           ms  327.175 [325.502,329.054]    0.6254x
+addMany (random 1M)          libc               ms  274.471 [263.651,309.483]           ms  327.175 [325.502,329.054]    0.8389x
+addMany (sequential 1M)      smp                ms    3.546 [  3.524,  3.669]           ms    2.772 [  2.760,  2.867]     1.279x
+addMany (sequential 1M)      libc               ms    3.609 [  3.568,  3.709]           ms    2.772 [  2.760,  2.867]     1.302x
+addRange (1M)                smp             ns/op  340.771 [338.281,392.773]        ns/op  824.500 [816.125,859.241]    0.4133x
+addRange (1M)                libc            ns/op 1136.108 [1098.694,1146.655]        ns/op  824.500 [816.125,859.241]     1.378x
+contains (hit)               default            ms   94.230 [ 93.852,136.079]           ms   98.460 [ 94.823,131.049]     0.957x
+contains (miss)              default            ms   89.033 [ 88.552, 89.780]           ms   87.749 [ 86.316, 90.912]     1.015x
+bitwiseAnd (sparse)          smp                ms    0.817 [  0.804,  0.844]           ms    1.585 [  1.562,  1.672]    0.5157x
+bitwiseAnd (sparse)          libc               ms    2.114 [  2.085,  2.351]           ms    1.585 [  1.562,  1.672]     1.334x
+bitwiseAnd (sparse, arena)   arena              ms    0.991 [  0.966,  1.016]           ms    1.585 [  1.562,  1.672]    0.6254x
+bitwiseAnd (dense)           smp             ns/op  249.976 [249.121,260.608]        ns/op  447.571 [445.325,468.799]    0.5585x
+bitwiseAnd (dense)           libc            ns/op  483.093 [477.905,494.373]        ns/op  447.571 [445.325,468.799]     1.079x
+bitwiseOr (sparse)           smp                ms    2.127 [  2.097,  2.200]           ms    7.756 [  7.432,  8.133]    0.2742x
+bitwiseOr (sparse)           libc               ms    8.673 [  8.499,  8.936]           ms    7.756 [  7.432,  8.133]     1.118x
+bitwiseOr (sparse, arena)    arena              ms    2.591 [  2.549,  2.605]           ms    7.756 [  7.432,  8.133]    0.3341x
+bitwiseOr (dense)            smp             ns/op  382.019 [368.433,458.032]        ns/op  824.670 [795.276,836.133]    0.4632x
+bitwiseOr (dense)            libc            ns/op  989.685 [973.206,1022.351]        ns/op  824.670 [795.276,836.133]       1.2x
+lazyOr+repair (sparse)       smp                ms   35.418 [ 35.257, 35.474]           ms   99.748 [ 92.705,100.904]    0.3551x
+lazyOr+repair (sparse)       libc               ms   95.316 [ 94.256, 99.649]           ms   99.748 [ 92.705,100.904]    0.9556x
+lazyOr construction (sparse) smp                ms   20.305 [ 20.283, 20.468]           ms   63.958 [ 63.646, 64.356]    0.3175x
+lazyOr construction (sparse) libc               ms   61.784 [ 61.508, 62.231]           ms   63.958 [ 63.646, 64.356]     0.966x
+lazyOr repair (sparse)       smp                ms   14.419 [ 14.212, 14.516]           ms   26.653 [ 26.384, 26.699]     0.541x
+lazyOr repair (sparse)       libc               ms   27.510 [ 27.448, 27.611]           ms   26.653 [ 26.384, 26.699]     1.032x
+orMany (32 mixed)            smp             ns/op 21116.406 [20811.719,21533.594]        ns/op 23290.625 [23207.031,24167.969]    0.9066x
+orMany (32 mixed)            libc            ns/op 21810.938 [21554.688,22414.062]        ns/op 23290.625 [23207.031,24167.969]    0.9365x
+orManyHeap (32 mixed)        smp             ns/op 20964.844 [20775.000,21914.062]        ns/op 56441.406 [56397.656,57492.188]    0.3714x
+orManyHeap (32 mixed)        libc            ns/op 21827.344 [21679.688,22510.156]        ns/op 56441.406 [56397.656,57492.188]    0.3867x
+xorMany (32 mixed)           smp             ns/op 14942.188 [14840.625,15561.719]        ns/op 71638.281 [70246.875,72682.812]    0.2086x
+xorMany (32 mixed)           libc            ns/op 15731.250 [15467.969,16083.594]        ns/op 71638.281 [70246.875,72682.812]    0.2196x
+bitwiseAnd (array balanced)  smp             ns/op 149243.750 [148756.250,154087.500]        ns/op 197268.750 [194306.250,204800.000]    0.7566x
+bitwiseAnd (array balanced)  libc            ns/op 311837.500 [307631.250,323156.250]        ns/op 197268.750 [194306.250,204800.000]     1.581x
+andCardinality (array balanced) default         ns/op 99968.750 [99146.875,100709.375]        ns/op 46275.000 [45615.625,47040.625]      2.16x
+bitwiseXor (array balanced)  smp             ns/op 256812.500 [254925.000,262875.000]        ns/op 706750.000 [696900.000,732800.000]    0.3634x
+bitwiseXor (array balanced)  libc            ns/op 522687.500 [514675.000,534237.500]        ns/op 706750.000 [696900.000,732800.000]    0.7396x
+bitwiseAnd (array skewed)    smp             ns/op 14833.594 [14780.469,15251.562]        ns/op 26667.188 [26521.094,27381.250]    0.5562x
+bitwiseAnd (array skewed)    libc            ns/op 23779.688 [23566.406,25166.406]        ns/op 26667.188 [26521.094,27381.250]    0.8917x
+andCardinality (array skewed) default         ns/op 8489.844 [8312.500,8704.688]        ns/op 8093.750 [8048.438,8374.219]     1.049x
+iterate (1M values)          default            ms    3.389 [  3.341,  3.508]           ms    1.800 [  1.788,  1.845]     1.883x
+toArray (1M values)          default            ms    1.067 [  1.056,  1.117]           ms    0.938 [  0.903,  0.950]     1.138x
+toArrayAlloc (1M values)     smp                ms    1.438 [  1.363,  1.499]           ms    1.365 [  1.293,  1.472]     1.053x
+toArrayAlloc (1M values)     libc               ms    1.450 [  1.392,  1.966]           ms    1.365 [  1.293,  1.472]     1.062x
+serialize                    smp                ms    1.028 [  1.004,  1.073]           ms    0.953 [  0.939,  0.985]     1.078x
+serialize                    libc               ms    1.044 [  1.041,  1.112]           ms    0.953 [  0.939,  0.985]     1.095x
+deserialize                  smp                ms    1.729 [  1.722,  1.809]           ms    5.372 [  5.248,  6.133]    0.3219x
+deserialize                  libc               ms    8.376 [  8.318,  8.447]           ms    5.372 [  5.248,  6.133]     1.559x
+deserialize (arena)          arena              ms    1.789 [  1.775,  1.844]           ms    5.372 [  5.248,  6.133]     0.333x
+cardinality                  default         ns/op    3.258 [  3.228,  3.362]        ns/op 56087.500 [48943.750,56675.000] 5.809e-05x
+rank (dense)                 default            ms   12.012 [ 11.932, 12.131]           ms   11.296 [ 11.243, 12.260]     1.063x
+select (dense)               default            ms   13.496 [ 13.418, 14.774]           ms   11.238 [ 11.100, 11.378]     1.201x
+rankMany (dense)             default         ns/op 245437.500 [244337.500,255550.000]        ns/op 249575.000 [249025.000,257912.500]    0.9834x
+rangeCardinality small (bitset) default            ms   12.850 [ 12.813, 12.880]           ms   48.398 [ 48.100, 49.597]    0.2655x
+rangeCardinality large (bitset) default            ms   45.858 [ 45.776, 46.300]           ms   58.469 [ 58.253, 58.651]    0.7843x
+flip wide range (dense)      smp             ns/op  816.345 [790.015,850.708]        ns/op 1445.679 [1405.200,1460.547]    0.5647x
+flip wide range (dense)      libc            ns/op 2307.788 [2192.615,2357.837]        ns/op 1445.679 [1405.200,1460.547]     1.596x
+removeRange wide (dense)     smp             ns/op  684.155 [658.545,769.983]        ns/op  634.937 [612.183,683.875]     1.078x
+removeRange wide (dense)     libc            ns/op 2091.699 [2071.094,2146.216]        ns/op  634.937 [612.183,683.875]     3.294x
+```
+
 
 ## Recommendation
 
-Keep `bench_croaring` as a broad regression dashboard, but qualify performance gaps in a
-focused fresh-process executable before opening an optimization spec. For allocating
-operations, report default rawr-SMP and allocation-matched rawr-libc side by side. For
-non-allocating operations, report a single rawr result. Do not combine allocator variants
-or unrelated operation groups in one process when the number will drive parity work.
+Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad
+regression dashboard, and confirm any signal there in the canonical table before opening an
+optimization spec. For allocating operations, report default rawr-SMP and allocation-matched
+rawr-libc side by side. For non-allocating operations, report a single rawr result.
 
-Based on the corrected board, prioritize skewed `andCardinality` for general CRoaring
-parity. Sparse AND and OR need no default-allocator optimization spec; their remaining libc
-gaps are relevant only to an explicitly allocation-matched investigation.
+Use the per-host canonical tables above when selecting optimization work. Skewed
+`andCardinality` is now at parity on both reference hosts. Sparse AND and OR need no
+default-allocator optimization spec; their remaining libc gaps are relevant only to an
+explicitly allocation-matched investigation.
 
 ## Reproduction
 

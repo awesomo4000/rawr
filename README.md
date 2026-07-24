@@ -153,7 +153,7 @@ zig build              # build library
 zig build test         # run tests
 zig build validate     # CRoaring interop validation
 zig build bench        # rawr-only benchmarks
-zig build bench-compare # rawr vs CRoaring comparison
+zig build bench-compare # quick CRoaring screening dashboard
 zig build bench-alloc  # allocator matrix experiment
 ```
 
@@ -165,8 +165,8 @@ Run benchmarks (results saved to `misc/`):
 
 ```bash
 ./scripts/run-bench.sh           # rawr benchmarks
-./scripts/run-compare-bench.sh   # rawr vs CRoaring comparison
-./scripts/run-compare-bench.sh --parity # isolated 38-row functional table
+./scripts/run-compare-bench.sh   # canonical isolated CRoaring parity table
+./scripts/run-compare-bench.sh --dashboard # quick non-authoritative screening dashboard
 ./scripts/run-bench-alloc.sh     # allocator matrix experiment
 ```
 
