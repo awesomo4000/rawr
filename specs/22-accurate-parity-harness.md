@@ -93,8 +93,9 @@ full comparison table, every row trustworthy for target selection.
   generalizes `bench_parity_isolated` / `run-bench-parity-isolated.sh` into the standard runner.
 - **`22-01` Workload audit** — **populate the complete manifest** for every published
   `bench_croaring` row using `22-00`'s schema, port each to the isolated harness, and confirm or
-  correct its real number. The "audit every row" deliverable; produces the full trustworthy
-  table.
+  correct its real number. The "audit every row" deliverable; produces the **complete functional
+  table** — final trustworthiness is reached after `22-02`'s allocator completion and `22-03`'s
+  tiny-op calibration.
 - **`22-02` Allocator parity** — matched-allocator handling where **allocator scope follows the
   row manifest** (result-allocator-only for set ops, whole-op for construction ops, named
   boundaries for `serialize`/`toArrayAlloc`/`flip`/`removeRange`), plus the supplemental
@@ -102,7 +103,8 @@ full comparison table, every row trustworthy for target selection.
 - **`22-03` Tiny-operation calibration** — batching + `ns/op` for the sub-clock ops that
   currently read `0.00 ms`; define batch sizes that clear clock resolution.
 - **`22-04` Cross-machine validation** — run the canonical table on the M4 and the x86-64 /
-  Zen 4 host, identical features/protocol, so every row is validated on both architectures.
+  Zen 4 host, **same requested target/protocol with each implementation's effective feature
+  configuration recorded**, so every row is validated on both architectures.
 
 ## Constraints
 
@@ -119,12 +121,13 @@ full comparison table, every row trustworthy for target selection.
 
 ## Acceptance (toplevel; per-chunk gates in the chunks)
 
-- `run-compare-bench.sh` produces the familiar full comparison table where **every row** is
-  one fresh process per `(row, implementation, allocator)`, ≥5 process medians + **full min/max
-  range**, validated without contaminating timing, allocator-labeled (SMP/libc for allocating
-  ops), and `ns/op` for tiny ops — with identical data / semantics / CPU features (incl.
-  `croaring-avx512=on/off`) / timing boundaries for rawr and CRoaring. Runs under macOS Bash and
-  Windows Git Bash.
+- `run-compare-bench.sh` produces the familiar full comparison table where **every row** is run
+  as **≥5 independent fresh processes per `(row, implementation, allocator)` tuple**, reported as
+  median + **full min/max range**, validated without contaminating timing, allocator-labeled
+  (SMP/libc for allocating ops), and `ns/op` for tiny ops — with identical data / semantics /
+  **requested target/CPU** / timing boundaries for rawr and CRoaring, and each implementation's
+  effective feature configuration recorded (incl. `croaring-avx512=on/off`). Runs under macOS
+  Bash and Windows Git Bash.
 - **Every published row audited** against its manifest entry; no row remains that is a known
   process-context artifact. The prior sparse AND/OR isolated results are **sanity anchors, not a
   gate** — a correct harness is allowed to report a *changed* number; correctness is never
