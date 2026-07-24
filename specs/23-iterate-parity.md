@@ -33,18 +33,26 @@ All measured correctly:
 
 - **rawr pull** — `iterator().next()` loop, local checksum, iterator state built **inside** the
   timed region.
-- **rawr push (diagnostic)** — a **benchmark-only direct per-container traversal** in Zig
-  (walk containers, emit values, context-owned checksum). Without this there is no rawr push
-  number and the model tax cannot be computed; Phase 2 decides whether it deserves a public API.
-- **CRoaring pull** — measured via a **small benchmark-only C wrapper** that stack-initializes
-  `roaring_uint32_iterator`, runs the **complete** pull loop **in C**, and returns its checksum.
-  Do **not** call `roaring_uint32_iterator_advance` per value from Zig — that measures a million
-  Zig→C FFI calls, not iteration.
-- **CRoaring push** — `roaring_iterate` (the current board path).
+- **rawr push (diagnostic)** — a **benchmark-only direct per-container traversal** in Zig that
+  **accumulates inline** (a comptime sink, **no runtime callback**), context-owned checksum —
+  the shape a real `forEach` would take. Note this is not identical work to CRoaring push: rawr
+  can **inline** its sink where `roaring_iterate` uses a **runtime function pointer** — a real
+  (language) difference to **report explicitly**, not hide. Without this path there is no rawr
+  push number and the model tax cannot be computed; Phase 2 decides whether it deserves a public
+  API.
+- **CRoaring pull** — a benchmark-only **C wrapper** that stack-initializes a
+  `roaring_uint32_iterator_t`, runs the **complete** pull loop **in C**, and returns a **local**
+  checksum. Do **not** call `roaring_uint32_iterator_advance` per value from Zig — that measures
+  a million Zig→C FFI calls, not iteration.
+- **CRoaring push** — a benchmark-only **C wrapper** that runs `roaring_iterate` with a **C**
+  callback accumulating into a **local**, returning the checksum (not a Zig callback updating a
+  global — that is asymmetric FFI/global work).
 
-Symmetry requirements on every path: **local/context-owned checksums** (not a global),
-iterator/scan state constructed **inside** the timed scan, and **identical checksums validated
-afterward** (outside timing). Normalize by the **actual deduplicated cardinality**, not the
+Symmetry requirements on every path: **local/context-owned accumulation** (never a global);
+iterator/scan state constructed **inside** the timed scan; and during timing accumulate a
+**count**, a **sum/checksum**, **and an order-sensitive rolling hash** (a scalar checksum alone
+does not catch a wrong sequence or order). For correctness, a **full untimed sequence-equality**
+check across paths afterward. Normalize by the **actual deduplicated cardinality**, not the
 1,000,000 attempted inserts → report **ns/value**.
 
 From these:
@@ -72,18 +80,21 @@ hosts" is the deliverable even if no fix follows.
 
 ### Canonical-row outcome (pin it)
 
-- If **model mismatch is confirmed**, the existing `iterate` row becomes **rawr pull vs
-  CRoaring pull** (like-for-like), correcting the comparison.
+- The `iterate` row is scoped as **idiomatic pull iteration**, so it becomes **rawr pull vs
+  CRoaring pull** (like-for-like) **unconditionally** — the current pull-vs-push comparison is
+  corrected regardless of what the attribution shows.
 - If a **public push API** is added, push iteration gets a **separate manifest row**. That
   changes the current **38-row** manifest/count checks (`--list` → 39) and the canonical
   `docs/parity-measurement.md` — call it out explicitly and update both.
 
 ## Constraints / measurement
 
-- **Correctness:** every path yields the same value sequence — checksums validated equal, and a
-  differential check (rawr iteration == CRoaring order) stays green.
+- **Correctness:** every path yields the same value sequence — verified by **full untimed
+  sequence equality** (not just an equal scalar checksum), and a differential check (rawr
+  iteration == CRoaring order == sorted values) stays green.
 - Canonical spec-22 protocol: **3 warmup / 21 timed / median**, **≥5 fresh processes**, full
-  min/max range, default **rawr-SMP** vs CRoaring, on **M4 and Zen 4** (the gap is on both).
+  min/max range, on **M4 and Zen 4** (the gap is on both). Iteration **does not allocate**, so
+  the measured tuple is the **single rawr non-allocating tuple** vs CRoaring — no SMP/libc split.
 - Phase 1 is **benchmark-only** (the C wrapper and the rawr diagnostic traversal add no library
   API); a Phase-2 `forEach` would be an additive production API.
 
@@ -91,11 +102,11 @@ hosts" is the deliverable even if no fix follows.
 
 - **Phase 1 GO:** the reported 1.5–1.9x is decomposed into **model tax vs like-for-like kernel
   gap** (all four paths), with the container mix recorded, on both hosts.
-- **Phase 2 GO (if attempted):** the like-for-like default rawr-SMP iterate ratio is **≤ 1.10x
-  on both M4 and Zen 4**, with **no adjacent canonical row worsening by >5%**, differential
-  green. If the finding is "like-for-like is already near parity and the board was comparing
-  pull-vs-push," that is a valid terminal outcome — **correct the row** and record it rather
-  than optimizing a kernel that isn't slow.
+- **Phase 2 GO (if attempted):** the like-for-like iterate ratio (the single **rawr
+  non-allocating** tuple vs CRoaring) is **≤ 1.10x on both M4 and Zen 4**, with **no canonical
+  row regressing by more than 5%**, differential green. If the finding is "like-for-like is
+  already near parity and the board was comparing pull-vs-push," that is a valid terminal
+  outcome — **correct the row** and record it rather than optimizing a kernel that isn't slow.
 
 ## NO-GO
 
