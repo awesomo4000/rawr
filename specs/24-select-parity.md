@@ -34,8 +34,8 @@ so the fairness step is a **call-boundary matrix**, not a single wrapper.
    - **CRoaring via the current Zig loop** — per-query Zig→C FFI (the board's current path);
    - **CRoaring via an in-C loop** — one FFI call, loop in C.
    The **canonical-row comparison follows from this** — likely **rawr-noinline vs CRoaring-in-C**
-   (both a non-inlined public call, neither paying a Zig→C tax), the honest public-API
-   like-for-like. Report on both hosts.
+   (both a non-inlined boundary around the public operation, neither paying a Zig→C tax), the
+   honest public-API like-for-like. Report on both hosts.
    **Directional sanity checks** — the measured ranges must support these; if any fails
    materially, investigate codegen/harness shape rather than accept the ratio:
    - rawr-inline **no slower** than rawr-noinline;
@@ -43,8 +43,10 @@ so the fairness step is a **call-boundary matrix**, not a single wrapper.
    - the existing board ratios (**1.675x M4, 1.20x Zen 4**) are a **lower-bound expectation per
      host** for rawr-noinline / CR-in-C — the fair comparison should not come out *better* for
      rawr than the FFI-inflated board number on **either** host.
-   Confirm by **disassembly** that both selected canonical paths retain **one non-inlined public
-   call per query**.
+   Confirm by **disassembly** that both selected canonical paths retain **one non-inlined function
+   boundary around the public operation per query** — not necessarily a call whose symbol is the
+   public method (the rawr path calls a benchmark-only `noinline` wrapper into which `select` may
+   inline; the point is one enforced non-inlined boundary per query on each side).
 2. **Where rawr's select cost goes.** `select(rank)` finds the value at sorted position `rank`:
    skip containers by cardinality until the one holding `rank`, then index within it. Split
    the **container-skip** cost (cumulative-cardinality walk across the top-level array —

@@ -109,8 +109,12 @@ it" is the deliverable.
 - **Correctness:** bitset op results **and** cardinality stay correct — differential green,
   including cardinality after every op, and the cache-invalidation invariant. A card/no-card
   split must not leave a stale cached cardinality.
-- Benchmark-only for Phase 1 (measurement + a popcount-elided diagnostic variant); Phase 2 is a
-  production kernel change, differential-covered.
+- **Phase 1 is diagnosis with no production behavior / public API change.** The kernels under
+  test (`simdBitsetOp` / `simdBitsetOpLazy` / `countWords`) are private production source, so
+  **behavior-neutral internal refactoring** — or exposing them to the benchmark and gating the
+  A/B variants (popcount on/off, `VEC_SIZE` sweep) — is allowed **provided the default production
+  path and public API stay unchanged** (else a benchmark-local replica with disassembly proving
+  it matches production codegen). Phase 2 is a production kernel change, differential-covered.
 
 ## Acceptance
 
@@ -120,9 +124,11 @@ it" is the deliverable.
   the checklist), and **enough attribution to choose a production fix or an explicit NO-GO**;
   whether any subset shares a single cause stated (not assumed), on both hosts, codegen inspection
   recorded in `docs/parity-measurement.md`.
-- **Phase 2 GO (if attempted):** the affected rows reach **≤ 1.10x on M4** with **no regression
-  on Zen 4** (and no other canonical row worsening >5% vs the **latest committed corrected parity
-  baseline**, rerun on range overlap), differential green including cardinality.
+- **Phase 2 GO (if attempted):** **rows addressed by the selected fix** reach **≤ 1.10x on M4** —
+  or retain a **statistically supported improvement with rationale** — with **no regression on
+  Zen 4** (and no other canonical row worsening >5% vs the **latest committed corrected parity
+  baseline**, rerun on range overlap), differential green including cardinality. **Remaining rows**
+  not addressed by the fix may close as **documented no-clean-fix residuals**.
 - Validation: `zig build test`; `zig build difftest`; canonical `run-compare-bench.sh` on both
   hosts; `ReleaseSafe` / `ReleaseFast` green.
 
