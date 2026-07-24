@@ -34,6 +34,14 @@ so the fairness step is a **call-boundary matrix**, not a single wrapper.
    The **canonical-row comparison follows from this** — likely **rawr-noinline vs CRoaring-in-C**
    (both a non-inlined public call, neither paying a Zig→C tax), the honest public-API
    like-for-like. Report on both hosts.
+   **Directional sanity checks** — the measured ranges must support these; if any fails
+   materially, investigate codegen/harness shape rather than accept the ratio:
+   - rawr-inline **no slower** than rawr-noinline;
+   - CR-in-C **no slower** than the repeated Zig→C path (or their ranges overlap);
+   - the existing **1.675x is a lower-bound expectation** for rawr-noinline / CR-in-C — the fair
+     comparison should not come out *better* for rawr than the FFI-inflated board number.
+   Confirm by **disassembly** that both selected canonical paths retain **one non-inlined public
+   call per query**.
 2. **Where rawr's select cost goes.** `select(rank)` finds the value at sorted position `rank`:
    skip containers by cardinality until the one holding `rank`, then index within it. Split
    the **container-skip** cost (cumulative-cardinality walk across the top-level array —
@@ -74,9 +82,10 @@ row (still one `select` row).
 
 ## Acceptance
 
-- **Phase 1 GO:** the true like-for-like select ratio (FFI removed) reported on both hosts, with
-  rawr's cost split into container-skip vs intra-container and the container/rank mix recorded.
-- **Phase 2 GO (if attempted):** true like-for-like select **≤ 1.10x on both M4 and Zen 4**, no
+- **Phase 1 GO:** the **matrix-selected public-API select ratio** reported on both hosts (four-path
+  matrix + directional sanity checks passing), with rawr's cost split into container-skip vs
+  intra-container and the container/rank mix recorded.
+- **Phase 2 GO (if attempted):** matrix-selected public-API select **≤ 1.10x on both M4 and Zen 4**, no
   canonical row regressing >5% vs the **latest committed corrected parity baseline** (spec 23
   changed the iterate row) — rerun on range overlap — differential green.
 - Benchmark-only for Phase 1; a Phase-2 kernel change is production, differential-covered.

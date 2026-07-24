@@ -53,8 +53,17 @@ NEON kernel would not explain the canonical gap. For each row, dynamically attri
 
 Concretely: `flip`/`removeRange` clone + build a mask + XOR/difference + recompute cardinality +
 maybe demote; lazy construction adds top-level merge + many container allocations; `orMany` adds
-cursor scanning + allocation + accumulation + repair. Counters + per-phase timing say **which
-component carries the M4 gap** on each row — the word kernel may be a minor part.
+cursor scanning + allocation + accumulation + repair.
+
+**Method — no nested timers.** These ops are only hundreds of nanoseconds, so a clock call per
+phase would materially distort them. Instead:
+- **Counters** (allocations, clones, words touched, conversions) collected **untimed**.
+- Each phase measured through an **isolated fresh-process benchmark variant** or a **matched
+  full-row A/B variant** (e.g. with vs without the inline popcount, with vs without the clone) —
+  **never a nested timer inside the canonical operation**.
+- Compare each phase to the **corresponding CRoaring phase where accessible**; where it is not,
+  report the result as a **rawr A/B attribution plus a named unexplained residual** — an A/B delta
+  is **not** by itself proof of the CRoaring parity gap.
 
 ### Then: kernel/codegen hypotheses (test, not assume)
 
@@ -74,7 +83,7 @@ component carries the M4 gap** on each row — the word kernel may be a minor pa
    Record exact build command, symbol, and the relevant asm.
 
 Attribute the M4 gap per row to a component + cause, and report **whether any subset shares a
-single cause** (do not assume the six do). Measure on the canonical spec-22 harness, both hosts,
+single cause** (do not assume the six do). Measure on the current canonical parity harness, both hosts,
 3w/21t median, ≥5 fresh processes, per-path process isolation; absolute medians + ranges with a
 named residual.
 
@@ -122,6 +131,6 @@ it" is the deliverable.
 
 ## Estimate
 
-S–M for Phase 1 (a popcount-elided diagnostic + a VEC_SIZE sweep + aarch64/x86 codegen
+M for Phase 1 (six per-row decompositions across two architectures + assembly inspection; a popcount-elided diagnostic + a VEC_SIZE sweep + aarch64/x86 codegen
 inspection on the existing harness). Phase 2 depends on the cause — a card/no-card split is M
 (touches the bitset op surface + callers), a per-arch width is S.
