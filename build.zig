@@ -219,9 +219,10 @@ pub fn build(b: *std.Build) void {
     bench_parity_worker_mod.addImport("rawr", bench_lib_mod);
     addBenchmarkPlatformShim(b, bench_parity_worker_mod, target);
     addTranslatedCImport(b, bench_parity_worker_mod, .{
-        .header = "tools/croaring_wrapper.h",
-        .include_dir = "vendor/",
+        .header = "tools/croaring_iterate_diag.h",
+        .include_dir = "tools/",
         .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{"tools/croaring_iterate_diag.c"},
         .croaring_avx512 = croaring_avx512,
         .target = target,
         .optimize = .ReleaseFast,
@@ -236,6 +237,40 @@ pub fn build(b: *std.Build) void {
         "Build manifest-backed CRoaring parity worker",
     );
     bench_parity_worker_step.dependOn(&b.addInstallArtifact(bench_parity_worker_exe, .{}).step);
+
+    // Fresh-process four-path iteration diagnosis harness.
+    const iterate_diag_optimize = if (optimize == .Debug) .ReleaseFast else optimize;
+    const iterate_diag_lib_mod = b.createModule(.{
+        .root_source_file = b.path("src/roaring.zig"),
+        .target = target,
+        .optimize = iterate_diag_optimize,
+    });
+    const bench_iterate_diag_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_iterate_diag.zig"),
+        .target = target,
+        .optimize = iterate_diag_optimize,
+    });
+    bench_iterate_diag_mod.addImport("rawr", iterate_diag_lib_mod);
+    addBenchmarkPlatformShim(b, bench_iterate_diag_mod, target);
+    addTranslatedCImport(b, bench_iterate_diag_mod, .{
+        .header = "tools/croaring_iterate_diag.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{"tools/croaring_iterate_diag.c"},
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = iterate_diag_optimize,
+    });
+
+    const bench_iterate_diag_exe = b.addExecutable(.{
+        .name = "bench_iterate_diag",
+        .root_module = bench_iterate_diag_mod,
+    });
+    const bench_iterate_diag_step = b.step(
+        "bench-iterate-diag",
+        "Build four-path iteration diagnosis benchmark",
+    );
+    bench_iterate_diag_step.dependOn(&b.addInstallArtifact(bench_iterate_diag_exe, .{}).step);
 
     // Focused skewed array-cardinality diagnosis harness.
     const bench_and_card_diag_mod = b.createModule(.{
@@ -370,9 +405,10 @@ pub fn build(b: *std.Build) void {
     bench_cr_mod.addImport("rawr", bench_lib_mod);
     addBenchmarkPlatformShim(b, bench_cr_mod, target);
     addTranslatedCImport(b, bench_cr_mod, .{
-        .header = "tools/croaring_wrapper.h",
-        .include_dir = "vendor/",
+        .header = "tools/croaring_iterate_diag.h",
+        .include_dir = "tools/",
         .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{"tools/croaring_iterate_diag.c"},
         .croaring_avx512 = croaring_avx512,
         .target = target,
         .optimize = .ReleaseFast,
@@ -425,6 +461,7 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
     header: []const u8,
     include_dir: []const u8,
     c_source: ?[]const u8 = null,
+    extra_c_sources: []const []const u8 = &.{},
     c_flags: []const []const u8 = &.{ "-std=c11", "-O3", "-DNDEBUG" },
     croaring_avx512: bool = false,
     target: std.Build.ResolvedTarget,
@@ -440,6 +477,12 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
     }
 
     if (opts.c_source) |c_source| {
+        mod.addCSourceFile(.{
+            .file = b.path(c_source),
+            .flags = croaringCFlags(b, opts.c_flags, opts.croaring_avx512),
+        });
+    }
+    for (opts.extra_c_sources) |c_source| {
         mod.addCSourceFile(.{
             .file = b.path(c_source),
             .flags = croaringCFlags(b, opts.c_flags, opts.croaring_avx512),

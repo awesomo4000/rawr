@@ -261,7 +261,7 @@ bitwiseXor (array balanced)  libc            ns/op 227000.000 [214250.000,227250
 bitwiseAnd (array skewed)    smp             ns/op 22156.250 [21171.875,22460.938]        ns/op 44429.688 [42726.562,45132.812]    0.4987x
 bitwiseAnd (array skewed)    libc            ns/op 25289.062 [24875.000,26101.562]        ns/op 44429.688 [42726.562,45132.812]    0.5692x
 andCardinality (array skewed) default         ns/op 12710.938 [12429.688,13328.125]        ns/op 13078.125 [12507.812,13890.625]    0.9719x
-iterate (1M values)          default            ms    2.137 [  2.121,  2.177]           ms    1.404 [  1.388,  1.415]     1.522x
+iterate (1M values)          default            ms    2.148 [  2.132,  2.181]           ms    3.045 [  2.995,  3.077]    0.7054x
 toArray (1M values)          default            ms    0.895 [  0.887,  0.934]           ms    1.041 [  1.020,  1.063]    0.8598x
 toArrayAlloc (1M values)     smp                ms    1.081 [  1.065,  1.117]           ms    1.086 [  1.066,  1.116]    0.9954x
 toArrayAlloc (1M values)     libc               ms    0.899 [  0.873,  0.927]           ms    1.086 [  1.066,  1.116]    0.8278x
@@ -342,7 +342,7 @@ bitwiseXor (array balanced)  libc            ns/op 522687.500 [514675.000,534237
 bitwiseAnd (array skewed)    smp             ns/op 14833.594 [14780.469,15251.562]        ns/op 26667.188 [26521.094,27381.250]    0.5562x
 bitwiseAnd (array skewed)    libc            ns/op 23779.688 [23566.406,25166.406]        ns/op 26667.188 [26521.094,27381.250]    0.8917x
 andCardinality (array skewed) default         ns/op 8489.844 [8312.500,8704.688]        ns/op 8093.750 [8048.438,8374.219]     1.049x
-iterate (1M values)          default            ms    3.389 [  3.341,  3.508]           ms    1.800 [  1.788,  1.845]     1.883x
+iterate (1M values)          default            ms    3.343 [  3.313,  3.352]           ms    3.409 [  3.371,  3.459]    0.9806x
 toArray (1M values)          default            ms    1.067 [  1.056,  1.117]           ms    0.938 [  0.903,  0.950]     1.138x
 toArrayAlloc (1M values)     smp                ms    1.438 [  1.363,  1.499]           ms    1.365 [  1.293,  1.472]     1.053x
 toArrayAlloc (1M values)     libc               ms    1.450 [  1.392,  1.966]           ms    1.365 [  1.293,  1.472]     1.062x
@@ -363,6 +363,37 @@ removeRange wide (dense)     smp             ns/op  684.155 [658.545,769.983]   
 removeRange wide (dense)     libc            ns/op 2091.699 [2071.094,2146.216]        ns/op  634.937 [612.183,683.875]     3.294x
 ```
 
+
+## Iteration model attribution
+
+The original canonical `iterate` row compared rawr's idiomatic pull iterator with CRoaring's
+push-style `roaring_iterate` callback API. A four-path, fresh-process diagnosis replaced that
+model mismatch with symmetric measurements: rawr pull, benchmark-only rawr direct push,
+CRoaring pull in a C wrapper, and CRoaring push with a C callback. Every path traversed the same
+999,893-value sorted sequence and produced the same count, wrapping sum, and untimed rolling
+hash. Both implementations reported exactly 65,536 array containers and no bitset or run
+containers.
+
+Results below are median nanoseconds per deduplicated value across five independent process
+medians; brackets show the complete process range.
+
+| Host | Path | ns/value | Interpretation |
+| --- | --- | ---: | --- |
+| Apple M4 | rawr pull | 2.126 [2.117, 2.164] | Idiomatic public pull iterator. |
+| Apple M4 | rawr push diagnostic | 0.911 [0.883, 0.950] | Inline comptime sink; benchmark-only. |
+| Apple M4 | CRoaring pull | 2.997 [2.974, 3.134] | Complete pull loop inside C. |
+| Apple M4 | CRoaring push | 1.598 [1.583, 1.646] | C runtime callback. |
+| AMD Zen 4 | rawr pull | 3.458 [3.431, 4.154] | Idiomatic public pull iterator. |
+| AMD Zen 4 | rawr push diagnostic | 1.064 [1.057, 1.094] | Inline comptime sink; benchmark-only. |
+| AMD Zen 4 | CRoaring pull | 3.491 [3.384, 3.593] | Complete pull loop inside C. |
+| AMD Zen 4 | CRoaring push | 2.188 [2.168, 2.226] | C runtime callback. |
+
+The like-for-like pull ratios are 0.709x on M4 and 0.991x on Zen 4, both within the 1.10x
+decision gate. The original 1.52x and 1.88x gaps were benchmark-model artifacts, so no
+`Iterator.next()` optimization or public push API was added. The canonical row now compares
+pull with pull and validates the same iterator paths it times. The push comparison remains
+diagnostic rather than a parity claim because rawr's comptime sink inlines while CRoaring uses a
+runtime function pointer.
 
 ## Recommendation
 
@@ -396,6 +427,12 @@ Build and run the five-process skewed `andCardinality` diagnosis:
 ./scripts/run-bench-and-cardinality-diag.sh
 ```
 
+Build and run the four-path iteration diagnosis:
+
+```sh
+./scripts/run-bench-iterate-diag.sh
+```
+
 These scripts build native `ReleaseFast` executables, retain individual process output under
 `misc/`, and write an aggregate summary. The recorded runs are:
 
@@ -405,3 +442,5 @@ These scripts build native `ReleaseFast` executables, retain individual process 
 - `misc/and-cardinality-diag-20260723-014315-summary.txt` (M4, fused kernel)
 - `misc/parity-isolated-20260723-014621-summary.txt` (M4, fused kernel)
 - `misc/and-cardinality-diag-20260723-192153-summary.txt` (Zen 4, fused kernel)
+- `misc/iterate-diag-20260724-094909-summary.txt` (M4)
+- `misc/iterate-diag-20260724-152701-summary.txt` (Zen 4)

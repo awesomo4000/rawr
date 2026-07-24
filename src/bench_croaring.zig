@@ -646,11 +646,14 @@ fn benchRawrOrDenseWithAllocator(comptime result_allocator: std.mem.Allocator) v
 
 fn benchRawrIterate() void {
     const bm = &rawr_contains_bm.?;
+    var count: u64 = 0;
     var sum: u64 = 0;
     var it = bm.iterator();
     while (it.next()) |v| {
+        count +%= 1;
         sum +%= v;
     }
+    std.mem.doNotOptimizeAway(count);
     std.mem.doNotOptimizeAway(sum);
 }
 
@@ -1151,18 +1154,11 @@ fn benchCRoaringOrDense() void {
     std.mem.doNotOptimizeAway(result);
 }
 
-var cr_iterate_sum: u64 = 0;
-
-fn crIterateCallback(value: u32, _: ?*anyopaque) callconv(.c) bool {
-    cr_iterate_sum +%= value;
-    return true;
-}
-
 fn benchCRoaringIterate() void {
     const bm = cr_contains_bm.?;
-    cr_iterate_sum = 0;
-    _ = c.roaring_iterate(bm, crIterateCallback, null);
-    std.mem.doNotOptimizeAway(cr_iterate_sum);
+    const result = c.rawr_cr_iterate_pull(bm);
+    std.mem.doNotOptimizeAway(result.count);
+    std.mem.doNotOptimizeAway(result.sum);
 }
 
 var cr_serialized: ?[]u8 = null;
@@ -1623,7 +1619,12 @@ fn validateArrayParity(row: ParityRow, allocator_kind: ParityAllocator) !void {
         .to_array_alloc => {},
         else => unreachable,
     }
-    c.roaring_bitmap_to_uint32_array(cr_contains_bm.?, cr_values.ptr);
+    if (row == .iterate) {
+        const written = c.rawr_cr_iterate_pull_values(cr_contains_bm.?, cr_values.ptr, cr_values.len);
+        if (written != cr_values.len) return error.ArrayMismatch;
+    } else {
+        c.roaring_bitmap_to_uint32_array(cr_contains_bm.?, cr_values.ptr);
+    }
     if (!std.mem.eql(u32, rawr_values, cr_values)) return error.ArrayMismatch;
 }
 
