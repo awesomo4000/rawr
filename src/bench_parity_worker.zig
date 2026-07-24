@@ -43,9 +43,7 @@ const ValidationOracle = enum {
 
 const Followup = enum {
     complete,
-    allocator_pending,
     calibration_pending,
-    allocator_and_calibration_pending,
 };
 
 const TupleKey = struct {
@@ -61,6 +59,7 @@ const Reference = struct {
 const Variant = struct {
     implementation: Implementation,
     allocator: AllocatorKind,
+    batch_count: ?usize = null,
 };
 
 const ManifestRow = struct {
@@ -84,11 +83,6 @@ const ManifestRow = struct {
 
 const allocating_variants = [_]Variant{
     .{ .implementation = .rawr, .allocator = .smp },
-    .{ .implementation = .croaring, .allocator = .libc },
-};
-
-const sparse_and_variants = [_]Variant{
-    .{ .implementation = .rawr, .allocator = .smp },
     .{ .implementation = .rawr, .allocator = .libc },
     .{ .implementation = .croaring, .allocator = .libc },
 };
@@ -96,6 +90,11 @@ const sparse_and_variants = [_]Variant{
 const non_allocating_variants = [_]Variant{
     .{ .implementation = .rawr, .allocator = .none },
     .{ .implementation = .croaring, .allocator = .none },
+};
+
+const cardinality_variants = [_]Variant{
+    .{ .implementation = .rawr, .allocator = .none, .batch_count = 524288 },
+    .{ .implementation = .croaring, .allocator = .none, .batch_count = 64 },
 };
 
 const arena_variant = [_]Variant{
@@ -120,7 +119,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "value corpus outside timing; bitmap construction and inserts inside timing",
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .add_random,
     },
     .{
@@ -135,7 +133,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "value corpus outside timing; bitmap construction and inserts inside timing",
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .add_sequential,
     },
     .{
@@ -150,7 +147,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "value corpus outside timing; bitmap construction and bulk insert inside timing",
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .add_many_random,
     },
     .{
@@ -165,7 +161,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "value corpus outside timing; bitmap construction and bulk insert inside timing",
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .add_many_sequential,
     },
     .{
@@ -180,7 +175,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "empty bitmap construction and range insert inside timing",
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 8192,
+        .reporting_unit = .ns_per_op,
         .operation = .add_range,
     },
     .{
@@ -219,11 +215,10 @@ const manifest = [_]ManifestRow{
         .rawr_operation = "RoaringBitmap.bitwiseAnd",
         .croaring_operation = "roaring_bitmap_and",
         .allocation_class = .allocating,
-        .variants = &sparse_and_variants,
+        .variants = &allocating_variants,
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .sparse_and,
     },
     .{
@@ -253,7 +248,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 8192,
+        .reporting_unit = .ns_per_op,
         .operation = .dense_and,
     },
     .{
@@ -268,7 +264,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .sparse_or,
     },
     .{
@@ -298,7 +293,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 8192,
+        .reporting_unit = .ns_per_op,
         .operation = .dense_or,
     },
     .{
@@ -313,7 +309,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .lazy_or_repair,
     },
     .{
@@ -328,7 +323,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "inputs outside timing; lazy result construction inside timing",
         .teardown_boundary = "result deinit/free outside the internally timed interval",
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .lazy_or_construction,
     },
     .{
@@ -343,7 +337,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "inputs and lazy result construction outside timing; repair inside timing",
         .teardown_boundary = "result deinit/free outside the internally timed interval",
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .lazy_or_repair_only,
     },
     .{
@@ -358,7 +351,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 128,
+        .reporting_unit = .ns_per_op,
         .operation = .or_many,
     },
     .{
@@ -373,7 +367,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 128,
+        .reporting_unit = .ns_per_op,
         .operation = .or_many_heap,
     },
     .{
@@ -388,7 +383,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 128,
+        .reporting_unit = .ns_per_op,
         .operation = .xor_many,
     },
     .{
@@ -403,7 +399,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 16,
+        .reporting_unit = .ns_per_op,
         .operation = .array_balanced_and,
     },
     .{
@@ -418,7 +415,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = query_setup,
         .teardown_boundary = query_teardown,
         .validation_oracle = .exact_scalar,
-        .followup = .calibration_pending,
+        .batch_count = 32,
+        .reporting_unit = .ns_per_op,
         .operation = .array_balanced_and_cardinality,
     },
     .{
@@ -433,7 +431,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 8,
+        .reporting_unit = .ns_per_op,
         .operation = .array_balanced_xor,
     },
     .{
@@ -448,7 +447,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 128,
+        .reporting_unit = .ns_per_op,
         .operation = .array_skewed_and,
     },
     .{
@@ -463,7 +463,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = query_setup,
         .teardown_boundary = query_teardown,
         .validation_oracle = .exact_scalar,
-        .followup = .calibration_pending,
+        .batch_count = 128,
+        .reporting_unit = .ns_per_op,
         .operation = .array_skewed_and_cardinality,
     },
     .{
@@ -506,7 +507,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "bitmap construction outside timing; output allocation and conversion inside timing",
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .exact_array,
-        .followup = .allocator_pending,
         .operation = .to_array_alloc,
     },
     .{
@@ -521,7 +521,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "bitmap construction outside timing; output allocation and serialization inside timing",
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .serialize,
     },
     .{
@@ -536,7 +535,6 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "serialized input construction outside timing; bitmap construction inside timing",
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_pending,
         .operation = .deserialize,
     },
     .{
@@ -562,13 +560,12 @@ const manifest = [_]ManifestRow{
         .rawr_operation = "RoaringBitmap.cardinality",
         .croaring_operation = "roaring_bitmap_get_cardinality",
         .allocation_class = .non_allocating,
-        .variants = &non_allocating_variants,
+        .variants = &cardinality_variants,
         .setup_boundary = "bitmap construction outside timing; batched cardinality calls inside timing",
         .teardown_boundary = query_teardown,
         .validation_oracle = .exact_scalar,
-        .batch_count = 1024,
+        .batch_count = 524288,
         .reporting_unit = .ns_per_op,
-        .followup = .calibration_pending,
         .operation = .cardinality,
     },
     .{
@@ -611,7 +608,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "bitmap, probes, and output buffer outside timing; rankMany inside timing",
         .teardown_boundary = query_teardown,
         .validation_oracle = .exact_array,
-        .followup = .calibration_pending,
+        .batch_count = 8,
+        .reporting_unit = .ns_per_op,
         .operation = .rank_many,
     },
     .{
@@ -654,7 +652,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = allocating_setup,
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 8192,
+        .reporting_unit = .ns_per_op,
         .operation = .flip,
     },
     .{
@@ -669,7 +668,8 @@ const manifest = [_]ManifestRow{
         .setup_boundary = "input construction outside timing; clone and range removal inside timing",
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
-        .followup = .allocator_and_calibration_pending,
+        .batch_count = 8192,
+        .reporting_unit = .ns_per_op,
         .operation = .remove_range,
     },
 };
@@ -726,6 +726,7 @@ pub fn main(init: std.process.Init) !void {
         allocator orelse return error.MissingAllocator,
     );
     const median_ns = try runTuple(requested);
+    const batch_count = effectiveBatchCount(requested);
 
     // RESULT is emitted only after the untimed validation in runTuple succeeds.
     bench_time.print("RESULT\t{s}\t{s}\t{s}\t{s}\t{d}\t{d}\n", .{
@@ -733,7 +734,7 @@ pub fn main(init: std.process.Init) !void {
         @tagName(requested.variant.implementation),
         @tagName(requested.variant.allocator),
         requested.row.reporting_unit.name(),
-        requested.row.batch_count,
+        batch_count,
         median_ns,
     });
 }
@@ -759,6 +760,10 @@ fn validateManifest() !void {
             if (std.mem.eql(u8, row.id, other.id)) return error.DuplicateManifestRow;
         }
         for (row.variants, 0..) |variant, variant_index| {
+            if (variant.batch_count == 0) return error.InvalidBatchCount;
+            if (variant.batch_count != null and row.reporting_unit != .ns_per_op) {
+                return error.InvalidBatchOverride;
+            }
             if ((row.allocation_class == .allocating) == (variant.allocator == .none)) {
                 return error.InvalidAllocatorVariant;
             }
@@ -833,19 +838,21 @@ fn printManifest() void {
                     .row_id = row.id,
                     .variant = findCRoaringVariant(row) orelse unreachable,
                 };
-                bench_time.print("TUPLE\t{s}\t{s}\t{s}\t{s}\t{s}\t{s}\n", .{
+                bench_time.print("TUPLE\t{s}\t{s}\t{s}\t{s}\t{s}\t{s}\t{d}\n", .{
                     row.id,
                     @tagName(variant.implementation),
                     @tagName(variant.allocator),
                     comparison.row_id,
                     @tagName(comparison.variant.implementation),
                     @tagName(comparison.variant.allocator),
+                    variant.batch_count orelse row.batch_count,
                 });
             } else {
-                bench_time.print("TUPLE\t{s}\t{s}\t{s}\t-\t-\t-\n", .{
+                bench_time.print("TUPLE\t{s}\t{s}\t{s}\t-\t-\t-\t{d}\n", .{
                     row.id,
                     @tagName(variant.implementation),
                     @tagName(variant.allocator),
+                    variant.batch_count orelse row.batch_count,
                 });
             }
         }
@@ -883,6 +890,10 @@ fn runTuple(requested: RequestedTuple) !u64 {
     return median_ns;
 }
 
+fn effectiveBatchCount(requested: RequestedTuple) usize {
+    return requested.variant.batch_count orelse requested.row.batch_count;
+}
+
 fn measure(requested: RequestedTuple) u64 {
     for (0..warmup_runs) |_| _ = runBatch(requested);
 
@@ -893,9 +904,10 @@ fn measure(requested: RequestedTuple) u64 {
 }
 
 fn runBatch(requested: RequestedTuple) u64 {
+    const batch_count = effectiveBatchCount(requested);
     if (dashboard.parityTiming(requested.row.operation) == .internal) {
         var elapsed: u64 = 0;
-        for (0..requested.row.batch_count) |_| {
+        for (0..batch_count) |_| {
             elapsed +%= dashboard.parityRun(
                 requested.row.operation,
                 requested.variant.implementation,
@@ -907,7 +919,7 @@ fn runBatch(requested: RequestedTuple) u64 {
     }
 
     const start = bench_time.monotonicNanos();
-    for (0..requested.row.batch_count) |_| {
+    for (0..batch_count) |_| {
         _ = dashboard.parityRun(
             requested.row.operation,
             requested.variant.implementation,

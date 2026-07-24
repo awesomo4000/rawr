@@ -165,7 +165,14 @@ The initial architecture pilot covered sparse AND (rawr SMP, rawr libc, and CRoa
 cardinality (rawr and CRoaring). On the Apple M4 pilot, sparse AND measured 0.581
 [0.577, 0.612] ms for rawr SMP, 0.931 [0.917, 0.935] ms for rawr libc, and 0.690
 [0.680, 0.752] ms for CRoaring. Cardinality is normalized to `ns/op`; its final cross-host
-batch calibration belongs to spec 22-03. The same controller passed under Windows Git Bash on
+batch calibration belongs to spec 22-03. Cardinality uses independently calibrated batch counts:
+Rawr caches the bitmap-wide total, while CRoaring scans and sums its containers on each call.
+Both retain the same corpus and public operation, exceed the per-sample timing floor, and are
+normalized to `ns/op`. The calibrated counts are 524288 calls for Rawr and 64 calls for
+CRoaring. Their median timed samples were 1.312 ms and 2.254 ms on the M4, and 1.693 ms and
+3.737 ms on Zen 4, respectively. A shared count based on Rawr had made each CRoaring sample
+take about 19 seconds without improving the normalized comparison. The same controller passed
+under Windows Git Bash on
 Zen 4, where sparse AND measured 0.780 [0.778, 0.787] ms for rawr SMP, 2.102
 [2.054, 2.164] ms for rawr libc, and 1.554 [1.522, 1.867] ms for CRoaring. These two rows prove
 the worker and aggregation protocol.

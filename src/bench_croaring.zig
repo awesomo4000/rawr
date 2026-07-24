@@ -306,6 +306,7 @@ fn benchRawrAddRangeWithAllocator(comptime result_allocator: std.mem.Allocator) 
 }
 
 var rawr_contains_bm: ?RoaringBitmap = null;
+var rawr_cardinality_bm_alt: ?RoaringBitmap = null;
 
 fn initRawrContainsBm() void {
     if (rawr_contains_bm != null) return;
@@ -314,6 +315,11 @@ fn initRawrContainsBm() void {
         _ = bm.add(v) catch unreachable;
     }
     rawr_contains_bm = bm;
+}
+
+fn initRawrCardinalityAlt() void {
+    if (rawr_cardinality_bm_alt != null) return;
+    rawr_cardinality_bm_alt = rawr_contains_bm.?.clone(allocator) catch unreachable;
 }
 
 fn benchRawrContainsHit() void {
@@ -748,6 +754,18 @@ fn benchRawrCardinality() void {
     std.mem.doNotOptimizeAway(card);
 }
 
+var parity_cardinality_selector: usize = 0;
+
+noinline fn benchRawrCardinalityVarying() void {
+    parity_cardinality_selector +%= 1;
+    const bm = if (parity_cardinality_selector & 1 == 0)
+        &rawr_contains_bm.?
+    else
+        &rawr_cardinality_bm_alt.?;
+    const card = bm.cardinality();
+    std.mem.doNotOptimizeAway(card);
+}
+
 fn benchRawrRankDense() void {
     const bm = &rawr_dense_a.?;
     var total: u64 = 0;
@@ -862,6 +880,7 @@ fn benchCRoaringAddRange() void {
 }
 
 var cr_contains_bm: ?*c.roaring_bitmap_t = null;
+var cr_cardinality_bm_alt: ?*c.roaring_bitmap_t = null;
 
 fn initCRoaringContainsBm() void {
     if (cr_contains_bm != null) return;
@@ -870,6 +889,11 @@ fn initCRoaringContainsBm() void {
         c.roaring_bitmap_add(bm, v);
     }
     cr_contains_bm = bm;
+}
+
+fn initCRoaringCardinalityAlt() void {
+    if (cr_cardinality_bm_alt != null) return;
+    cr_cardinality_bm_alt = c.roaring_bitmap_copy(cr_contains_bm.?) orelse unreachable;
 }
 
 fn benchCRoaringContainsHit() void {
@@ -1177,6 +1201,16 @@ fn benchCRoaringCardinality() void {
     std.mem.doNotOptimizeAway(card);
 }
 
+noinline fn benchCRoaringCardinalityVarying() void {
+    parity_cardinality_selector +%= 1;
+    const bm = if (parity_cardinality_selector & 1 == 0)
+        cr_contains_bm.?
+    else
+        cr_cardinality_bm_alt.?;
+    const card = c.roaring_bitmap_get_cardinality(bm);
+    std.mem.doNotOptimizeAway(card);
+}
+
 fn benchCRoaringRankDense() void {
     const bm = cr_dense_a.?;
     var total: u64 = 0;
@@ -1277,6 +1311,7 @@ pub fn parityPrepare(row: ParityRow, implementation: ParityImplementation) void 
         .contains_hit, .contains_miss, .iterate, .to_array, .to_array_alloc, .serialize, .cardinality => {
             initContainsFor(implementation);
             if (row == .to_array) initToArrayFor(implementation);
+            if (row == .cardinality) initCardinalityAltFor(implementation);
         },
         .deserialize, .deserialize_arena => {
             initContainsFor(implementation);
@@ -1358,6 +1393,13 @@ fn initSerializedFor(implementation: ParityImplementation) void {
     }
 }
 
+fn initCardinalityAltFor(implementation: ParityImplementation) void {
+    switch (implementation) {
+        .rawr => initRawrCardinalityAlt(),
+        .croaring => initCRoaringCardinalityAlt(),
+    }
+}
+
 pub noinline fn parityRun(row: ParityRow, implementation: ParityImplementation, allocator_kind: ParityAllocator) u64 {
     return switch (implementation) {
         .rawr => parityRunRawr(row, allocator_kind),
@@ -1397,7 +1439,7 @@ noinline fn parityRunRawr(row: ParityRow, allocator_kind: ParityAllocator) u64 {
         .serialize => runRawrAllocator(allocator_kind, benchRawrSerializeWithAllocator),
         .deserialize => runRawrAllocator(allocator_kind, benchRawrDeserializeWithAllocator),
         .deserialize_arena => benchRawrDeserializeArena(),
-        .cardinality => benchRawrCardinality(),
+        .cardinality => benchRawrCardinalityVarying(),
         .rank => benchRawrRankDense(),
         .select => benchRawrSelectDense(),
         .rank_many => benchRawrRankManyDense(),
@@ -1454,7 +1496,7 @@ noinline fn parityRunCRoaring(row: ParityRow) u64 {
         .to_array_alloc => benchCRoaringToArrayAllocWithAllocator(libc_allocator),
         .serialize => benchCRoaringSerializeWithAllocator(libc_allocator),
         .deserialize, .deserialize_arena => benchCRoaringDeserialize(),
-        .cardinality => benchCRoaringCardinality(),
+        .cardinality => benchCRoaringCardinalityVarying(),
         .rank => benchCRoaringRankDense(),
         .select => benchCRoaringSelectDense(),
         .rank_many => benchCRoaringRankManyDense(),
@@ -1508,6 +1550,9 @@ fn validateAndCardinality(row: ParityRow) !void {
 
 fn validateCardinalityParity() !void {
     if (rawr_contains_bm.?.cardinality() != c.roaring_bitmap_get_cardinality(cr_contains_bm.?)) {
+        return error.CardinalityMismatch;
+    }
+    if (rawr_cardinality_bm_alt.?.cardinality() != c.roaring_bitmap_get_cardinality(cr_cardinality_bm_alt.?)) {
         return error.CardinalityMismatch;
     }
 }
@@ -2155,6 +2200,7 @@ noinline fn runRangeBenchmarks() void {
 
 noinline fn cleanupBenchmarks() void {
     if (rawr_contains_bm) |*bm| bm.deinit();
+    if (rawr_cardinality_bm_alt) |*bm| bm.deinit();
     if (rawr_sparse_a) |*bm| bm.deinit();
     if (rawr_sparse_b) |*bm| bm.deinit();
     if (rawr_array_balanced_a) |*bm| bm.deinit();
@@ -2172,6 +2218,7 @@ noinline fn cleanupBenchmarks() void {
     if (rawr_serialized) |s| allocator.free(s);
 
     if (cr_contains_bm) |bm| c.roaring_bitmap_free(bm);
+    if (cr_cardinality_bm_alt) |bm| c.roaring_bitmap_free(bm);
     if (cr_sparse_a) |bm| c.roaring_bitmap_free(bm);
     if (cr_sparse_b) |bm| c.roaring_bitmap_free(bm);
     if (cr_array_balanced_a) |bm| c.roaring_bitmap_free(bm);

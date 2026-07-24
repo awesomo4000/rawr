@@ -16,11 +16,16 @@ final trustworthiness.**
 - **Identify the sub-clock rows** — those currently reading `0.00 ms` (e.g. `addRange`,
   `cardinality`, `flip`, `removeRange`, and any others the manifest flags), and any whose
   single-shot time is at clock resolution.
-- **Batch mechanically** → `ns/op`: a **fixed identical batch count** for rawr and CRoaring,
-  normalized to ns/op. The **≥ 1 ms floor applies per timed sample on each host** — if a batch
-  falls below 1 ms per timed sample on **either** M4 or Zen 4, increase the **shared** batch
-  count and rerun **both**; aggregate runtime over the whole process is *not* sufficient. The
-  batch count is recorded in the manifest.
+- **Batch mechanically** → `ns/op`: use a fixed batch count per implementation and normalize
+  to ns/op. Use an identical count by default. A manifest variant may override it when a measured
+  algorithmic asymmetry would make the shared count impractical. The **≥ 1 ms floor applies per
+  timed sample for each implementation on each host**; aggregate runtime over the whole process
+  is *not* sufficient. Every effective batch count is recorded in the manifest.
+- **Cardinality requires independently calibrated counts.** Rawr returns a cached bitmap-wide
+  cardinality in O(1), while CRoaring's `roaring_bitmap_get_cardinality` walks the container array
+  and sums container cardinalities on every call. A shared count high enough to measure Rawr made
+  each CRoaring timed sample take about 19 seconds on the M4. Keep the corpus and public operation
+  identical, calibrate each implementation above the timing floor, and compare normalized ns/op.
 - **Stateful ops** (`flip`, `removeRange`, in-place) **recreate/reset their state consistently**
   between repetitions, on both sides, so each repetition measures the same work.
 - **Genuinely tiny invariant queries** (e.g. `cardinality`): `doNotOptimizeAway` alone is
@@ -35,8 +40,9 @@ final trustworthiness.**
 
 ## Acceptance
 
-- **No `0.00 ms` rows remain** — every genuinely tiny op reports `ns/op` with an identical batch
-  count on both sides and **≥ 1 ms per timed sample on both hosts**.
+- **No `0.00 ms` rows remain** — every genuinely tiny op reports `ns/op` with a manifest-recorded
+  batch count and **≥ 1 ms per timed sample on both hosts**. Counts are identical by default;
+  justified per-implementation overrides preserve the same corpus and measured operation.
 - Genuinely tiny invariant queries use symmetric non-inline/opaque call boundaries and
   runtime-varying inputs; stateful ops reset consistently between repetitions; `contains` (and
   other already-substantial rows) keep their existing workload.
@@ -56,8 +62,8 @@ final trustworthiness.**
 ## Checklist
 
 - [ ] Sub-clock rows identified and batched → `ns/op`; batch count recorded in the manifest
-- [ ] Fixed identical batch count both sides; ≥ 1 ms **per timed sample on both** M4 and Zen 4
-      (raise shared count and rerun both if under)
+- [ ] Fixed batch count per implementation; identical by default, with justified manifest
+      overrides; ≥ 1 ms **per timed sample on both** M4 and Zen 4
 - [ ] Stateful ops (`flip`/`removeRange`/in-place) reset state consistently between repetitions
 - [ ] Genuinely tiny invariant queries (`cardinality`): symmetric non-inline/opaque call
       boundaries + runtime-varying inputs

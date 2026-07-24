@@ -68,8 +68,13 @@ fi
 printf 'Accurate parity table: %s rows, %s tuples, %s independent processes each\n' \
     "$row_count" "$tuple_count" "$runs"
 
-while IFS=$'\t' read -r kind row implementation allocator reference_row reference_impl reference_allocator; do
+while IFS=$'\t' read -r kind row implementation allocator reference_row reference_impl reference_allocator manifest_batch; do
     [[ "$kind" == "TUPLE" ]] || continue
+    if ! [[ "$manifest_batch" =~ ^[1-9][0-9]*$ ]]; then
+        printf 'invalid manifest batch for %s/%s/%s: %s\n' \
+            "$row" "$implementation" "$allocator" "$manifest_batch" >&2
+        exit 1
+    fi
     run=1
     while (( run <= runs )); do
         output="${prefix}-${row}-${implementation}-${allocator}-run${run}.txt"
@@ -92,6 +97,11 @@ while IFS=$'\t' read -r kind row implementation allocator reference_row referenc
               "$result_allocator" != "$allocator" || -z "$result_unit" || \
               ! "$result_batch" =~ ^[1-9][0-9]*$ || ! "$result_median" =~ ^[0-9]+$ ]]; then
             printf 'invalid RESULT tuple in %s: %s\n' "$output" "$result_line" >&2
+            exit 1
+        fi
+        if [[ "$result_batch" != "$manifest_batch" ]]; then
+            printf 'RESULT batch does not match manifest in %s: %s != %s\n' \
+                "$output" "$result_batch" "$manifest_batch" >&2
             exit 1
         fi
         printf '%s\n' "$result_line" >>"$process_rows"
