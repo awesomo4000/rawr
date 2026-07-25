@@ -7,6 +7,23 @@ them all — not patch individual suspicious ones. `run-compare-bench.sh` become
 canonical accurate runner producing the familiar full comparison table; the all-in-one
 `bench_croaring` is retained only as a quick screening dashboard.
 
+> **Outcome (2026-07-24, commit `2950477`) — DONE; the harness is canonical.** All five
+> chunks landed. `run-compare-bench.sh` is the canonical accurate runner: each of the 38 rows
+> measured per-`(row, impl, allocator)` in ≥5 fresh processes, 3w/21t median + full range,
+> validated outside timing, allocator-labeled (SMP/libc side-by-side + arena `reference`
+> reuse), tiny ops calibrated to `ns/op` (incl. the per-implementation cardinality counts that
+> killed the ~19 s over-batching artifact), identical corpus/semantics/target with
+> `croaring-avx512` recorded, cross-validated on M4 and Zen 4 under macOS Bash + Windows Git
+> Bash. `bench_croaring` is demoted to a screening dashboard. Full board:
+> [`docs/parity-measurement.md`](../../docs/parity-measurement.md).
+>
+> **The board is now trustworthy — and it corrects the record.** rawr leads or ties most ops,
+> but **real default-SMP gaps remain**: iterate (**1.52x M4 / 1.88x Zen 4** — the largest),
+> select, and sequential addMany are the strongest general next targets. Several other gaps
+> are **architecture-specific** (dense AND/OR, flip, lazy-OR: rawr *ahead* on Zen 4, behind on
+> M4) — codegen, not algorithm. So the spec-21 "parity reached across the board" was premature;
+> the accurate harness surfaced these, which is exactly what it was built to do.
+
 ## Why
 
 The parity effort (specs 16–21) repeatedly found the broad `bench_croaring` numbers were

@@ -6,6 +6,17 @@ The one **persistent cross-host** default-SMP gap left after iterate was shown t
 phantom: **`select (dense)`**, 1.675x (M4) / 1.20x (Zen 4) rawr/CRoaring. Present on both
 architectures → likely a genuine implementation gap.
 
+> **Outcome (2026-07-25) — real gap, partially closed; improvement retained + residual
+> documented.** The call-boundary matrix confirmed select is a genuine gap (as predicted, the
+> fair comparison did not dissolve it). The canonical `select` row's call boundary was
+> **corrected** (the unconditional deliverable), and a **direct container dispatch** fix landed a
+> real improvement: M4 **1.675x → 1.51x**; Zen 4 **1.20x**. That misses the ≤ 1.10x gate, so per
+> the partial-success rule the improvement is **retained with rationale** and the remaining gap
+> closes as a **documented residual** in
+> [`docs/parity-measurement.md`](../../docs/parity-measurement.md) — reopen only with a new,
+> diagnosed lever, not by re-tuning the same one. Verified: tests, difftest, both build modes,
+> diagnostic matrices on both hosts.
+
 **Diagnosis first** (the 20a / 21 / 23 discipline). But note the honest asymmetry: unlike
 iterate, the benchmark fairness issue here points **against** rawr, so this one probably is
 real — verify, then likely fix.

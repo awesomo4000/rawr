@@ -8,6 +8,16 @@ Address the **largest persistent reported gap** on the accurate parity board: **
 preselected cause** (the 20a / 21 discipline: verify the comparison is fair and attribute the
 cost before touching code). A fix is a conditional second phase.
 
+> **Outcome (2026-07-24, commit `5569aba`) — phantom; row corrected, no fix needed.**
+> Diagnosis-first paid off again: the reported 1.52x/1.88x was the board comparing rawr's
+> **pull** iterator against CRoaring's faster **push** callback (`roaring_iterate`). Like-for-like
+> **pull vs pull**, rawr is **ahead on M4 (0.71x)** and **tied on Zen 4 (0.99x)** — both ≤ 1.10x,
+> so **NO-GO** on any `next()` change. The canonical `iterate` row's CRoaring side is corrected
+> to an in-C pull loop (`rawr_cr_iterate_pull`), re-run, and `docs/parity-measurement.md` updated;
+> no production change. **Iterate is not a real gap** — same shape as the sparse-AND/OR artifacts.
+> Lesson forward: the remaining "gaps" (select, addMany-seq) must be verified like-for-like
+> *before* chasing.
+
 Scope note: `iterate` is the idiomatic pull-iteration path (`while (it.next()) |v|`). It does
 **not** underlie `toArray` or serialization — those use their own dedicated per-container
 loops, not `Iterator.next()` — so closing this gap helps the pull-iteration path, not those

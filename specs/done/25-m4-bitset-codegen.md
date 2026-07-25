@@ -15,6 +15,15 @@ the actual cause is what this spec determines:
 | orMany (32 mixed) | 1.257x | 0.91x |
 | bitwiseOr (dense) | 1.247x | 0.46x |
 
+> **Outcome (2026-07-25) — NO-GO; hypothesis disproven, no production change.** The `25-00`
+> decomposition falsified the shared-SIMD/codegen theory: the affected rows are dominated by
+> **run containers, allocation-heavy sparse paths, and mixed-container accumulation** — not the
+> bitset word kernels — and **width-8 SIMD was already optimal** on both hosts, so no speculative
+> production change was made. The M4-only rows stand as **attributed, documented residuals**
+> (correct, and at/ahead on x86). Diagnostic harness + full attribution recorded in
+> [`docs/parity-measurement.md`](../../docs/parity-measurement.md). Exactly the outcome the
+> staged design exists to produce cheaply.
+
 **Diagnosis-first, no preselected cause** — but the goal is high-leverage: find whether these
 share **one** NEON codegen root cause, because a single fix could move all six rows. (Per the
 running lesson each row still gets a like-for-like check; the cross-arch signature — rawr
