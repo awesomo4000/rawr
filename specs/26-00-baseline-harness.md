@@ -34,6 +34,13 @@ comptime strategy seam that `26-01`/`26-02` implement against and `26-03` gates 
   in ignored output.
 - **Overflow-safe iteration checks** in the harness corpus (the `[0, maxInt(u32)]` case
   exercises the no-`u16`-increment-through-65535 requirement).
+- **Non-enumerating oracle for huge-cardinality cases.** Flipping `[0, maxInt(u32)]` on an
+  empty bitmap yields 2³² values — `assertSameValues`-style per-value iteration is effectively
+  non-terminating there. For such cases the CRoaring parity check must **never materialize or
+  iterate the full result**: **serialize rawr, deserialize with CRoaring, compare via
+  `roaring_bitmap_equals`** against the CRoaring oracle; additionally compare **cardinality**
+  and **selected boundary/sample membership** (0, 65535/65536 seams, `maxInt(u32)`, a few
+  interior probes). Do the **reverse** (CRoaring → rawr deserialize + equality) where practical.
 
 ## Acceptance
 
@@ -52,5 +59,6 @@ comptime strategy seam that `26-01`/`26-02` implement against and `26-03` gates 
 - [ ] Internal `RangeStrategy` comptime parameter, default = current behavior; no generated
       build_options import required by the library; no new public API
 - [ ] Allocation-count baselines recorded (mask/clone allocations visible)
-- [ ] `[0, maxInt(u32)]` case present
+- [ ] `[0, maxInt(u32)]` case present, with the **non-enumerating** oracle path
+      (serialize → CRoaring deserialize → `roaring_bitmap_equals` + cardinality + sample probes)
 - [ ] test / difftest / ReleaseSafe / ReleaseFast green; benchmark/test-only change

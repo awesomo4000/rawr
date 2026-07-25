@@ -36,7 +36,7 @@ removeRange **2.167x M4 / 1.078x Zen 4**; flip **1.767x M4 / 0.565x Zen 4** (SMP
    legacy `removeRange`, `flipInplace`, and by-value `flip`** with the same requirements as the
    direct paths: `validate()` green after each injected failure, cache correct-or-invalidated
    (never stale), leak-free deinit, by-value input untouched.
-4. **Docs:** update `docs/parity-measurement.md` (new canonical rows + the decision), and note
+5. **Docs:** update `docs/parity-measurement.md` (new canonical rows + the decision), and note
    the strategy flag if per-arch shipped.
 
 ## Acceptance (GO)
