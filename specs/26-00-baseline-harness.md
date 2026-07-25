@@ -11,18 +11,27 @@ comptime strategy seam that `26-01`/`26-02` implement against and `26-03` gates 
 - **Portable-byte equality harness (direct vs legacy).** For `flip`, `flipInplace`, and
   `removeRange`: run legacy and direct implementations on identical inputs and assert their
   **portable serializations are byte-identical**, plus **CRoaring set parity** as the
-  independent oracle. Matrix (both implementations, all cases): range within one chunk;
+  independent oracle. **Dependency split:** the direct-vs-legacy byte comparison lives in
+  **pure-Zig unit tests** (no C dependency — `zig test src/<file>.zig` must keep working); the
+  **CRoaring oracle lives in `diff_test`** (or another repository-only validation executable),
+  never in the library's unit tests. Matrix (both implementations, all cases): range within one chunk;
   spanning chunk boundaries; whole-universe `[0, maxInt(u32)]`; empty bitmap; range over
   missing chunks; `lo`/`hi` at multiples of 65536 and ±1; full chunks at either range edge
   (interior-path check); all three container types on the edges, including conversions and
   drop-to-empty; `lo > hi` (in-place no-op; by-value flip returns an independent clone).
-- **Comptime strategy seam.** A build option / comptime flag selecting
-  `legacy` / `direct` (default: current behavior until `26-03` flips it) so **both
-  implementations run on any host** — the harness runs the full matrix under both. This is the
-  test seam the per-arch selection uses later if needed.
+- **Comptime strategy seam — internal, not a module contract.** An internal **`RangeStrategy`
+  comptime parameter** on private helpers selects `legacy` / `direct`; the public methods choose
+  the shipped default internally. Benchmark/test **build options may feed that parameter**, but
+  the library itself must **not** require a generated `build_options` import — direct
+  `zig test src/<file>.zig` keeps working, and no new public API is added. Default: current
+  behavior until `26-03` flips it. Both implementations run on any host through this seam — the
+  harness runs the full matrix under both, and it is the mechanism per-arch selection uses later
+  if needed.
 - **Allocation-count instrumentation** for the three ops (reuse the counting-allocator
   machinery): allocations per op under legacy recorded as the baseline the direct paths must
-  collapse (the mask-bitmap and whole-clone allocations).
+  collapse (the mask-bitmap and whole-clone allocations). **Baselines are recorded in
+  `docs/parity-measurement.md`** (a named `misc/` summary may hold the raw run), not left only
+  in ignored output.
 - **Overflow-safe iteration checks** in the harness corpus (the `[0, maxInt(u32)]` case
   exercises the no-`u16`-increment-through-65535 requirement).
 
@@ -37,9 +46,11 @@ comptime strategy seam that `26-01`/`26-02` implement against and `26-03` gates 
 
 ## Checklist
 
-- [ ] Byte-equality harness over the full case matrix, dual-implementation capable
-- [ ] CRoaring set-parity oracle wired in
-- [ ] Comptime strategy flag (`legacy`/`direct`), default = current behavior
+- [ ] Byte-equality harness over the full case matrix, dual-implementation capable, pure-Zig
+      (no C dependency in unit tests; `zig test src/<file>.zig` works)
+- [ ] CRoaring set-parity oracle wired into `diff_test` (repo-only executable)
+- [ ] Internal `RangeStrategy` comptime parameter, default = current behavior; no generated
+      build_options import required by the library; no new public API
 - [ ] Allocation-count baselines recorded (mask/clone allocations visible)
 - [ ] `[0, maxInt(u32)]` case present
 - [ ] test / difftest / ReleaseSafe / ReleaseFast green; benchmark/test-only change

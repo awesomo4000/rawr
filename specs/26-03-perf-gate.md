@@ -29,6 +29,13 @@ removeRange **2.167x M4 / 1.078x Zen 4**; flip **1.767x M4 / 0.565x Zen 4** (SMP
 3. **Legacy disposition** follows the selection: single-direct → remove legacy, preserve the
    byte-equality contract via **pinned serialization fixtures** (or a test-only copy);
    per-arch → both retained and tested. Either way `26-00`'s harness outcome is recorded.
+4. **Retained-legacy OOM coverage (required if legacy ships for any architecture).** `26-01`/
+   `26-02` inject failures only into the direct paths, and the composed legacy in-place ops have
+   complicated partial-mutation cleanup that has never been exhaustively verified. If legacy
+   remains the shipped path anywhere, run **exhaustive allocation-failure injection against
+   legacy `removeRange`, `flipInplace`, and by-value `flip`** with the same requirements as the
+   direct paths: `validate()` green after each injected failure, cache correct-or-invalidated
+   (never stale), leak-free deinit, by-value input untouched.
 4. **Docs:** update `docs/parity-measurement.md` (new canonical rows + the decision), and note
    the strategy flag if per-arch shipped.
 
@@ -50,6 +57,8 @@ removeRange **2.167x M4 / 1.078x Zen 4**; flip **1.767x M4 / 0.565x Zen 4** (SMP
 - [ ] Direct-vs-legacy measured on both hosts (canonical harness, 5 processes, median + range)
 - [ ] Strategy selected per preference order, per op; selector documented
 - [ ] Legacy disposition executed (fixtures / test-only / retained-per-arch)
+- [ ] If legacy ships anywhere: exhaustive OOM injection on legacy removeRange / flipInplace /
+      by-value flip (validate / cache-never-stale / leak-free / input untouched)
 - [ ] M4 gate met (≤ 1.10x or supported improvement); Zen 4 within noise; no row > 5% worse
 - [ ] Allocation collapse confirmed on shipped path(s)
 - [ ] `docs/parity-measurement.md` updated
