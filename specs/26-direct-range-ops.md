@@ -4,7 +4,7 @@
 
 Replace the clone-plus-mask composition behind `flip` / `flipInplace` / `removeRange` with
 **direct per-container construction**, the way the reference implements these ops. This is the
-largest remaining canonical-board number (removeRange **2.313x M4**) and — unlike the spec-25
+largest remaining canonical-board number (removeRange **2.167x M4**) and — unlike the spec-25
 SIMD theory — the cause here is **structural and verified in source**, not a timing hypothesis:
 
 - `flip(lo, hi)` (`src/bitmap.zig:1139`): **deep-clones the entire bitmap**, then `flipInplace`
@@ -105,8 +105,10 @@ For a range `[lo, hi]` (inclusive both ends — rawr's single range convention):
   modified, no leak or double-free. By-value `flip` cleans up fully on error (`errdefer`),
   inputs untouched.
 - **Cardinality-cache accounting, per op:** `removeRange` subtracts the summed per-container
-  removed count when the cache was valid (else stays `-1`). **`flip`/`flipInplace` invalidate
-  to `-1` before the first committed mutation** — no delta accounting — and the failure path
+  removed count when the cache was valid (else stays `-1`); **on an allocation failure after
+  partial mutation, the cache is either updated for the removals already committed or
+  invalidated before returning — never left stale.** **`flip`/`flipInplace` invalidate to `-1`
+  before the first committed mutation** — no delta accounting — and their failure path
   therefore always leaves the cache invalidated, never stale.
 - **Semantics unchanged**: inclusive `[lo, hi]`; `removeRange` returns the removed count;
   `lo > hi` no-ops for the in-place variants and **by-value `flip(lo > hi)` still returns an
@@ -137,7 +139,7 @@ For a range `[lo, hi]` (inclusive both ends — rawr's single range convention):
 
 1. **`26-00`** — baseline representation tests (portable-byte legacy-vs-direct harness across
    the full matrix), allocation-count instrumentation, and the comptime **strategy test seam**.
-2. **`26-01`** — direct `removeRange` with the build-then-commit OOM coverage.
+2. **`26-01`** — direct `removeRange` with sanctioned OOM coverage.
 3. **`26-02`** — direct `flipInplace` + by-value `flip` (and `flipOwned` via the same path).
 4. **`26-03`** — cross-host performance gate, per-arch selection if the numbers require it, and
    `docs/parity-measurement.md` update.
