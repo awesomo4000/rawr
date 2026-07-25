@@ -22,15 +22,23 @@ bitmap, no whole-bitmap clone, no whole-bitmap cardinality recompute.
 This is allocation-**demand** reduction — the one lever that has repeatedly proven out (specs
 18/19) — applied to the two ops still carrying the composition.
 
-Canonical-board standing (rawr/CRoaring): removeRange **2.313x M4 / 1.08x Zen 4**; flip
-**1.771x M4 / 0.56x Zen 4** (rawr *ahead* on Zen 4 — see the gate below).
+Canonical-board standing (rawr/CRoaring, SMP): removeRange **2.167x M4 / 1.078x Zen 4**; flip
+**1.767x M4 / 0.565x Zen 4** (rawr *ahead* on Zen 4 — see the gate below). **Baseline of
+record for all gates:** the per-host canonical tables committed in
+`docs/parity-measurement.md` at commit `190f6d4` (M4 and Zen 4 sections) — not the earlier
+pre-select-fix summaries.
 
 ## Design
 
 For a range `[lo, hi]` (inclusive both ends — rawr's single range convention):
 
 - **Partition the chunk keys** into: below/above the range (untouched), **edge chunks**
-  (partially covered), and **interior chunks** (fully covered).
+  (partially covered), and **interior chunks** (fully covered). **A full chunk at either end of
+  the range is interior**, not edge — the edge path is only for genuinely partial coverage
+  (e.g. `lo` at an exact multiple of 65536 makes that first chunk interior).
+- **Overflow-safe chunk iteration:** the walk over chunk keys must handle
+  `[0, maxInt(u32)]` — never increment a `u16` key through 65535; iterate with a wider index
+  (the existing top-level `usize` index over `keys[0..size]` is the natural shape).
 - **`removeRange`** (in-place): untouched containers stay as-is; edge containers get an
   in-container range removal (per type: array splice, bitset `clearRange` + demote check, run
   split/trim); interior containers are freed and their slots dropped; compact the top-level
@@ -44,10 +52,17 @@ For a range `[lo, hi]` (inclusive both ends — rawr's single range convention):
 - **`flip` (by-value)**: construct the result directly — clone only untouched containers, build
   flipped containers for affected chunks. **No whole-bitmap clone, no mask bitmap.**
   `flipOwned` follows via the same path.
-- Result-type discipline unchanged: containers produced by a flip/removal convert to the correct
-  representation (array/bitset/run thresholds) and empty containers are dropped, matching what
-  the current composition produces — **the resulting bitmap must be representation-identical to
-  today's output**, not just set-equal, so canonical validation stays byte-stable.
+- **Representation contract (pinned): direct-vs-legacy portable-byte equality.** The direct
+  paths must produce results whose **portable serialization is byte-identical to the legacy
+  rawr composition's output**, across the **full test matrix** (not just the one canonical
+  corpus) — plus **CRoaring set parity** (logical equality) as the independent oracle. This is
+  stronger than the existing `assertSameValues` flip/remove differential, deliberately: it pins
+  rawr's container-selection behavior so the rewrite cannot silently change representations.
+- **Sanctioned implementation shape:** a **stack-local one-run range view** fed to the existing
+  `containerDifferenceInPlace` / `containerXorInPlace` kernels is an acceptable (likely the
+  cleanest) way to eliminate the bitmap-level mask while preserving today's representation
+  decisions — the per-container kernels already encode the conversion thresholds. Direct
+  per-type range helpers are equally acceptable if they meet the byte-equality contract.
 
 ## Constraints / gates
 
@@ -56,20 +71,34 @@ For a range `[lo, hi]` (inclusive both ends — rawr's single range convention):
   decided by measurement:
   1. **Single direct implementation** if it is neutral-or-better on both hosts (≤ 5% worse per
      row counts as noise, rerun on range overlap) — one code path is always preferred.
-  2. **Comptime per-arch selection** if direct wins M4 but loses Zen 4: select the faster
-     implementation per target at compile time (zero runtime cost; precedent: the per-arch skew
-     thresholds in `array_kernels.zig`). Both arms must produce **identical results and
-     representations** — only speed may differ by arch — and **both arms keep full differential
-     + failure-injection coverage** on their respective host. Accept the doubled maintenance
-     surface only for the op(s) where the split is measured to pay.
+  2. **Comptime per-arch selection** if direct wins M4 but loses Zen 4 (zero runtime cost;
+     precedent: the per-arch skew thresholds in `array_kernels.zig`). **Exact selector, per op:**
+     `aarch64` → direct; `x86_64` → legacy only if direct measurably regresses there; **all
+     other architectures → an explicit documented choice** (default direct, as the
+     fewer-allocations path, unless stated otherwise). Provide an **internal comptime strategy
+     override** (build option or comptime flag) so **tests exercise both implementations on any
+     host** — without it, one branch is effectively untested off its home arch. Both arms must
+     produce **byte-identical portable serializations** — only speed may differ by arch — and
+     both arms keep full differential + failure-injection coverage. Accept the doubled
+     maintenance surface only for the op(s) where the split is measured to pay.
   3. Direct loses on **both** hosts (unexpected) → record and stop; keep the composition.
   Either way, an M4 win is never bought with an x86 loss.
-- **Error semantics (basic guarantee, matching existing in-place ops).** In-place variants may
-  allocate (container conversions); on OOM the bitmap remains **valid** (passes `validate()`,
-  `cardinality()` correct or cache invalidated), possibly partially modified, with no leak or
-  double-free. By-value `flip` cleans up fully on error (`errdefer`), inputs untouched.
+- **Error semantics — build-then-commit per container (basic guarantee).** For the in-place
+  variants, every fallible transformation follows one model: **the replacement container is
+  fully built and valid before the old container/slot is committed** — this covers flip
+  inserting missing chunks, array/bitset/run conversions, run growth/splitting, and top-level
+  capacity growth. **Precompute the final top-level container count and reserve capacity before
+  the first mutation** wherever the walk permits, so commit-phase inserts cannot fail. On OOM
+  the bitmap remains **valid** (passes `validate()`, `cardinality()` correct or cache
+  invalidated), possibly partially modified, no leak or double-free. By-value `flip` cleans up
+  fully on error (`errdefer`), inputs untouched.
+- **Cardinality-cache accounting, per op:** `removeRange` subtracts the summed per-container
+  removed count when the cache was valid (else stays `-1`). **`flip`/`flipInplace` invalidate
+  to `-1` before the first committed mutation** — no delta accounting — and the failure path
+  therefore always leaves the cache invalidated, never stale.
 - **Semantics unchanged**: inclusive `[lo, hi]`; `removeRange` returns the removed count;
-  `lo > hi` no-ops; public signatures unchanged.
+  `lo > hi` no-ops for the in-place variants and **by-value `flip(lo > hi)` still returns an
+  independent clone** (today's behavior: clone then no-op); public signatures unchanged.
 
 ## Correctness
 
@@ -91,6 +120,15 @@ For a range `[lo, hi]` (inclusive both ends — rawr's single range convention):
   row worsening > 5% vs the latest committed corrected baseline (rerun on range overlap).
 - Allocation counts reported before/after (the mask-bitmap and whole-clone allocations should
   disappear outright); `docs/parity-measurement.md` updated.
+
+## Proposed chunk plan (confirm at review)
+
+1. **`26-00`** — baseline representation tests (portable-byte legacy-vs-direct harness across
+   the full matrix), allocation-count instrumentation, and the comptime **strategy test seam**.
+2. **`26-01`** — direct `removeRange` with the build-then-commit OOM coverage.
+3. **`26-02`** — direct `flipInplace` + by-value `flip` (and `flipOwned` via the same path).
+4. **`26-03`** — cross-host performance gate, per-arch selection if the numbers require it, and
+   `docs/parity-measurement.md` update.
 
 ## Estimate
 
