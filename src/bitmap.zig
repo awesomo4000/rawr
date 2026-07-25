@@ -1001,15 +1001,37 @@ pub const RoaringBitmap = struct {
 
     /// Return the k-th smallest value, 0-based, or null if out of range.
     pub fn select(self: *const Self, k: u64) ?u32 {
-        var prior: u64 = 0;
+        if (k > std.math.maxInt(u32)) return null;
+        var remaining: u32 = @intCast(k);
         for (self.keys[0..self.size], self.containers[0..self.size]) |key, tp| {
-            const container = Container.fromTagged(tp);
-            const card = container.getCardinality();
-            if (k < prior + card) {
-                const low = ops.containerSelect(container, @intCast(k - prior)) orelse return null;
-                return combine(key, low);
+            switch (tp.getType()) {
+                .array => {
+                    const container = tp.getArray();
+                    if (remaining < container.cardinality) {
+                        return combine(key, container.values[@intCast(remaining)]);
+                    }
+                    remaining -= container.cardinality;
+                },
+                .bitset => {
+                    const container = tp.getBitset();
+                    const card = container.getCardinality();
+                    if (remaining < card) {
+                        const low = ops.containerSelect(.{ .bitset = container }, @intCast(remaining)) orelse return null;
+                        return combine(key, low);
+                    }
+                    remaining -= card;
+                },
+                .run => {
+                    const container = tp.getRun();
+                    const card = container.getCardinality();
+                    if (remaining < card) {
+                        const low = ops.containerSelect(.{ .run = container }, remaining) orelse return null;
+                        return combine(key, low);
+                    }
+                    remaining -= card;
+                },
+                .reserved => unreachable,
             }
-            prior += card;
         }
         return null;
     }

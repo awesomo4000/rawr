@@ -778,11 +778,15 @@ fn benchRawrRankDense() void {
     std.mem.doNotOptimizeAway(total);
 }
 
+noinline fn rawrSelectForBenchmark(bm: *const RoaringBitmap, query: u32) ?u32 {
+    return @call(.always_inline, RoaringBitmap.select, .{ bm, query });
+}
+
 fn benchRawrSelectDense() void {
     const bm = &rawr_dense_a.?;
     var total: u64 = 0;
     for (select_queries[0..]) |query| {
-        total +%= bm.select(query).?;
+        total +%= rawrSelectForBenchmark(bm, query).?;
     }
     std.mem.doNotOptimizeAway(total);
 }
@@ -1218,13 +1222,9 @@ fn benchCRoaringRankDense() void {
 
 fn benchCRoaringSelectDense() void {
     const bm = cr_dense_a.?;
-    var total: u64 = 0;
-    for (select_queries[0..]) |query| {
-        var value: u32 = undefined;
-        _ = c.roaring_bitmap_select(bm, query, &value);
-        total +%= value;
-    }
-    std.mem.doNotOptimizeAway(total);
+    const result = c.rawr_cr_select_loop(bm, &select_queries, select_queries.len);
+    std.mem.doNotOptimizeAway(result.count);
+    std.mem.doNotOptimizeAway(result.sum);
 }
 
 fn benchCRoaringRankManyDense() void {

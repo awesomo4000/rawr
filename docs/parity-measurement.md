@@ -234,21 +234,21 @@ contains (miss)              default            ms   83.805 [ 83.398, 84.605]   
 bitwiseAnd (sparse)          smp                ms    0.600 [  0.590,  0.602]           ms    0.678 [  0.675,  0.692]     0.885x
 bitwiseAnd (sparse)          libc               ms    0.962 [  0.952,  1.051]           ms    0.678 [  0.675,  0.692]     1.419x
 bitwiseAnd (sparse, arena)   arena              ms    0.564 [  0.559,  0.566]           ms    0.678 [  0.675,  0.692]    0.8319x
-bitwiseAnd (dense)           smp             ns/op  297.974 [292.603,313.110]        ns/op  167.725 [158.936,175.659]     1.777x
-bitwiseAnd (dense)           libc            ns/op  292.358 [290.283,297.852]        ns/op  167.725 [158.936,175.659]     1.743x
+bitwiseAnd (dense)           smp             ns/op  305.176 [300.415,316.040]        ns/op  169.189 [166.992,175.293]     1.804x
+bitwiseAnd (dense)           libc            ns/op  302.856 [296.265,306.885]        ns/op  169.189 [166.992,175.293]      1.79x
 bitwiseOr (sparse)           smp                ms    1.758 [  1.738,  1.760]           ms    2.390 [  2.382,  2.438]    0.7356x
 bitwiseOr (sparse)           libc               ms    3.216 [  3.187,  3.259]           ms    2.390 [  2.382,  2.438]     1.346x
 bitwiseOr (sparse, arena)    arena              ms    1.572 [  1.558,  1.584]           ms    2.390 [  2.382,  2.438]    0.6577x
-bitwiseOr (dense)            smp             ns/op  388.794 [365.967,398.071]        ns/op  314.941 [308.350,323.730]     1.234x
-bitwiseOr (dense)            libc            ns/op  498.413 [480.713,512.207]        ns/op  314.941 [308.350,323.730]     1.583x
+bitwiseOr (dense)            smp             ns/op  407.593 [394.409,415.283]        ns/op  315.430 [310.547,324.219]     1.292x
+bitwiseOr (dense)            libc            ns/op  507.446 [493.286,522.705]        ns/op  315.430 [310.547,324.219]     1.609x
 lazyOr+repair (sparse)       smp                ms   14.735 [ 14.415, 15.446]           ms   12.643 [ 12.504, 13.172]     1.165x
 lazyOr+repair (sparse)       libc               ms   12.995 [ 12.984, 13.394]           ms   12.643 [ 12.504, 13.172]     1.028x
-lazyOr construction (sparse) smp                ms    5.747 [  5.696,  5.944]           ms    3.404 [  3.370,  3.450]     1.688x
-lazyOr construction (sparse) libc               ms    3.775 [  3.741,  3.816]           ms    3.404 [  3.370,  3.450]     1.109x
+lazyOr construction (sparse) smp                ms    5.918 [  5.772,  6.003]           ms    3.479 [  3.422,  3.625]     1.701x
+lazyOr construction (sparse) libc               ms    3.808 [  3.764,  3.889]           ms    3.479 [  3.422,  3.625]     1.095x
 lazyOr repair (sparse)       smp                ms    8.265 [  8.184,  8.624]           ms    8.388 [  8.152,  8.483]    0.9853x
 lazyOr repair (sparse)       libc               ms    8.152 [  8.068,  8.391]           ms    8.388 [  8.152,  8.483]    0.9719x
-orMany (32 mixed)            smp             ns/op 14195.312 [14109.375,14226.562]        ns/op 11570.312 [11460.938,11726.562]     1.227x
-orMany (32 mixed)            libc            ns/op 14921.875 [14796.875,15312.500]        ns/op 11570.312 [11460.938,11726.562]      1.29x
+orMany (32 mixed)            smp             ns/op 14507.812 [14171.875,14578.125]        ns/op 11476.562 [11382.812,11640.625]     1.264x
+orMany (32 mixed)            libc            ns/op 15031.250 [14945.312,15195.312]        ns/op 11476.562 [11382.812,11640.625]      1.31x
 orManyHeap (32 mixed)        smp             ns/op 14265.625 [14148.438,14460.938]        ns/op 27945.312 [27640.625,28164.062]    0.5105x
 orManyHeap (32 mixed)        libc            ns/op 14796.875 [14757.812,14859.375]        ns/op 27945.312 [27640.625,28164.062]    0.5295x
 xorMany (32 mixed)           smp             ns/op 16226.562 [16140.625,16343.750]        ns/op 29625.000 [29421.875,29703.125]    0.5477x
@@ -272,20 +272,19 @@ deserialize                  libc               ms    3.029 [  2.997,  3.086]   
 deserialize (arena)          arena              ms    1.344 [  1.326,  1.385]           ms    2.474 [  2.416,  2.508]    0.5432x
 cardinality                  default         ns/op    2.487 [  2.478,  2.520]        ns/op 35703.125 [31359.375,37906.250] 6.966e-05x
 rank (dense)                 default            ms   10.583 [ 10.245, 10.817]           ms    9.246 [  9.115,  9.381]     1.145x
-select (dense)               default            ms   16.567 [ 16.228, 17.103]           ms    9.908 [  9.646, 10.150]     1.672x
+select (dense)               default            ms   15.385 [ 14.319, 15.682]           ms   10.168 [ 10.045, 10.356]     1.513x
 rankMany (dense)             default         ns/op 179375.000 [179000.000,180625.000]        ns/op 171375.000 [165125.000,172500.000]     1.047x
 rangeCardinality small (bitset) default            ms   12.391 [ 12.178, 12.526]           ms  104.211 [103.542,104.680]    0.1189x
 rangeCardinality large (bitset) default            ms   63.121 [ 63.031, 63.208]           ms  122.276 [121.619,122.494]    0.5162x
-flip wide range (dense)      smp             ns/op  648.193 [620.972,656.616]        ns/op  359.375 [357.910,383.179]     1.804x
-flip wide range (dense)      libc            ns/op 1077.759 [1038.574,1111.938]        ns/op  359.375 [357.910,383.179]     2.999x
-removeRange wide (dense)     smp             ns/op  503.784 [493.042,506.470]        ns/op  227.173 [215.942,227.783]     2.218x
-removeRange wide (dense)     libc            ns/op  939.697 [923.462,953.125]        ns/op  227.173 [215.942,227.783]     4.136x
+flip wide range (dense)      smp             ns/op  644.653 [629.028,650.024]        ns/op  364.746 [356.689,374.878]     1.767x
+flip wide range (dense)      libc            ns/op 1107.544 [1088.745,1127.197]        ns/op  364.746 [356.689,374.878]     3.036x
+removeRange wide (dense)     smp             ns/op  506.470 [495.850,509.644]        ns/op  233.765 [228.027,255.005]     2.167x
+removeRange wide (dense)     libc            ns/op  949.097 [940.308,992.554]        ns/op  233.765 [228.027,255.005]      4.06x
 ```
 
 ### AMD Zen 4
 
 ```text
-pyenv: cannot rehash: /Users/aarhodes/.pyenv/shims isn't writable
 Accurate Rawr vs CRoaring parity table
 ======================================
 Processes per tuple: 5
@@ -353,7 +352,7 @@ deserialize                  libc               ms    8.376 [  8.318,  8.447]   
 deserialize (arena)          arena              ms    1.789 [  1.775,  1.844]           ms    5.372 [  5.248,  6.133]     0.333x
 cardinality                  default         ns/op    3.258 [  3.228,  3.362]        ns/op 56087.500 [48943.750,56675.000] 5.809e-05x
 rank (dense)                 default            ms   12.012 [ 11.932, 12.131]           ms   11.296 [ 11.243, 12.260]     1.063x
-select (dense)               default            ms   13.496 [ 13.418, 14.774]           ms   11.238 [ 11.100, 11.378]     1.201x
+select (dense)               default            ms   13.197 [ 12.551, 13.384]           ms   11.043 [ 10.966, 11.066]     1.195x
 rankMany (dense)             default         ns/op 245437.500 [244337.500,255550.000]        ns/op 249575.000 [249025.000,257912.500]    0.9834x
 rangeCardinality small (bitset) default            ms   12.850 [ 12.813, 12.880]           ms   48.398 [ 48.100, 49.597]    0.2655x
 rangeCardinality large (bitset) default            ms   45.858 [ 45.776, 46.300]           ms   58.469 [ 58.253, 58.651]    0.7843x
@@ -395,6 +394,106 @@ pull with pull and validates the same iterator paths it times. The push comparis
 diagnostic rather than a parity claim because rawr's comptime sink inlines while CRoaring uses a
 runtime function pointer.
 
+## Select attribution
+
+The original `select` row made one Zig-to-C call per query while rawr's call could inline into
+the Zig timing loop. The corrected row gives both implementations one non-inlined benchmark
+boundary per query: rawr calls a `noinline` wrapper containing an inlined
+`RoaringBitmap.select`, while CRoaring runs the query loop in C and calls
+`roaring_bitmap_select` there. Untimed validation compares all one million results plus empty,
+boundary, and out-of-range ranks. M4 disassembly confirms the rawr loop calls its wrapper once,
+the wrapper contains the select body, and the C loop calls `roaring_bitmap_select` once. The
+same sources and validation are used for the Zen 4 build.
+
+The diagnosis uses the canonical seed and draw sequence. Both implementations produce eight
+run containers for values `0..499999`. Query ranks span `0..499999`, average 250254.666, and
+reach every container. Results are median nanoseconds per query across five independent process
+medians; brackets show the full process range.
+
+| Host | Path | Before fix ns/query | After fix ns/query |
+| --- | --- | ---: | ---: |
+| Apple M4 | rawr forced inline | 14.274 [13.727, 15.217] | 13.432 [13.058, 14.199] |
+| Apple M4 | rawr public boundary | 15.674 [15.379, 16.011] | 14.335 [13.837, 14.939] |
+| Apple M4 | CRoaring from Zig | 10.020 [9.979, 10.543] | 10.206 [9.780, 10.601] |
+| Apple M4 | CRoaring loop in C | 10.318 [9.833, 10.490] | 10.347 [9.845, 10.519] |
+| AMD Zen 4 | rawr forced inline | 12.847 [12.773, 14.173] | 11.526 [11.325, 12.697] |
+| AMD Zen 4 | rawr public boundary | 16.589 [14.995, 18.372] | 12.725 [12.611, 14.606] |
+| AMD Zen 4 | CRoaring from Zig | 11.255 [11.166, 11.519] | 11.372 [11.272, 12.004] |
+| AMD Zen 4 | CRoaring loop in C | 10.963 [10.953, 11.044] | 10.961 [10.925, 11.078] |
+
+The pre-fix M4 rawr cost split was 9.308 ns/query in the top-level container skip, 1.854 in
+the target run container, and 2.856 in the named fusion/code-generation residual after the
+0.256 ns/query checksum baseline. Container traversal was the dominant cost. The retained fix
+specializes the top-level walk on the tagged container type, uses a `u32` remaining rank, and
+indexes array containers directly. It preserves the existing bitset and run selection kernels.
+An extra helper around every container and a directly integrated run loop were tested and
+rejected because each regressed the measured path.
+
+The focused post-fix public-boundary ratios are 1.385x on M4 and 1.161x on Zen 4. In the full
+canonical board they are 1.513x and 1.195x respectively. The change is a reproducible
+improvement, but it does not meet the 1.10x phase-2 target. The remaining dominant lever is an
+indexed or cached prefix-cardinality lookup; that would add mutation-maintenance and storage
+costs to every bitmap and is deferred rather than introduced for this eight-container corpus.
+
+## M4 cluster attribution
+
+The six rows initially grouped as a possible bitset/NEON code-generation cluster do not share a
+bitset kernel. The dense inputs are built with `addRange` and contain eight and nine run
+containers. Sparse lazy-OR contains 32,691 and 49,169 array containers. The `orMany` corpus has
+192 input containers: 96 arrays, 48 bitsets, and 48 runs. Untimed counting uses the real output
+allocator and excludes input construction.
+
+The focused phase measurements below are medians across five fresh processes. They are rawr A/B
+attributions, not additive models: independently timed allocator and traversal phases can overlap,
+and their sum is not claimed to equal a full operation.
+
+| Row | M4 attribution | Zen 4 check | Decision |
+| --- | --- | --- | --- |
+| Dense AND | Canonical 305.176 ns; five matching run-container operations dominate. Full construction makes 14 allocations/320 bytes. A direct container sweep is 355.469 ns, with the difference named the scratch-allocation/code-layout residual because production uses its fixed scratch allocator. | Direct sweep 131.055 ns; full diagnostic 215.723 ns; canonical rawr is 0.56x CRoaring. | No bitset or NEON lever. A fix would require changing run-result allocation/layout. |
+| Dense OR | Canonical 407.593 ns. Matching run unions take 257.812 ns; unmatched run clones, top-level traversal, and result arrays make up the remaining full-operation work. The result makes 30 allocations/760 bytes. | Direct sweep 134.961 ns; full diagnostic 323.145 ns; canonical rawr is 0.46x CRoaring. | Independent run/clone path; no architecture-neutral change supported. |
+| Flip | Canonical 644.653 ns. The mask-based implementation makes 77 allocations/1,887 requested bytes. Mask construction is 172.852 ns and mutation of pre-cloned inputs is 407.715 ns; the standalone clone is 371.582 ns. Their non-additive overlap is the allocator/code-layout residual. | Full diagnostic 765.479 ns while canonical rawr is 0.56x CRoaring. | Closing M4 requires replacing the clone-plus-mask algorithm, not tuning a word loop. |
+| Remove range | Canonical 506.470 ns. Clone-plus-mask difference makes 70 allocations/1,552 bytes. Pre-cloned removal is 362.793 ns; the same mask and clone controls apply. | Full diagnostic 653.857 ns and canonical ratio 1.078x. | Same algorithmic rewrite as flip, with no demonstrated cross-host win. |
+| Sparse lazy-OR construction | Canonical 5.918 ms and 130,994 allocations/137,172,592 requested bytes. Direct matched-container allocation and array `setList` accumulation is 1.486 ms, leaving a named 4.432 ms top-level/result-allocation residual. | Direct accumulation 14.053 ms; full diagnostic 19.632 ms; canonical rawr is 0.32x CRoaring. | This is the previously identified transient-container allocation path, not a bitset word kernel. No default allocator change is reopened. |
+| `orMany` | Canonical 14.508 microseconds; focused full 14.711 and mixed-container accumulation 14.180 microseconds, leaving 0.531 microseconds for result allocation, repair, and surrounding traversal. It makes 17 allocations/49,624 bytes. | Full 21.056 and accumulation 20.038 microseconds; canonical rawr is 0.91x CRoaring. | Opposite host behavior and no isolated codegen defect; retain as a named M4 mixed-accumulation residual. |
+
+The kernel hypotheses were tested independently even though they do not drive the dense rows.
+For a 1,024-word bitset on M4, width 8 is fastest: AND with cardinality is 138.672 ns at width
+8 versus 187.256 at width 4 and 353.760 at width 2. Eliding cardinality lowers width 8 to
+123.779 ns, only 14.893 ns. Lazy OR is 122.314 ns at width 8 versus 151.611 and 229.004 ns;
+`countWords` is 98.877 ns versus 169.922 and 326.416 ns. Zen 4 also selects width 8: AND with
+cardinality is 80.420 ns and without cardinality is 81.030 ns, while production count is
+32.764 ns. A per-architecture width or eager card/no-card split therefore has no supported
+connection to the six canonical gaps.
+
+M4 disassembly of `bench_m4_cluster_diag.diagnosticWordOp__anon_21532` shows each width-8
+iteration as four 128-bit NEON loads, `and.16b` operations, and stores. Cardinality adds
+`cnt.16b`, `udot.4s`, and `uadalp.2d`; the no-card specialization omits them. Production
+`simdBitsetOp` and `simdBitsetOpLazy` inline to the same loops. CRoaring's
+`CROARING_USENEON` path in `vendor/roaring.c` is likewise explicitly unrolled over four
+128-bit vectors per eight words, including the same byte-count and pairwise-reduction shape.
+The x86_64 assembly emitted with `x86_64_v3` uses vector OR/AND and an AVX2 nibble-lookup
+software popcount; width 8 remains fastest in the Zen measurements.
+
+Codegen inspection commands:
+
+```sh
+lldb -b -o 'target create zig-out/bin/bench_m4_cluster_diag' \
+  -o 'disassemble -n bench_m4_cluster_diag.diagnosticWordOp__anon_21532' \
+  -o 'disassemble -n bench_m4_cluster_diag.diagnosticWordOp__anon_21535' \
+  -o 'disassemble -n bench_m4_cluster_diag.diagnosticCount__anon_21549'
+
+zig build-exe -target x86_64-macos -OReleaseFast -mcpu x86_64_v3 \
+  --dep rawr -Mroot=src/bench_m4_cluster_diag.zig \
+  -OReleaseFast -Mrawr=src/roaring.zig \
+  -femit-asm=/tmp/bench_m4_cluster_diag_x86.s -fno-emit-bin
+```
+
+Phase 2 is a **NO-GO**. The original grouping was a representation mistake, width 8 is already
+the best measured choice on both hosts, and the rows split across run allocation, clone-plus-mask
+range algorithms, transient sparse allocations, and mixed-container accumulation. No production
+kernel change is justified by this diagnosis. The benchmark and evidence remain so a future
+range-algorithm or run-allocation initiative can start from measured components.
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad
@@ -433,6 +532,18 @@ Build and run the four-path iteration diagnosis:
 ./scripts/run-bench-iterate-diag.sh
 ```
 
+Build and run the select call-boundary and attribution diagnosis:
+
+```sh
+./scripts/run-bench-select-diag.sh
+```
+
+Build and run the architecture-specific component diagnosis:
+
+```sh
+./scripts/run-bench-m4-cluster-diag.sh
+```
+
 These scripts build native `ReleaseFast` executables, retain individual process output under
 `misc/`, and write an aggregate summary. The recorded runs are:
 
@@ -444,3 +555,9 @@ These scripts build native `ReleaseFast` executables, retain individual process 
 - `misc/and-cardinality-diag-20260723-192153-summary.txt` (Zen 4, fused kernel)
 - `misc/iterate-diag-20260724-094909-summary.txt` (M4)
 - `misc/iterate-diag-20260724-152701-summary.txt` (Zen 4)
+- `misc/select-diag-20260725-085940-summary.txt` (M4, retained fix)
+- `misc/select-diag-20260725-090021-summary.txt` (Zen 4, retained fix)
+- `misc/parity-20260725-090712-summary.txt` (M4, corrected canonical row)
+- `misc/parity-20260725-091537-summary.txt` (Zen 4, corrected canonical row)
+- `misc/m4-cluster-diag-20260725-111229-summary.txt` (M4)
+- `misc/m4-cluster-diag-20260725-111417-summary.txt` (Zen 4)

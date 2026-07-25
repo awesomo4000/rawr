@@ -219,10 +219,13 @@ pub fn build(b: *std.Build) void {
     bench_parity_worker_mod.addImport("rawr", bench_lib_mod);
     addBenchmarkPlatformShim(b, bench_parity_worker_mod, target);
     addTranslatedCImport(b, bench_parity_worker_mod, .{
-        .header = "tools/croaring_iterate_diag.h",
+        .header = "tools/croaring_bench_diag.h",
         .include_dir = "tools/",
         .c_source = "vendor/roaring.c",
-        .extra_c_sources = &.{"tools/croaring_iterate_diag.c"},
+        .extra_c_sources = &.{
+            "tools/croaring_iterate_diag.c",
+            "tools/croaring_select_diag.c",
+        },
         .croaring_avx512 = croaring_avx512,
         .target = target,
         .optimize = .ReleaseFast,
@@ -271,6 +274,58 @@ pub fn build(b: *std.Build) void {
         "Build four-path iteration diagnosis benchmark",
     );
     bench_iterate_diag_step.dependOn(&b.addInstallArtifact(bench_iterate_diag_exe, .{}).step);
+
+    // Fresh-process select call-boundary and cost-attribution harness.
+    const select_diag_optimize = if (optimize == .Debug) .ReleaseFast else optimize;
+    const select_diag_lib_mod = b.createModule(.{
+        .root_source_file = b.path("src/roaring.zig"),
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    const bench_select_diag_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_select_diag.zig"),
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    bench_select_diag_mod.addImport("rawr", select_diag_lib_mod);
+    addBenchmarkPlatformShim(b, bench_select_diag_mod, target);
+    addTranslatedCImport(b, bench_select_diag_mod, .{
+        .header = "tools/croaring_select_diag.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{"tools/croaring_select_diag.c"},
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+
+    const bench_select_diag_exe = b.addExecutable(.{
+        .name = "bench_select_diag",
+        .root_module = bench_select_diag_mod,
+    });
+    const bench_select_diag_step = b.step(
+        "bench-select-diag",
+        "Build select call-boundary diagnosis benchmark",
+    );
+    bench_select_diag_step.dependOn(&b.addInstallArtifact(bench_select_diag_exe, .{}).step);
+
+    // Fresh-process component attribution for architecture-specific parity rows.
+    const m4_cluster_diag_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_m4_cluster_diag.zig"),
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    m4_cluster_diag_mod.addImport("rawr", select_diag_lib_mod);
+    addBenchmarkPlatformShim(b, m4_cluster_diag_mod, target);
+    const bench_m4_cluster_diag_exe = b.addExecutable(.{
+        .name = "bench_m4_cluster_diag",
+        .root_module = m4_cluster_diag_mod,
+    });
+    const bench_m4_cluster_diag_step = b.step(
+        "bench-m4-cluster-diag",
+        "Build architecture-specific parity component diagnosis benchmark",
+    );
+    bench_m4_cluster_diag_step.dependOn(&b.addInstallArtifact(bench_m4_cluster_diag_exe, .{}).step);
 
     // Focused skewed array-cardinality diagnosis harness.
     const bench_and_card_diag_mod = b.createModule(.{
@@ -405,10 +460,13 @@ pub fn build(b: *std.Build) void {
     bench_cr_mod.addImport("rawr", bench_lib_mod);
     addBenchmarkPlatformShim(b, bench_cr_mod, target);
     addTranslatedCImport(b, bench_cr_mod, .{
-        .header = "tools/croaring_iterate_diag.h",
+        .header = "tools/croaring_bench_diag.h",
         .include_dir = "tools/",
         .c_source = "vendor/roaring.c",
-        .extra_c_sources = &.{"tools/croaring_iterate_diag.c"},
+        .extra_c_sources = &.{
+            "tools/croaring_iterate_diag.c",
+            "tools/croaring_select_diag.c",
+        },
         .croaring_avx512 = croaring_avx512,
         .target = target,
         .optimize = .ReleaseFast,
