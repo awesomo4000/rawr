@@ -51,11 +51,19 @@ For a range `[lo, hi]` (inclusive both ends — rawr's single range convention):
 
 ## Constraints / gates
 
-- **Zen 4 no-regress gate (hard).** flip is currently **0.56x — ahead — on Zen 4** with the
-  existing composition; removeRange is 1.08x. The direct paths ship only if Zen 4 stays within
-  noise of current (≤ 5% worse per row, rerun on range overlap) — an M4 win must not be bought
-  with an x86 loss. If direct construction loses on Zen 4, that result is recorded and the
-  design is revisited rather than shipped.
+- **Zen 4 no-regress gate (hard), with a sanctioned fallback.** flip is currently **0.56x —
+  ahead — on Zen 4** with the existing composition; removeRange is 1.08x. Preference order,
+  decided by measurement:
+  1. **Single direct implementation** if it is neutral-or-better on both hosts (≤ 5% worse per
+     row counts as noise, rerun on range overlap) — one code path is always preferred.
+  2. **Comptime per-arch selection** if direct wins M4 but loses Zen 4: select the faster
+     implementation per target at compile time (zero runtime cost; precedent: the per-arch skew
+     thresholds in `array_kernels.zig`). Both arms must produce **identical results and
+     representations** — only speed may differ by arch — and **both arms keep full differential
+     + failure-injection coverage** on their respective host. Accept the doubled maintenance
+     surface only for the op(s) where the split is measured to pay.
+  3. Direct loses on **both** hosts (unexpected) → record and stop; keep the composition.
+  Either way, an M4 win is never bought with an x86 loss.
 - **Error semantics (basic guarantee, matching existing in-place ops).** In-place variants may
   allocate (container conversions); on OOM the bitmap remains **valid** (passes `validate()`,
   `cardinality()` correct or cache invalidated), possibly partially modified, with no leak or
