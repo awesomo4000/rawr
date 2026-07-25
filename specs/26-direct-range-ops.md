@@ -58,6 +58,12 @@ For a range `[lo, hi]` (inclusive both ends — rawr's single range convention):
   corpus) — plus **CRoaring set parity** (logical equality) as the independent oracle. This is
   stronger than the existing `assertSameValues` flip/remove differential, deliberately: it pins
   rawr's container-selection behavior so the rewrite cannot silently change representations.
+  **Legacy-implementation lifecycle:** the legacy composition **remains in-tree during
+  development** as the byte-equality reference. If a **single direct implementation** wins both
+  hosts, legacy is then removed and the contract is preserved by **pinned serialization
+  fixtures** (or a test-only copy) — `26-00`'s equality harness is a development gate, not a
+  permanent dual-implementation requirement. If **per-arch selection** ships, both
+  implementations are retained and both stay tested (via the strategy override).
 - **Sanctioned implementation shape:** a **stack-local one-run range view** fed to the existing
   `containerDifferenceInPlace` / `containerXorInPlace` kernels is an acceptable (likely the
   cleanest) way to eliminate the bitmap-level mask while preserving today's representation
@@ -83,15 +89,21 @@ For a range `[lo, hi]` (inclusive both ends — rawr's single range convention):
      maintenance surface only for the op(s) where the split is measured to pay.
   3. Direct loses on **both** hosts (unexpected) → record and stop; keep the composition.
   Either way, an M4 win is never bought with an x86 loss.
-- **Error semantics — build-then-commit per container (basic guarantee).** For the in-place
-  variants, every fallible transformation follows one model: **the replacement container is
-  fully built and valid before the old container/slot is committed** — this covers flip
-  inserting missing chunks, array/bitset/run conversions, run growth/splitting, and top-level
-  capacity growth. **Precompute the final top-level container count and reserve capacity before
-  the first mutation** wherever the walk permits, so commit-phase inserts cannot fail. On OOM
-  the bitmap remains **valid** (passes `validate()`, `cardinality()` correct or cache
-  invalidated), possibly partially modified, no leak or double-free. By-value `flip` cleans up
-  fully on error (`errdefer`), inputs untouched.
+- **Error semantics — two sanctioned models (basic guarantee).** Reconciling the OOM contract
+  with the sanctioned in-place kernels (whose bitset paths mutate first and may then fail while
+  allocating a demoted array, `container_ops.zig:435`):
+  - **Infallible mutation of an existing container may precede a fallible representation
+    conversion.** If the conversion fails, the valid mutated container **remains installed**
+    and the bitmap cache is invalidated — no temporary 8 KB bitset copy required.
+  - **Transformations that require a separate replacement** (flip inserting missing chunks,
+    conversions that build a new container, run growth/splitting) **build the replacement fully
+    before swapping/freeing the original.**
+  **Compute and reserve a safe upper bound** on top-level capacity before the first mutation
+  (flip: current containers + missing covered chunk keys; removeRange: never needs additional
+  top-level capacity), so commit-phase inserts cannot fail. On OOM the bitmap remains **valid**
+  (passes `validate()`, `cardinality()` correct or cache invalidated), possibly partially
+  modified, no leak or double-free. By-value `flip` cleans up fully on error (`errdefer`),
+  inputs untouched.
 - **Cardinality-cache accounting, per op:** `removeRange` subtracts the summed per-container
   removed count when the cache was valid (else stays `-1`). **`flip`/`flipInplace` invalidate
   to `-1` before the first committed mutation** — no delta accounting — and the failure path
