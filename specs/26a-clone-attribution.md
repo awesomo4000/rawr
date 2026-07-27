@@ -31,10 +31,24 @@ implementation, on the same wide-dense corpus:
 - **clone + removeRange body only** — deinit outside timing.
 
 No pre-cloned pool is needed (each invocation's clone is created immediately before it), and no
-nested timers. The **canonical clone and composite rows stay unchanged** for end-to-end
-reporting; these diagnostics attribute, they do not replace. Report all three per host with
-ranges and a **named residual** — the decomposition distinguishes **clone work vs mutation work
-vs teardown vs a non-additive residual**, not just clone-vs-mutation.
+nested timers. **These three diagnostics live outside the canonical manifest** — a separate
+diagnostic executable/build step in the established pattern (**`zig build bench-range-attrib`
+→ `./zig-out/bin/bench_range_attrib`**, with a five-process runner
+`scripts/run-bench-range-attrib.sh`), or equivalent non-manifest worker modes — so the canonical
+board remains exactly **39** rows (38 + `clone`), not 42. The **canonical clone and composite
+rows stay unchanged** for end-to-end reporting; the diagnostics attribute, they do not replace.
+
+**Attribution estimates (from independently measured medians, with their underlying ranges —
+no claim of exact additivity):**
+
+```text
+full teardown        = canonical clone     − clone body
+reduced teardown     = canonical composite − clone+remove body
+interaction residual = clone+remove body − clone body − remove body
+```
+
+The decomposition distinguishes **clone work vs mutation work vs teardown vs a non-additive
+residual**, not just clone-vs-mutation.
 
 **Representation inventory before any cause is named.** The wide-dense corpus is
 `addRange`-built, which produces **run containers in rawr — not 8 KB bitsets** — so no component
@@ -62,7 +76,8 @@ row by inspection. Explicitly:
 
 Recommendation to confirm by review: **keep** the `clone + removeRange` row as-is (it reflects
 real destructive-op usage and avoids the pre-cloned-pool contamination), and read it **alongside**
-the new `clone` row — the pair makes the subtraction visible on the board itself. Re-scoping the
+the new `clone` row — the pair makes the clone contribution visible alongside the composite row
+(the precise attribution comes from the diagnostics, not board subtraction). Re-scoping the
 row to mutation-only is **rejected** unless the review finds a contamination-free way to measure
 it directly.
 
