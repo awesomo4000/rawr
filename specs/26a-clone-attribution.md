@@ -18,20 +18,30 @@ a separate follow-up spec written around the attribution.
 
 ### 1. Attribute the 1.840x: clone vs mutation (both hosts)
 
-Measure, per implementation, on the same wide-dense corpus as the `remove-range` row:
+**A naive row delta is not mutation time.** Both canonical rows include destruction inside
+timing, and the full clone and the range-reduced clone have **different teardown costs** — so
+`(clone + remove + reduced-deinit) − (clone + full-deinit)` conflates mutation with the teardown
+difference and can even go negative. Instead, add **matched-boundary diagnostic measurements
+with internal timing** (the internal-timing precedent from the lazy-phase rows), per
+implementation, on the same wide-dense corpus:
 
-- **clone-only** — rawr `clone` vs `roaring_bitmap_copy`, canonical protocol;
-- **clone + removeRange** — the existing canonical row (unchanged);
-- **mutation attribution = the delta** between the two, per side, reported with ranges and a
-  **named residual** (the two rows are measured independently; do not force additivity — the
-  20a/25 discipline). **No nested timers**, and no pre-cloned-pool variant: pre-building N
-  clones inside the process would distort SMP allocator state mid-run, the exact contamination
-  spec 22 eliminated.
+- **clone body only** — deinit outside timing;
+- **removeRange body only** — one fresh clone created (untimed) before each timed invocation,
+  deinitialized (untimed) afterward;
+- **clone + removeRange body only** — deinit outside timing.
 
-Output: how much of the M4 1.840x lives in clone vs mutation, per host. If clone dominates
-(expected given 2-alloc removal), the finding names **which part of clone** — allocator traffic
-(2 allocs × containers), the 8 KB bitset `@memcpy`s, or per-container overhead — via the
-untimed-counter + A/B methodology, not speculation.
+No pre-cloned pool is needed (each invocation's clone is created immediately before it), and no
+nested timers. The **canonical clone and composite rows stay unchanged** for end-to-end
+reporting; these diagnostics attribute, they do not replace. Report all three per host with
+ranges and a **named residual** — the decomposition distinguishes **clone work vs mutation work
+vs teardown vs a non-additive residual**, not just clone-vs-mutation.
+
+**Representation inventory before any cause is named.** The wide-dense corpus is
+`addRange`-built, which produces **run containers in rawr — not 8 KB bitsets** — so no component
+hypothesis is assumed in advance. An **untimed inventory** records, for both implementations
+where measurable: container types/counts, allocation counts/bytes, and **copied payload bytes**
+(representation-neutral). Only then is the dominant component named — allocator traffic,
+payload copying, or per-container overhead — via the counters + A/B methodology.
 
 ### 2. Standalone `clone` canonical row (manifest 38 → 39)
 
@@ -39,9 +49,10 @@ Add `clone (dense)` to the canonical board: rawr `clone` (SMP + libc — it is a
 vs `roaring_bitmap_copy`, on the wide-dense corpus so it composes with the `clone + removeRange`
 row by inspection. Explicitly:
 
-- **the row-count checks change 38 → 39** (`--list`, `validateManifest`, and any doc references
-  to "38 rows") — update them all; this is the spec-23 lesson about manifest-count changes,
-  called out so it cannot be missed;
+- **the row-count checks change 38 → 39** — update all **active executable assertions, scripts,
+  and current documentation** (`--list`, `validateManifest`, runner checks, the current tables'
+  prose); **completed specs and historical 38-row results stay historical**. This is the spec-23
+  lesson about manifest-count changes, called out so it cannot be missed;
 - validation: portable-byte identity of the clone against its source (rawr) and CRoaring set
   parity; validation outside timing per the standing rules;
 - note in the manifest that CRoaring `copy` is measured with COW disabled (our build), so both
@@ -58,7 +69,8 @@ it directly.
 ## Conditional follow-up (not this spec)
 
 - **Clone dominates M4** → a clone-optimization spec written around the named component
-  (allocator traffic / memcpy / overhead), with the usual gates: canonical harness, both hosts,
+  (allocator traffic / payload copying / per-container overhead), with the usual gates:
+  canonical harness, both hosts,
   Zen 4 no-regress (clone-only Zen 4 number becomes the baseline), correctness byte-identical.
 - **Mutation dominates** (unexpected) → revisit direct `removeRange`'s edge work with that
   evidence.
@@ -76,9 +88,10 @@ it directly.
 
 ## Acceptance
 
-- Clone-only measured both implementations × both hosts; the M4 1.840x attributed clone vs
-  mutation with ranges + named residual; if clone dominates, the dominant component named via
-  counters/A-B, not guessed.
+- The three matched-boundary diagnostics (clone body / removeRange body with per-invocation
+  untimed clone / clone+remove body) measured both implementations × both hosts; the M4 1.840x
+  attributed across **clone work / mutation work / teardown / non-additive residual**; the
+  untimed representation + allocation inventory recorded **before** any component is named.
 - `clone (dense)` row live on the canonical board; **every 38-row count check updated to 39**;
   row validated (byte identity vs source + CRoaring parity) outside timing.
 - Row-shape verdict recorded (keep clone-inclusive + standalone pair, unless review overturns).
