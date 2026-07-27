@@ -14,6 +14,19 @@ clone the prime suspect on M4** — a hypothesis to measure, not assume. Meanwhi
 **Diagnosis + board completion, no preselected cause.** A clone optimization, if warranted, is
 a separate follow-up spec written around the attribution.
 
+> **Outcome (2026-07-27, commit `75662a1`) — attributed; removeRange is exonerated, clone +
+> teardown are the M4 residual.** The matched-boundary diagnostics (M4, rawr-SMP vs CRoaring):
+> **clone body 254.4 vs 96.9 ns**; **mutation body 49.8 vs 78.5 ns — rawr's direct removeRange
+> beats CRoaring**; reduced-teardown estimate **144.9 vs 48.3 ns**. Inventory: 8 run containers
+> both sides; rawr **20 allocs / 440 requested / 48 copied bytes** vs CRoaring
+> **18 / 288 / 56** — payload-copy volume ruled out; the named components are **clone
+> allocation/layout and teardown**, architecture-specific (Zen 4 rawr-SMP already wins
+> substantially). The canonical `clone (dense)` row is live (board = 39 rows). **Do not revisit
+> the direct removeRange algorithm.** Follow-up: the clone-optimization spec (27), starting
+> with the measured init-then-grow waste in `clone` (`init` at `INITIAL_CAPACITY` +
+> `ensureTotalCapacity` realloc — `initCapacity(self.size)` exists). No production change in
+> this spec. Full data: [`docs/parity-measurement.md`](../../docs/parity-measurement.md).
+
 ## Deliverables
 
 ### 1. Attribute the 1.840x: clone vs mutation (both hosts)
