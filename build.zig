@@ -519,6 +519,34 @@ pub fn build(b: *std.Build) void {
     );
     bench_range_alloc_step.dependOn(&b.addInstallArtifact(bench_range_alloc_exe, .{}).step);
 
+    // Clone-vs-removeRange attribution diagnostic; intentionally outside the parity manifest.
+    const bench_range_attrib_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_range_attrib.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_range_attrib_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_range_attrib_mod, target);
+    addTranslatedCImport(b, bench_range_attrib_mod, .{
+        .header = "tools/croaring_range_attrib.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{"tools/croaring_range_attrib.c"},
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_range_attrib_exe = b.addExecutable(.{
+        .name = "bench_range_attrib",
+        .root_module = bench_range_attrib_mod,
+    });
+    const bench_range_attrib_step = b.step(
+        "bench-range-attrib",
+        "Build the clone and removeRange attribution diagnostic",
+    );
+    bench_range_attrib_step.dependOn(&b.addInstallArtifact(bench_range_attrib_exe, .{}).step);
+
     // Tarball
     const tarball_step = b.step("tarball", "Create source tarball from git HEAD");
     const tarball_cmd = b.addSystemCommand(&.{

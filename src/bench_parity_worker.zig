@@ -672,6 +672,22 @@ const manifest = [_]ManifestRow{
         .reporting_unit = .ns_per_op,
         .operation = .remove_range,
     },
+    .{
+        .id = "clone",
+        .display_name = "clone (dense)",
+        .corpus = "deep-copy dense range 0..499999; CRoaring COW disabled",
+        .seed = 0,
+        .rawr_operation = "RoaringBitmap.clone",
+        .croaring_operation = "roaring_bitmap_copy with copy-on-write disabled",
+        .allocation_class = .allocating,
+        .variants = &allocating_variants,
+        .setup_boundary = "input construction outside timing; deep copy inside timing",
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .batch_count = 8192,
+        .reporting_unit = .ns_per_op,
+        .operation = .clone,
+    },
 };
 
 const RequestedTuple = struct {
@@ -740,7 +756,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn validateManifest() !void {
-    if (manifest.len != 38) return error.InvalidManifestRowCount;
+    if (manifest.len != 39) return error.InvalidManifestRowCount;
     for (&manifest, 0..) |*row, i| {
         if (row.id.len == 0 or row.variants.len == 0 or row.batch_count == 0) return error.InvalidManifestRow;
         if (dashboard.parityRequiresAllocator(row.operation) != (row.allocation_class == .allocating)) {

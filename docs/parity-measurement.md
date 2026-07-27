@@ -178,7 +178,8 @@ Zen 4, where sparse AND measured 0.780 [0.778, 0.787] ms for rawr SMP, 2.102
 [2.054, 2.164] ms for rawr libc, and 1.554 [1.522, 1.867] ms for CRoaring. These two rows prove
 the worker and aggregation protocol.
 
-The spec 22 manifest covers all 38 rows published by `bench_croaring` and records the exact
+The canonical manifest covers 39 rows, including the standalone dense-clone row added after
+spec 26, and records the exact
 corpus, operation pair, allocation class, timing boundaries, validation oracle, allocator
 variants, and effective batch count for every row. Bitmap-producing operations validate portable
 bytes; query, scalar, and array operations validate their exact outputs. Allocator parity and
@@ -551,6 +552,60 @@ by fresh five-process checks of cardinality, rank, select, rankMany, and both ra
 rows. No unaffected rawr/CRoaring ratio worsened by more than 5%; the few absolute shifts above 5%
 were shared by both implementations and treated as host noise.
 
+## Clone and removeRange attribution (07/27/2026)
+
+The canonical board now includes a standalone deep-copy row on the same eight-run-container
+corpus as the clone-inclusive `removeRange` row. CRoaring copy-on-write is disabled, so both
+implementations perform a deep copy. Portable bytes from each rawr clone are checked against its
+source and CRoaring outside timing.
+
+| Host | Row | rawr SMP ns/op | rawr libc ns/op | CRoaring ns/op |
+| --- | --- | ---: | ---: | ---: |
+| M4 | clone | 379.883 [333.984, 394.165] | 293.457 [288.940, 302.490] | 207.275 [202.881, 242.432] |
+| M4 | clone + `removeRange` | 438.354 [414.429, 449.707] | 327.271 [319.702, 337.280] | 230.591 [225.830, 234.253] |
+| Zen 4 | clone | 201.892 [197.192, 203.210] | 572.095 [544.751, 717.688] | 558.154 [555.200, 609.314] |
+| Zen 4 | clone + `removeRange` | 251.013 [240.503, 254.980] | 642.786 [612.109, 719.495] | 612.598 [597.925, 639.758] |
+
+The attribution diagnostic measures clone, mutation, and clone-plus-mutation bodies separately,
+with destruction outside timing. A timer-only control quantifies the two clock reads in each
+sample. The following values are directly measured medians; ranges are the full range across five
+process medians.
+
+| Host | Component | rawr SMP ns/op | rawr libc ns/op | CRoaring ns/op |
+| --- | --- | ---: | ---: | ---: |
+| M4 | timer control | 17.944 [17.090, 18.433] | 17.822 [16.724, 17.944] | 17.822 [17.700, 17.944] |
+| M4 | clone body | 272.339 [242.676, 296.509] | 170.776 [162.109, 199.341] | 114.746 [112.671, 119.019] |
+| M4 | remove body | 67.749 [65.918, 68.481] | 123.413 [120.361, 130.737] | 96.313 [90.576, 98.145] |
+| M4 | clone + remove body | 311.401 [306.274, 317.139] | 301.392 [292.114, 320.190] | 200.073 [197.632, 207.397] |
+| Zen 4 | timer control | 27.771 [27.515, 27.856] | 27.637 [27.490, 27.722] | 27.734 [27.637, 28.320] |
+| Zen 4 | clone body | 154.736 [152.832, 173.499] | 407.959 [395.532, 439.380] | 320.142 [316.870, 330.518] |
+| Zen 4 | remove body | 110.095 [106.799, 167.676] | 200.671 [200.134, 205.908] | 158.130 [154.138, 168.250] |
+| Zen 4 | clone + remove body | 281.140 [256.421, 308.276] | 572.620 [567.542, 582.654] | 449.780 [447.937, 466.040] |
+
+The untimed inventory is identical on both hosts: both sides have eight run containers. A rawr
+clone makes 20 allocations, requests 440 bytes, and copies 48 payload bytes; CRoaring makes 18
+allocations, requests 288 bytes, and copies 56 payload bytes. Payload copying is therefore not the
+cause of the M4 gap. Rawr's extra top-level capacity and per-container allocation traffic are the
+structural difference, and the M4 SMP/libc split shows that allocator behavior amplifies it.
+
+After subtracting the timer control, the M4 rawr-SMP clone body is estimated at 254.395 ns versus
+96.924 ns for CRoaring. The mutation body is 49.805 ns versus 78.491 ns, so rawr's direct mutation
+is faster. The reduced-result teardown estimate is 144.897 ns versus 48.340 ns. The body-level
+interaction residual is -10.743 ns for rawr and 6.836 ns for CRoaring. These independently
+measured medians are diagnostic estimates and are not expected to add exactly. They attribute the
+207.763 ns canonical composite difference primarily to clone work and reduced-result teardown,
+not to `removeRange` mutation.
+
+Zen 4 reaches the opposite default-allocator outcome: the timer-corrected rawr-SMP clone body is
+126.965 ns versus 292.408 ns for CRoaring, and the canonical composite is 0.410x CRoaring. The
+rawr-libc clone remains slower at an estimated 380.322 ns, confirming that allocator behavior is
+architecture-specific while the allocation-count and layout difference is common. The follow-up
+should be a clone-specific optimization spec targeting top-level capacity, per-container
+allocation, and teardown. The direct range algorithm should remain unchanged.
+
+Complete 39-row canonical boards passed the regression gate on M4 and Zen 4. No pre-existing row
+worsened by more than 5% against a fresh post-spec-26 baseline after range-overlap reruns.
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad
@@ -601,6 +656,12 @@ Build and run the architecture-specific component diagnosis:
 ./scripts/run-bench-m4-cluster-diag.sh
 ```
 
+Build and run the clone/removeRange attribution diagnosis:
+
+```sh
+./scripts/run-bench-range-attrib.sh
+```
+
 These scripts build native `ReleaseFast` executables, retain individual process output under
 `misc/`, and write an aggregate summary. The recorded runs are:
 
@@ -618,3 +679,5 @@ These scripts build native `ReleaseFast` executables, retain individual process 
 - `misc/parity-20260725-091537-summary.txt` (Zen 4, corrected canonical row)
 - `misc/m4-cluster-diag-20260725-111229-summary.txt` (M4)
 - `misc/m4-cluster-diag-20260725-111417-summary.txt` (Zen 4)
+- `misc/range-attrib-20260727-182905-summary.txt` (M4)
+- `misc/range-attrib-20260727-183135-summary.txt` (Zen 4)

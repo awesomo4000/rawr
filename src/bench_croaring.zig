@@ -72,6 +72,7 @@ pub const ParityRow = enum {
     range_cardinality_small,
     range_cardinality_large,
     flip,
+    clone,
     remove_range,
 };
 
@@ -812,6 +813,13 @@ fn benchRawrRemoveRangeWideDense() void {
     benchRawrRemoveRangeWideDenseWithAllocator(allocator);
 }
 
+fn benchRawrCloneDenseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    const bm = &rawr_dense_a.?;
+    var result = bm.clone(result_allocator) catch unreachable;
+    defer result.deinit();
+    std.mem.doNotOptimizeAway(&result);
+}
+
 fn benchRawrRemoveRangeWideDenseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const bm = &rawr_dense_a.?;
     var result = bm.clone(result_allocator) catch unreachable;
@@ -1252,6 +1260,12 @@ fn benchCRoaringRemoveRangeWideDense() void {
     std.mem.doNotOptimizeAway(bm);
 }
 
+fn benchCRoaringCloneDense() void {
+    const result = c.roaring_bitmap_copy(cr_dense_a.?) orelse unreachable;
+    defer c.roaring_bitmap_free(result);
+    std.mem.doNotOptimizeAway(result);
+}
+
 fn benchCRoaringRangeCardinalityBitset() void {
     const bm = cr_bitset_range_bm.?;
     var total: u64 = 0;
@@ -1321,7 +1335,7 @@ pub fn parityPrepare(row: ParityRow, implementation: ParityImplementation) void 
         .lazy_or_construction,
         .lazy_or_repair_only,
         => initSparseFor(implementation),
-        .dense_and, .dense_or, .rank, .select, .rank_many, .flip, .remove_range => initDenseFor(implementation),
+        .dense_and, .dense_or, .rank, .select, .rank_many, .flip, .clone, .remove_range => initDenseFor(implementation),
         .or_many, .or_many_heap, .xor_many => initManyFor(implementation),
         .array_balanced_and,
         .array_balanced_and_cardinality,
@@ -1442,6 +1456,7 @@ noinline fn parityRunRawr(row: ParityRow, allocator_kind: ParityAllocator) u64 {
         .range_cardinality_small => benchRawrRangeCardinalityBitset(),
         .range_cardinality_large => benchRawrRangeCardinalityBitsetLarge(),
         .flip => runRawrAllocator(allocator_kind, benchRawrFlipWideDenseWithAllocator),
+        .clone => runRawrAllocator(allocator_kind, benchRawrCloneDenseWithAllocator),
         .remove_range => runRawrAllocator(allocator_kind, benchRawrRemoveRangeWideDenseWithAllocator),
     }
     return 0;
@@ -1499,6 +1514,7 @@ noinline fn parityRunCRoaring(row: ParityRow) u64 {
         .range_cardinality_small => benchCRoaringRangeCardinalityBitset(),
         .range_cardinality_large => benchCRoaringRangeCardinalityBitsetLarge(),
         .flip => benchCRoaringFlipWideDense(),
+        .clone => benchCRoaringCloneDense(),
         .remove_range => benchCRoaringRemoveRangeWideDense(),
     }
     return 0;
@@ -1636,6 +1652,7 @@ fn validateBitmapResult(row: ParityRow, allocator_kind: ParityAllocator) !void {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         var rawr_result = try makeRawrResult(row, arena.allocator());
+        if (row == .clone) try expectRawrPortableIdentical(&rawr_dense_a.?, &rawr_result);
         try expectPortableEqual(&rawr_result, cr_result);
         return;
     }
@@ -1646,6 +1663,7 @@ fn validateBitmapResult(row: ParityRow, allocator_kind: ParityAllocator) !void {
     };
     var rawr_result = try makeRawrResult(row, result_allocator);
     defer rawr_result.deinit();
+    if (row == .clone) try expectRawrPortableIdentical(&rawr_dense_a.?, &rawr_result);
     try expectPortableEqual(&rawr_result, cr_result);
 }
 
@@ -1699,6 +1717,7 @@ fn makeRawrResult(row: ParityRow, result_allocator: std.mem.Allocator) !RoaringB
         .array_skewed_and => try rawr_array_skewed_a.?.bitwiseAnd(result_allocator, &rawr_array_skewed_b.?),
         .deserialize, .deserialize_arena => try RoaringBitmap.deserialize(result_allocator, rawr_serialized.?),
         .flip => try rawr_dense_a.?.flip(result_allocator, 100_000, 650_000),
+        .clone => try rawr_dense_a.?.clone(result_allocator),
         .remove_range => result: {
             var result = try rawr_dense_a.?.clone(result_allocator);
             errdefer result.deinit();
@@ -1756,6 +1775,7 @@ fn makeCRoaringResult(row: ParityRow) !*c.roaring_bitmap_t {
             cr_serialized.?.len,
         ) orelse error.OutOfMemory,
         .flip => c.roaring_bitmap_flip_closed(cr_dense_a.?, 100_000, 650_000) orelse error.OutOfMemory,
+        .clone => c.roaring_bitmap_copy(cr_dense_a.?) orelse error.OutOfMemory,
         .remove_range => result: {
             const result = c.roaring_bitmap_copy(cr_dense_a.?) orelse return error.OutOfMemory;
             c.roaring_bitmap_remove_range_closed(result, 100_000, 650_000);
@@ -1777,6 +1797,15 @@ fn expectPortableEqual(rawr_result: *const RoaringBitmap, cr_result: *const c.ro
         return error.SerializedSizeMismatch;
     }
     if (!std.mem.eql(u8, rawr_bytes, cr_bytes)) return error.CRoaringMismatch;
+}
+
+fn expectRawrPortableIdentical(source: *const RoaringBitmap, clone: *const RoaringBitmap) !void {
+    const validation_allocator = std.heap.page_allocator;
+    const source_bytes = try source.serialize(validation_allocator);
+    defer validation_allocator.free(source_bytes);
+    const clone_bytes = try clone.serialize(validation_allocator);
+    defer validation_allocator.free(clone_bytes);
+    if (!std.mem.eql(u8, source_bytes, clone_bytes)) return error.CloneMismatch;
 }
 
 pub fn parityCleanup() void {
