@@ -17,8 +17,10 @@ production change.** Puts `clone` on the canonical board and updates the count c
 - **Manifest 38 → 39:** update all **active** executable assertions, scripts, and current
   documentation (`--list`, `validateManifest`, runner checks, current tables' prose).
   Completed specs and historical results stay historical.
-- **Local test gates:** `zig build test`; `zig build difftest`; a canonical-runner smoke
-  showing the new row measured and validated; `ReleaseSafe` / `ReleaseFast` green.
+- **Local test gates (smoke-only):** `zig build test`; `zig build difftest`; a
+  canonical-runner smoke showing the new row measured and validated; `ReleaseSafe` /
+  `ReleaseFast` green. **The full-board regression gate (no existing row > 5% worse) belongs
+  to `26a-01`** — a smoke cannot establish it.
 
 ## Acceptance / checklist
 
@@ -26,5 +28,5 @@ production change.** Puts `clone` on the canonical board and updates the count c
 - [ ] Byte-identity-vs-source + CRoaring parity green
 - [ ] `--list` = 39; `validateManifest` and all active count checks updated; historical refs
       untouched
-- [ ] No production/library change; test / difftest / ReleaseSafe / ReleaseFast green
-- [ ] No existing canonical row perturbed (> 5%) by the addition
+- [ ] No production/library change; test / difftest / ReleaseSafe / ReleaseFast green;
+      canonical-runner smoke of the new row
