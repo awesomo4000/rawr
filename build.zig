@@ -55,6 +55,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = .ReleaseFast,
     });
+    const range_bench_lib_mod = b.createModule(.{
+        .root_source_file = b.path("src/range_bench_root.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
     const validation_optimize = if (optimize == .Debug) .ReleaseFast else optimize;
     const validation_lib_mod = b.createModule(.{
         .root_source_file = b.path("src/roaring.zig"),
@@ -495,6 +500,24 @@ pub fn build(b: *std.Build) void {
     });
     const bench_alloc_step = b.step("bench-alloc", "Build allocator matrix benchmark");
     bench_alloc_step.dependOn(&b.addInstallArtifact(bench_alloc_exe, .{}).step);
+
+    // Focused allocation probe for the direct-range strategy work.
+    const bench_range_alloc_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_range_alloc.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_range_alloc_mod.addImport("rawr_range_bench", range_bench_lib_mod);
+
+    const bench_range_alloc_exe = b.addExecutable(.{
+        .name = "bench_range_alloc",
+        .root_module = bench_range_alloc_mod,
+    });
+    const bench_range_alloc_step = b.step(
+        "bench-range-alloc",
+        "Build the range-operation allocation probe",
+    );
+    bench_range_alloc_step.dependOn(&b.addInstallArtifact(bench_range_alloc_exe, .{}).step);
 
     // Tarball
     const tarball_step = b.step("tarball", "Create source tarball from git HEAD");

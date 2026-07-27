@@ -269,6 +269,22 @@ fn runFlipCases(allocator: Allocator) !void {
             try assertFlipAgree(allocator, "flip:boundary", &bm, oracle, 65_535, 65_536);
             try assertFlipAgree(allocator, "flip:empty-range", &bm, oracle, 100, 99);
         }
+
+        {
+            var bm = try RoaringBitmap.init(allocator);
+            defer bm.deinit();
+            const empty_values = [_]u32{};
+            const oracle = try buildOracle(&empty_values, run_optimize);
+            defer c.roaring_bitmap_free(oracle);
+            try assertFlipAgree(
+                allocator,
+                "flip:whole-universe",
+                &bm,
+                oracle,
+                0,
+                std.math.maxInt(u32),
+            );
+        }
     }
 }
 
@@ -1469,7 +1485,7 @@ fn assertFlipAgree(
 
     var alloc_name_buf: [128]u8 = undefined;
     const alloc_name = try std.fmt.bufPrint(&alloc_name_buf, "{s}:alloc", .{name});
-    try assertSameValues(allocator, alloc_name, &rawr_result, oracle_result);
+    try assertRangeResultAgree(allocator, alloc_name, &rawr_result, oracle_result);
 
     var rawr_in_place = try bm.clone(allocator);
     defer rawr_in_place.deinit();
@@ -1486,7 +1502,19 @@ fn assertFlipAgree(
 
     var inplace_name_buf: [128]u8 = undefined;
     const inplace_name = try std.fmt.bufPrint(&inplace_name_buf, "{s}:inplace", .{name});
-    try assertSameValues(allocator, inplace_name, &rawr_in_place, oracle_in_place);
+    try assertRangeResultAgree(allocator, inplace_name, &rawr_in_place, oracle_in_place);
+}
+
+fn assertRangeResultAgree(
+    allocator: Allocator,
+    name: []const u8,
+    rawr_bm: *RoaringBitmap,
+    oracle: *c.roaring_bitmap_t,
+) !void {
+    if (rawr_bm.cardinality() > 10_000_000) {
+        return assertSameValuesNonEnumerating(allocator, name, rawr_bm, oracle);
+    }
+    return assertSameValues(allocator, name, rawr_bm, oracle);
 }
 
 fn assertRangeOpsAgree(
@@ -2058,6 +2086,35 @@ fn assertSameValues(
             bench_time.print("FAIL: {s} - CRoaring missing rawr value {d}\n", .{ name, value });
             return error.MissingValue;
         }
+    }
+
+    try assertAbsentSamplesAgree(name, rawr_bm, oracle);
+
+    const rawr_bytes = try rawr_bm.serialize(allocator);
+    defer allocator.free(rawr_bytes);
+    const oracle_size = c.roaring_bitmap_portable_size_in_bytes(oracle);
+    const oracle_bytes = try allocator.alloc(u8, oracle_size);
+    defer allocator.free(oracle_bytes);
+    _ = c.roaring_bitmap_portable_serialize(oracle, @ptrCast(oracle_bytes.ptr));
+
+    try assertCrossDeserializeAgree(allocator, name, rawr_bm, oracle, rawr_bytes, oracle_bytes);
+}
+
+fn assertSameValuesNonEnumerating(
+    allocator: Allocator,
+    name: []const u8,
+    rawr_bm: *RoaringBitmap,
+    oracle: *c.roaring_bitmap_t,
+) !void {
+    const rawr_cardinality = rawr_bm.cardinality();
+    const oracle_cardinality = c.roaring_bitmap_get_cardinality(oracle);
+    if (rawr_cardinality != oracle_cardinality) {
+        bench_time.print("FAIL: {s} - cardinality differs: rawr={d} croaring={d}\n", .{
+            name,
+            rawr_cardinality,
+            oracle_cardinality,
+        });
+        return error.CardinalityMismatch;
     }
 
     try assertAbsentSamplesAgree(name, rawr_bm, oracle);

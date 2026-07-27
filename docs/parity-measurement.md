@@ -494,6 +494,63 @@ range algorithms, transient sparse allocations, and mixed-container accumulation
 kernel change is justified by this diagnosis. The benchmark and evidence remain so a future
 range-algorithm or run-allocation initiative can start from measured components.
 
+## Direct range operation allocation baseline (07/25/2026)
+
+The `bench-range-alloc` target isolates allocations performed by the three range entry points on
+the canonical dense input (`addRange(0, 499999)`) and inclusive range `[100000, 650000]`. Input
+construction is outside the measurement region. By-value `flip` allocates its result through the
+counting allocator; the in-place rows reset counters after constructing their input.
+
+```sh
+zig build bench-range-alloc
+./zig-out/bin/bench_range_alloc
+```
+
+| Legacy operation | Allocations | Frees during operation | Requested bytes | Peak measured live bytes |
+| --- | ---: | ---: | ---: | ---: |
+| `flip` | 77 | 65 | 1,887 | 1,179 |
+| `flipInplace` | 57 | 63 | 1,447 | 1,179 |
+| `removeRange` | 50 | 62 | 1,112 | 992 |
+
+These are M4 ReleaseFast structural baselines, not timing results. The larger previously recorded
+`removeRange` composition count (70 allocations / 1,552 bytes) includes cloning the input before
+the in-place operation.
+
+The retained direct implementation produces the following counts on the same probe:
+
+| Direct operation | Allocations | Frees during operation | Requested bytes | Peak measured live bytes |
+| --- | ---: | ---: | ---: | ---: |
+| `flip` | 32 | 20 | 660 | 300 |
+| `flipInplace` | 30 | 36 | 680 | 632 |
+| `removeRange` | 2 | 14 | 40 | 440 |
+
+The mask bitmap is gone from both in-place operations, and by-value flip constructs its result
+directly instead of cloning the whole input before applying a mask.
+
+### Cross-host direct range decision
+
+The canonical `flip` and clone-plus-`removeRange` rows were run in five fresh processes per
+strategy and implementation. Values are median nanoseconds per operation with the full rawr
+process range in brackets; ratios compare direct rawr SMP with CRoaring.
+
+| Host | Row | Legacy rawr | Direct rawr | CRoaring | Direct ratio |
+| --- | --- | ---: | ---: | ---: | ---: |
+| M4 | flip | 675.415 [664.185, 705.078] | 360.229 [344.971, 368.042] | 379.272 | 0.950x |
+| M4 | clone + removeRange | 518.555 [495.728, 519.287] | 426.392 [421.753, 442.627] | 231.689 | 1.840x |
+| Zen 4 | flip | 1098.621 [995.288, 1243.164] | 397.205 [385.889, 406.360] | 1725.537 | 0.230x |
+| Zen 4 | clone + removeRange | 763.477 [751.111, 789.001] | 290.039 [274.390, 304.541] | 705.579 | 0.411x |
+
+Direct is the shipped implementation on every architecture. Flip reaches parity on M4 and is
+substantially faster on Zen 4. The M4 remove row retains a supported 17.8% rawr improvement even
+though its clone-inclusive comparison remains above CRoaring; direct removal itself is reduced to
+two edge-container allocations. The production legacy composition was removed. A test-only copy
+remains solely to enforce portable-byte identity across the range matrix.
+
+The M4 broad-run regression check covered every unaffected row through deserialization, followed
+by fresh five-process checks of cardinality, rank, select, rankMany, and both range-cardinality
+rows. No unaffected rawr/CRoaring ratio worsened by more than 5%; the few absolute shifts above 5%
+were shared by both implementations and treated as host noise.
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad

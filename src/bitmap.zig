@@ -13,6 +13,7 @@ const opt = @import("optimize.zig");
 const ser = @import("serialize.zig");
 const array_kernels = @import("array_kernels.zig");
 const fmt = @import("format.zig");
+const range_ops = @import("range_ops.zig");
 
 /// A Roaring Bitmap: an efficient compressed bitmap for 32-bit integers.
 ///
@@ -446,16 +447,7 @@ pub const RoaringBitmap = struct {
 
     /// Remove all values in the inclusive range [lo, hi]. Returns count removed.
     pub fn removeRange(self: *Self, lo: u32, hi: u32) !u64 {
-        if (lo > hi) return 0;
-
-        const before = self.cardinality();
-        var mask = try Self.init(self.allocator);
-        defer mask.deinit();
-
-        _ = try mask.addRange(lo, hi);
-        try self.bitwiseDifferenceInPlace(&mask);
-
-        return before - self.cardinality();
+        return range_ops.removeRange(self, lo, hi);
     }
 
     /// Add a range within a single chunk.
@@ -1137,10 +1129,7 @@ pub const RoaringBitmap = struct {
 
     /// Return a new bitmap with values in [lo, hi] complemented.
     pub fn flip(self: *const Self, allocator: std.mem.Allocator, lo: u32, hi: u32) !Self {
-        var result = try self.clone(allocator);
-        errdefer result.deinit();
-        try result.flipInplace(lo, hi);
-        return result;
+        return range_ops.flip(self, allocator, lo, hi);
     }
 
     // ========================================================================
@@ -1640,12 +1629,7 @@ pub const RoaringBitmap = struct {
 
     /// Complement values in [lo, hi] in place.
     pub fn flipInplace(self: *Self, lo: u32, hi: u32) !void {
-        if (lo > hi) return;
-
-        var mask = try Self.init(self.allocator);
-        defer mask.deinit();
-        _ = try mask.addRange(lo, hi);
-        try self.bitwiseXorInPlace(&mask);
+        return range_ops.flipInPlace(self, lo, hi);
     }
 
     // ========================================================================
@@ -2563,4 +2547,5 @@ pub const OwnedBitmap = struct {
 
 test {
     _ = @import("bitmap_tests.zig");
+    _ = @import("range_strategy_tests.zig");
 }
