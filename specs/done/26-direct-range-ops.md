@@ -22,6 +22,19 @@ bitmap, no whole-bitmap clone, no whole-bitmap cardinality recompute.
 This is allocation-**demand** reduction — the one lever that has repeatedly proven out (specs
 18/19) — applied to the two ops still carrying the composition.
 
+> **Outcome (2026-07-27, commit `cdc26cb`) — GO; direct shipped on every architecture.**
+> - **flip:** allocations 77 → 32; **0.950x M4** (from 1.767x) and **0.230x Zen 4** (from
+>   0.565x) — parity on M4, far ahead on x86. Full GO.
+> - **removeRange:** allocations 50 → **2** (edge containers only); **0.411x Zen 4** (from
+>   1.078x). The M4 canonical row retains a supported **17.8% improvement** but sits at
+>   **1.840x** — and that row is **clone-inclusive** (`clone + removeRange`; the op is
+>   destructive, so each rep clones first). Direct removal itself is near-free; **the remaining
+>   M4 gap must be attributed between clone and mutation before it is treated as a removeRange
+>   gap at all** — that separation is the fenced reopen condition.
+> - Preference-order case 1 held: **single direct implementation**, production legacy removed,
+>   test-only copy retained solely to enforce portable-byte identity. Regression sweep ≤ 5%
+>   held. Full record: [`docs/parity-measurement.md`](../../docs/parity-measurement.md).
+
 Canonical-board standing (rawr/CRoaring, SMP): removeRange **2.167x M4 / 1.078x Zen 4**; flip
 **1.767x M4 / 0.565x Zen 4** (rawr *ahead* on Zen 4 — see the gate below). **Baseline of
 record for all gates:** the per-host canonical tables committed in
