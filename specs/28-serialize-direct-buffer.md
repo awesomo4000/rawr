@@ -34,13 +34,16 @@ alloc/free); **the copy** of each temp table into the output; and **the `std.Io.
 abstraction** itself (per-`writeAll` bounds/state vs a raw indexed store — Morty's open question,
 a real suspect independent of the allocations).
 
-**Allocator provenance (report explicitly).** The benchmark bitmap is always SMP-built, and even
-in the rawr-**libc** tuple only the **returned output buffer** uses libc — `desc_buf`/`offset_buf`
-use `bm.allocator` and therefore stay **SMP** (`serialize.zig:194`; the row's allocator wiring at
-`bench_croaring.zig:730`). So "rawr-libc" here is **not** allocation-matched for the whole
-operation. Phase 1 must state, per variant: the **output-buffer allocator**, the
-**temporary-table allocator**, and the **allocation counts + bytes for each** — so no result is
-misread as fully allocator-matched.
+**Measure the SMP path — libc is a conditional control, not a routine column.** The target is
+rawr's default **SMP** path and the gap is M4 SMP, so Phase 1 measures the **four rawr-SMP cells
+on M4 and Zen 4** against **one CRoaring reference per host**. rawr-**libc** is *not* a routine
+variant here: for serialize it isn't even whole-op libc — only the output buffer would use libc
+while `desc_buf`/`offset_buf` stay on `bm.allocator` (SMP) (`serialize.zig:194`; row wiring
+`bench_croaring.zig:730`) — so it answers nothing cleanly. Run **one M4 rawr-libc control only
+if** an SMP cell's cost is ambiguous between allocation and other work; it is **not part of the
+acceptance gate or routine reporting**. The construction lever is read directly from the
+**allocation counts + bytes** (output buffer vs temp tables, reported separately per cell), no
+libc timing run needed.
 
 **A/B — a true `construction × output` factorial (temp/direct × Writer/direct-index),
 interactions treated as interactions (not additive %):**
@@ -54,10 +57,10 @@ interactions treated as interactions (not additive %):**
 4. **direct construction + direct index** — in-place table entries **and** direct indexing (the
    candidate shipping shape).
 
-Untimed allocation/byte counters; each cell a fresh process; **rawr-SMP and rawr-libc** plus
-CRoaring, on M4 and Zen 4; no nested timers. The 2×2 cleanly separates the **construction** lever
-(temp allocation — carries the spec-27 M4-SMP risk) from the **output** lever (Writer abstraction
-— allocator-independent) and their interaction.
+Untimed allocation/byte counters; each of the four rawr-SMP cells a fresh process, plus one
+CRoaring reference per host; M4 and Zen 4; no nested timers. The 2×2 cleanly separates the
+**construction** lever (temp allocation — carries the spec-27 M4-SMP risk) from the **output**
+lever (Writer abstraction — allocator-independent) and their interaction.
 
 Phase 1 stands alone: "which cell wins, per host, and why" is the deliverable.
 
@@ -97,8 +100,9 @@ Add a **direct fixed-buffer path for `serialize()`** implementing the components
 
 ## Acceptance
 
-- **Phase 1 GO:** the 1.14x attributed to temp-array alloc / copy / Writer abstraction, per host,
-  with counters + A/B, on rawr-SMP + rawr-libc + CRoaring.
+- **Phase 1 GO:** the M4 1.14x attributed to the construction lever / output lever / interaction,
+  per host, from the four rawr-SMP cells vs the CRoaring reference (libc control only if an SMP
+  cell needs allocator attribution).
 - **Phase 2 GO (if attempted):** serialize ≤ 1.10x (or material improvement) on both hosts,
   byte-identical output, roundtrip + CRoaring differential green, M4-SMP not regressed, board
   gate held. A documented partial (Writer-bypass shipped, alloc-removal NO-GO on M4 SMP, or vice

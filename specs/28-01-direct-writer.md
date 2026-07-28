@@ -9,8 +9,8 @@ cell from `28-00` in production `serialize()`, keeping `serializeToWriter()` unc
 
 - `28-00` complete: the gap attributed to a movable lever (construction and/or output), with the
   winning cell **not** regressing M4 SMP. If `28-00` shows the gap is not in a movable component
-  (shared `getCardinality()`-per-container, or variance), this chunk is **not written** — record
-  the NO-GO and move to `done/` with the parent.
+  (shared `getCardinality()`-per-container, or variance), this chunk is **not implemented** —
+  record the NO-GO here and move to `done/` with the parent.
 
 ## Implementation
 
@@ -36,9 +36,11 @@ cell from `28-00` in production `serialize()`, keeping `serializeToWriter()` unc
 
 ## Acceptance
 
-- serialize reaches **≤ 1.10x** (or a material improvement, > 5% with range support) on **M4**,
-  with **Zen 4 not regressed** (≤ 5%, rerun on overlap) and no canonical row worsening > 5% vs a
-  fresh pre-change baseline run immediately before the after-run, both hosts.
+- **Target is the rawr-SMP path:** serialize reaches **≤ 1.10x** (or a material improvement,
+  > 5% with range support) on **M4 SMP**, with **Zen 4 SMP not regressed** (≤ 5%, rerun on
+  overlap). The board-regression check still covers **all** rows including serialize-libc (don't
+  regress it), vs a fresh pre-change baseline run immediately before the after-run, both hosts —
+  but the ≤1.10x goal and gate is SMP, not libc.
 - **M4-SMP gate:** the shipped path does not regress M4-SMP serialize even if it removes
   allocations (the spec-27 check) — any lever that does is dropped, documented.
 - Byte-identity (legacy oracle + round-trip + CRoaring) and the full differential green; cursor
@@ -49,9 +51,11 @@ cell from `28-00` in production `serialize()`, keeping `serializeToWriter()` unc
 
 ## Checklist
 
-- [ ] Direct path in `serialize()` only; `serializeToWriter()` untouched; no public API change
+- [ ] Direct path in `serialize()` only; `serializeToWriter()` untouched; no public API change;
+      shares layout helpers with the `28-00` winning cell (no drift)
 - [ ] Only levers that won (incl. M4-SMP-non-regressing) in `28-00` shipped
 - [ ] Byte-identical vs `serializeToWriter()`, round-trip, and CRoaring; threshold-boundary cases
 - [ ] Cursor == `buf.len` asserted
-- [ ] M4 ≤ 1.10x or material improvement; Zen 4 not regressed; board ≤ 5% both hosts
+- [ ] M4 **SMP** ≤ 1.10x or material improvement; Zen 4 **SMP** not regressed; board ≤ 5% all
+      rows both hosts
 - [ ] test / difftest / both-host canonical run / ReleaseSafe / ReleaseFast green; docs updated

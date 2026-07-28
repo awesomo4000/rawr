@@ -20,23 +20,31 @@ The 2×2 isolates the **construction** lever (temp allocation — the spec-27 M4
 
 ## Method
 
-- Untimed allocation/byte counters; each cell a **fresh process**; **rawr-SMP and rawr-libc**
-  plus CRoaring; **M4 and Zen 4**; no nested timers.
-- **Allocator provenance reported per variant:** the bench bitmap is SMP-built and the rawr-libc
-  tuple routes only the **output buffer** through libc — `desc_buf`/`offset_buf` use
-  `bm.allocator` (SMP) (`serialize.zig:194`; row wiring `bench_croaring.zig:730`). Report, per
-  variant: output-buffer allocator, temp-table allocator, and allocation counts + bytes for each,
-  so no cell is misread as fully allocator-matched.
+- **Four rawr-SMP cells** (fresh process each) on **M4 and Zen 4**, against **one CRoaring
+  reference per host**. Median + full range; untimed allocation/byte counters; no nested timers.
+- **rawr-libc is a conditional control, not routine:** the target is the SMP path and the gap is
+  M4 SMP; the serialize libc tuple isn't even whole-op libc (only the output buffer; temp tables
+  stay on `bm.allocator` = SMP — `serialize.zig:194`, row wiring `bench_croaring.zig:730`). Run
+  **one M4 rawr-libc control only if** an SMP cell's cost is ambiguous between allocation and
+  other work. Not in the acceptance gate or routine reporting.
+- **Allocation counts + bytes reported per cell** — output buffer vs temp tables **separately**;
+  this reads the construction lever directly, no libc timing needed.
+- **Reproducible artifacts:** `zig build bench-serialize-diag` →
+  `./zig-out/bin/bench_serialize_diag`, five-process runner `scripts/run-bench-serialize-diag.sh`,
+  timestamped summaries under `misc/` (named in `docs/parity-measurement.md`).
+- **Cells share production serialization-layout helpers** where possible, or **each cell's output
+  is proven byte-identical to unchanged `serializeToWriter()`** — so the winning benchmark cell
+  cannot drift from what `28-01` ships.
 - Interactions treated as interactions, not additive percentages.
 
 ## Acceptance / checklist
 
-- [ ] Four cells × (rawr-SMP, rawr-libc, CRoaring) × (M4, Zen 4), fresh process per cell,
-      median + range
-- [ ] Allocator provenance + alloc counts/bytes reported per variant
+- [ ] Four **rawr-SMP** cells × (M4, Zen 4), fresh process each, median + range; **one CRoaring
+      reference per host**; optional M4 rawr-libc control only if a cell needs allocator attribution
+- [ ] Alloc counts + bytes per cell (output buffer vs temp tables separately)
+- [ ] `bench-serialize-diag` build + runner + timestamped `misc/` summaries exist
+- [ ] Cells share production layout helpers or are byte-identical to `serializeToWriter()`
 - [ ] The M4 1.14x attributed to construction lever / output lever / interaction, per host
-- [ ] Every cell's output validated byte-identical to unchanged `serializeToWriter()` (in-repo
-      oracle) so cells differ only in *how* they write, not *what*
 - [ ] Benchmark-only; results in `docs/parity-measurement.md`; `zig build test`, `difftest`,
       `ReleaseSafe`, `ReleaseFast` green
 
