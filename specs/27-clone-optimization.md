@@ -60,24 +60,29 @@ ships only on its own numbers.
   today it gets `INITIAL_CAPACITY`: cloning an empty bitmap; **adding to that clone** (growth
   from zero); singleton and multi-container clones; allocation failure during partial
   container cloning (leak-free, source untouched).
-- **Zen 4 no-regress (hard):** clone-body, teardown, and the canonical `clone` /
-  `clone + removeRange` rows stay within noise (≤ 5%, rerun on range overlap) on Zen 4, where
-  rawr already wins.
-- **Board gate:** no canonical row worsens > 5% vs the **post-26a baseline of record** —
-  commit `75662a1`, summaries `misc/range-attrib-20260727-182905-summary.txt` (M4) and
-  `misc/range-attrib-20260727-183135-summary.txt` (Zen 4) plus the canonical tables recorded
-  with them in `docs/parity-measurement.md` — both hosts, rerun on range overlap.
+- **Zen 4 no-regress (hard, directly-timed rows only):** clone body and the canonical
+  `clone` / `clone + removeRange` rows stay within noise (≤ 5%, rerun on range overlap) on
+  Zen 4, where rawr already wins. **Teardown is diagnostic, not hard-gated** — it is derived
+  by subtracting independently sampled medians and is noisier than a timed row; report it and
+  investigate only if its ranges indicate a material shift.
+- **Board gate:** no canonical row worsens > 5%, both hosts, vs a **fresh pre-change baseline**:
+  run the full 39-row canonical tables from commit `75662a1` **immediately before** each
+  after-run on the same host/session (the recorded `range-attrib` summaries are the focused
+  diagnostic, not the board — do not baseline against them). Rerun on range overlap.
 
 ## Acceptance (GO)
 
 - Phase 1: allocation count **20 → 18** on the probe; **clone body and the canonical rows
-  improve** on M4; **teardown stays neutral within noise** — Phase 1 removes the temporary
+  improve materially** on M4 — **> 5% with range support** (non-overlapping or clearly shifted
+  ranges), not merely a lower median; **teardown stays neutral within noise** — Phase 1 removes the temporary
   initial arrays from the clone *body*, but the returned clone's final arrays and containers
   are identical, so final `deinit` work is unchanged and no teardown improvement may be
   claimed. Both hosts re-measured; all gates green. If M4's canonical `clone` and
   `clone + removeRange` rows reach **≤ 1.10x**, stop — Phase 2 is not attempted.
-- Phase 2 (per candidate, only if attempted): **both preconditions** (ownership/deinit design
-  and the class-boundary analysis) are recorded **before** implementation; the candidate
+- Phase 2 (per candidate, only if attempted): **the applicable ownership/layout invariant plus
+  the class-boundary analysis** are recorded **before** implementation — for single-allocation
+  run clones that is the run-container deinit invariant; for combined top-level storage it is
+  its own allocation/growth/deinit ownership design; the candidate
   improves M4 beyond noise on the `26a` diagnostics and canonical rows without breaking any
   gate. A candidate whose analysis fails on either precondition is recorded and dropped, not
   built.

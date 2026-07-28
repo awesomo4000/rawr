@@ -28,14 +28,17 @@ both hosts against the board gate.
 ## Measurement / acceptance
 
 - **Allocation count 20 → 18** on the `26a` wide-dense probe (`bench_range_attrib`).
-- **Clone body improves on M4**; canonical `clone` and `clone + removeRange` rows improve;
-  **teardown neutral within noise** (final arrays/containers are identical — no teardown
-  improvement may be claimed).
-- **Zen 4 no-regress:** clone body, teardown, and both canonical rows within ≤ 5% (rerun on
-  range overlap).
-- **Board gate:** full 39-row canonical tables on both hosts; no row > 5% worse vs the
-  baseline of record (commit `75662a1`; `misc/range-attrib-20260727-182905-summary.txt` M4,
-  `misc/range-attrib-20260727-183135-summary.txt` Zen 4).
+- **Clone body and the canonical `clone` / `clone + removeRange` rows improve materially on
+  M4** — > 5% with range support, not merely a lower median. **Teardown is reported
+  diagnostically only** (subtraction-derived, noisier than a timed row); expected neutral —
+  investigate only if its ranges indicate a material shift. No teardown improvement may be
+  claimed.
+- **Zen 4 no-regress (hard, directly-timed rows):** clone body and both canonical rows within
+  ≤ 5% (rerun on range overlap); teardown diagnostic as above.
+- **Board gate:** full 39-row canonical tables on both hosts, compared against a **fresh
+  pre-change baseline run from commit `75662a1` immediately before** the after-run on the same
+  host (the recorded range-attrib summaries are the focused diagnostic, not the board); no row
+  > 5% worse, rerun on range overlap.
 - Results + updated rows recorded in `docs/parity-measurement.md`.
 - `zig build test`; `zig build difftest`; `ReleaseSafe` / `ReleaseFast` green.
 
@@ -50,6 +53,7 @@ here** (`27-01` is not started). Otherwise `27-01` runs the feasibility analysis
 - [ ] `flipDirect` audit recorded (no waste; nothing else touched)
 - [ ] Empty/add-after/singleton/multi/alloc-failure tests green; range matrix + difftest green
 - [ ] 20 → 18 allocations confirmed on the probe
-- [ ] M4 clone body + canonical rows improved; teardown neutral; Zen 4 within noise
-- [ ] Full-board 39-row gate green both hosts vs `75662a1` baseline
+- [ ] M4 clone body + canonical rows improved > 5% with range support; teardown reported
+      diagnostically (expected neutral); Zen 4 timed rows within noise
+- [ ] Full-board 39-row gate green both hosts vs fresh pre-change `75662a1` baseline runs
 - [ ] docs updated; test / difftest / ReleaseSafe / ReleaseFast green

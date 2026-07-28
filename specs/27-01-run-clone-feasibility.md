@@ -32,9 +32,10 @@ implementation.** Runs only if `27-00` leaves the M4 canonical `clone` /
 
 ## Acceptance
 
-- Both preconditions answered in writing for the run-clone candidate (design-or-NO-GO +
-  class analysis with the actual size-class arithmetic shown), and the top-level-storage
-  candidate assessed at analysis depth.
+- **The applicable ownership/layout invariant plus class-boundary analysis** answered in
+  writing per candidate: for run clones, the deinit-invariant design-or-NO-GO + class
+  arithmetic; for top-level storage, its own allocation/growth/deinit ownership design +
+  class arithmetic, at analysis depth.
 - A clear recommendation recorded in the spec/`docs/parity-measurement.md`: implement X, or
   close with residual documented.
 - No production or benchmark code changed by this chunk.
