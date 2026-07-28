@@ -2,10 +2,11 @@
 
 # Spec 28: Serialize — direct fixed-buffer writer
 
-Close the persistent both-host `serialize` gap (~**1.14x**, and it is on *both* architectures,
-not an M4-only residual). The structural difference is verified in source, and this is also the
-**cheap probe** of the "drop temp arrays + write directly" pattern that dense AND/OR want next —
-on a small, no-public-API surface, before we bet the bigger rewrites on it.
+Close the persistent `serialize` gap — **M4 SMP 1.14x**, **Zen 4 SMP 1.08x**: primarily an M4
+gap now, with Zen 4 an important **regression gate** (not a second target). The structural
+difference is verified in source, and this is also the **cheap probe** of the "drop temp arrays
++ write directly" pattern that dense AND/OR want next — on a small, no-public-API surface, before
+we bet the bigger rewrites on it.
 
 **Diagnosis first — because spec 27 is the hard prior.** Removing allocations *regressed* the
 M4-SMP clone body (20→18 allocs, ~50% slower). So we do **not** assume the temp arrays are the
@@ -28,21 +29,34 @@ can compute each table's byte position and write in place — no `desc_buf`/`off
 
 ## Phase 1 — Diagnosis (benchmark-only, both hosts, no preselected cause)
 
-Attribute the ~1.14x among the candidates, on the canonical `serialize` corpus:
+Attribute the M4 1.14x among: **temporary-array allocation** (`desc_buf` + `offset_buf`
+alloc/free); **the copy** of each temp table into the output; and **the `std.Io.Writer.fixed`
+abstraction** itself (per-`writeAll` bounds/state vs a raw indexed store — Morty's open question,
+a real suspect independent of the allocations).
 
-- **temporary-array allocation** (`desc_buf` + `offset_buf` alloc/free);
-- **the copy** of each temp table into the output;
-- **the `std.Io.Writer.fixed` abstraction** itself (per-`writeAll` bounds/state vs a raw indexed
-  store) — Morty's open question, and a real suspect independent of the allocations.
+**Allocator provenance (report explicitly).** The benchmark bitmap is always SMP-built, and even
+in the rawr-**libc** tuple only the **returned output buffer** uses libc — `desc_buf`/`offset_buf`
+use `bm.allocator` and therefore stay **SMP** (`serialize.zig:194`; the row's allocator wiring at
+`bench_croaring.zig:730`). So "rawr-libc" here is **not** allocation-matched for the whole
+operation. Phase 1 must state, per variant: the **output-buffer allocator**, the
+**temporary-table allocator**, and the **allocation counts + bytes for each** — so no result is
+misread as fully allocator-matched.
 
-Method per the campaign discipline: untimed allocation/byte counters; A/B variants
-(direct-indexed-write vs Writer; temp-arrays vs in-place) measured in fresh processes;
-**rawr-SMP and rawr-libc** both, plus CRoaring, on M4 and Zen 4. If the cost is the Writer
-abstraction rather than the allocations, the fix is a direct indexed writer, not (only) removing
-temp arrays — and that matters because removing allocations alone might replay spec 27's M4-SMP
-regression.
+**A/B — a factorial matrix, interactions treated as interactions (not additive %):**
 
-Phase 1 stands alone: "which component is the 1.14x, per host" is the deliverable.
+1. **current** — temp tables + `Writer.fixed`;
+2. **direct destination tables** — descriptor/offset written in place, **Writer retained** for
+   cookie/container data;
+3. **Writer bypass** — temp tables still allocated, but copied in via **direct indexing** (no
+   Writer);
+4. **fully direct** — in-place tables **and** no Writer.
+
+Untimed allocation/byte counters; each cell a fresh process; **rawr-SMP and rawr-libc** plus
+CRoaring, on M4 and Zen 4; no nested timers. The 2×2 (temp-arrays × Writer) separates the two
+levers and their interaction — which matters because removing allocations alone might replay
+spec 27's M4-SMP regression, while the Writer lever is allocator-independent.
+
+Phase 1 stands alone: "which cell wins, per host, and why" is the deliverable.
 
 ## Phase 2 — Fix (conditional on the attribution)
 
@@ -62,8 +76,11 @@ Add a **direct fixed-buffer path for `serialize()`** implementing the components
   path's bytes must be **identical to the current output** for every corpus, and both **rawr
   `deserialize`** and **CRoaring** must read it (roundtrip + `roaring_bitmap_portable_deserialize`
   equality). This is the portable-byte contract; a differential across container-type mixes
-  (array/bitset/run, run and no-run formats, the `NO_OFFSET_THRESHOLD` boundary, empty bitmap)
-  stays green.
+  (array/bitset/run, run and no-run formats, the empty bitmap, and **run-format container counts
+  immediately below and exactly at `NO_OFFSET_THRESHOLD`** — the branch that decides whether the
+  offset table is written) stays green.
+- **Cursor invariant:** the direct path asserts its **final write position equals `buf.len`** —
+  a mismatch is a layout bug caught immediately, not a silently truncated/over-run buffer.
 - **Spec-27 SMP gate.** Measure **M4 SMP** explicitly. If the direct path removes allocations but
   regresses M4-SMP serialize (the clone trap), that is a NO-GO for the allocation part — record
   it; the Writer-bypass part may still stand on its own numbers.
