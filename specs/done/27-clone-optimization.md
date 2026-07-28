@@ -13,6 +13,24 @@ carries a Zen 4 no-regress gate.
 
 **Staged: a measured quick win first, deeper layout work only if the numbers still warrant.**
 
+> **Outcome (2026-07-28, commit `3e27675`) — NO-GO on the optimization; a real correctness fix
+> retained.** Phase 1 was tested and **rejected by its own gates**: `initCapacity(self.size)`
+> did cut allocations 20 → 18, but M4 SMP clone-body **regressed** (~272 → 408–430 ns) while
+> libc improved — the effect is allocator-specific, another case of SMP class behavior defying
+> allocation-count intuition. Phase 2 analysis also NO-GO: combined run-container storage
+> **crosses worse SMP size classes**, combined top-level storage increases class-rounded
+> memory, and both demand disproportionate ownership/growth redesigns.
+>
+> **The keeper:** the required allocation-failure tests uncovered a **real clone leak** —
+> partially cloned containers were invisible to `errdefer` (`result.size` set only after the
+> loop). Fixed (`result.size = i` on mid-loop failure), performance-neutral on both hosts,
+> with the failure-injection tests retained. All Debug/ReleaseSafe/ReleaseFast, differential,
+> and 39-row board gates green on M4 and Zen 4.
+>
+> The M4 clone gap closes as a **documented, analyzed residual** (allocator-specific; every
+> proposed lever measured or analyzed to NO-GO). Full record:
+> [`docs/parity-measurement.md`](../../docs/parity-measurement.md).
+
 ## Phase 1 — eliminate the measured init-then-grow waste
 
 `clone` (`src/bitmap.zig:89`) calls `Self.init(allocator)` — which allocates the top-level
