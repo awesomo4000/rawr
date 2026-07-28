@@ -93,7 +93,10 @@ pub const RoaringBitmap = struct {
         try result.ensureTotalCapacity(self.size);
 
         for (self.containers[0..self.size], self.keys[0..self.size], 0..) |tp, key, i| {
-            const cloned = try Container.fromTagged(tp).clone(allocator);
+            const cloned = Container.fromTagged(tp).clone(allocator) catch |err| {
+                result.size = @intCast(i);
+                return err;
+            };
             result.containers[i] = cloned.toTagged();
             result.keys[i] = key;
         }

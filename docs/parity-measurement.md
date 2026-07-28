@@ -606,6 +606,66 @@ allocation, and teardown. The direct range algorithm should remain unchanged.
 Complete 39-row canonical boards passed the regression gate on M4 and Zen 4. No pre-existing row
 worsened by more than 5% against a fresh post-spec-26 baseline after range-overlap reruns.
 
+### Clone optimization follow-up (07/28/2026)
+
+The Phase 1 experiment replaced clone's initial-capacity allocation and immediate growth with an
+exact-capacity initialization. It produced the predicted inventory reduction from 20 allocations
+and 440 requested bytes to 18 allocations and 400 requested bytes. It did not pass the performance
+gate. On M4, two independent five-process runs measured rawr-SMP clone body at 407.715
+[395.996, 421.021] and 430.420 [406.616, 451.050] ns/op, substantially worse than the 26a result
+of 272.339 [242.676, 296.509] ns/op. Rawr-libc improved to approximately 132-144 ns/op, confirming
+that reducing the nominal allocation count is not sufficient to predict SMP allocator behavior.
+The direct-capacity change was reverted.
+
+The required allocation-failure sweep exposed a separate correctness defect: when a later
+container clone failed, the clone error path did not record already cloned containers in
+`result.size`, so `errdefer` leaked them. The retained fix sets the partial size only on the error
+branch before returning. Every injected allocation failure is leak-free and leaves the source
+portable bytes unchanged. Its success path is neutral: the retained M4 diagnostic measured clone
+body at 246.216 [230.835, 260.132] ns/op, while focused canonical reruns measured clone at
+362.305 ns/op versus the 364.868 ns/op baseline and clone-plus-`removeRange` at 429.443 ns/op
+versus 427.856 ns/op. `flipDirect` already initializes its exact result capacity and has no
+clone-style init-then-grow waste.
+
+The retained fix is also neutral on Zen 4. Clone body measured 158.508
+[154.443, 166.699] ns/op versus 154.736 [152.832, 173.499] before the fix, with overlapping
+ranges. Focused canonical reruns measured clone at 197.253 ns/op versus 198.730 ns/op and
+clone-plus-`removeRange` at 250.439 ns/op versus 253.381 ns/op.
+
+The conditional deeper-layout analysis also produced NO-GO results before implementation. Zig
+0.16's SMP allocator rounds small allocations to power-of-two slots with an 8-byte minimum:
+
+| Run capacity | Split struct + payload slots | Combined slot | Result |
+| ---: | ---: | ---: | --- |
+| 1-4 (minimum capacity 4) | 32 + 16 = 48 | 64 | worse |
+| 8 | 32 + 32 = 64 | 64 | neutral |
+| 16 | 32 + 64 = 96 | 128 | worse |
+| 32 | 32 + 128 = 160 | 256 | worse |
+| 64 | 32 + 256 = 288 | 512 | worse |
+| 128 | 32 + 512 = 544 | 1024 | worse |
+
+Some non-power-of-two capacities have narrow favorable windows, but the one-run target corpus and
+the normal doubling sequence cross into larger classes. A clone-only combined layout would also
+need allocation-mode metadata and a migration design when a mutable clone grows; converting all
+run containers would require pointer-changing growth or a broader handle redesign. The failed
+size-class gate makes that ownership work unjustified.
+
+Combined top-level key/container storage fails the same gate. At capacities 1, 2, 4, 8, and 16,
+the separate SMP slot totals are 16, 24, 40, 80, and 160 bytes; combined requests round to 16, 32,
+64, 128, and 256 bytes. Implementing it would additionally touch `initCapacity`, `deinit`, normal
+growth, `shrinkToFit`, in-place set-operation replacement, and range growth. It is rejected before
+that blast radius is incurred.
+
+Spec 27 therefore closes without a clone layout optimization. The M4 clone gap remains a documented
+architecture-specific SMP allocator residual; the direct range algorithm remains unchanged. The
+allocation-failure cleanup is retained as an independent correctness fix.
+
+Complete pre/post 39-row boards passed on both hosts. The M4 after-table initially flagged
+array-skewed AND/libc and select; five-process reruns reduced their ratio changes to 3.2% and 4.2%.
+The Zen 4 after-table initially flagged addMany-random/libc, serialize, and clone/libc. Reruns put
+addMany below 5%, kept serialize inside the baseline process ranges, and improved clone/libc
+against its rerun reference. No regression is attributable to the retained change.
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad
@@ -681,3 +741,10 @@ These scripts build native `ReleaseFast` executables, retain individual process 
 - `misc/m4-cluster-diag-20260725-111417-summary.txt` (Zen 4)
 - `misc/range-attrib-20260727-182905-summary.txt` (M4)
 - `misc/range-attrib-20260727-183135-summary.txt` (Zen 4)
+- `misc/parity-20260728-032923-summary.txt` (M4 pre-change baseline)
+- `misc/parity-20260728-033704-summary.txt` (Zen 4 pre-change baseline)
+- `misc/range-attrib-20260728-035544-summary.txt` (M4 direct-capacity NO-GO confirmation)
+- `misc/range-attrib-20260728-041330-summary.txt` (M4 retained cleanup fix)
+- `misc/range-attrib-20260728-054509-summary.txt` (Zen 4 retained cleanup fix)
+- `misc/parity-20260728-060853-summary.txt` (M4 retained-fix board)
+- `misc/parity-20260728-061732-summary.txt` (Zen 4 retained-fix board)

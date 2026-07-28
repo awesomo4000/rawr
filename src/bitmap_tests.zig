@@ -58,6 +58,66 @@ test "initCapacity zero grows on first insert" {
     try std.testing.expect(bm.capacity >= 1);
 }
 
+test "clone handles empty singleton and multi-container bitmaps" {
+    const allocator = std.testing.allocator;
+
+    var empty = try RoaringBitmap.init(allocator);
+    defer empty.deinit();
+    var empty_clone = try empty.clone(allocator);
+    defer empty_clone.deinit();
+    try std.testing.expect(try empty_clone.add(42));
+    try std.testing.expect(empty_clone.contains(42));
+    try std.testing.expect(empty.isEmpty());
+
+    var singleton = try RoaringBitmap.init(allocator);
+    defer singleton.deinit();
+    _ = try singleton.add(1234);
+    var singleton_clone = try singleton.clone(allocator);
+    defer singleton_clone.deinit();
+    try expectPortableClone(&singleton, &singleton_clone);
+
+    var multi = try RoaringBitmap.init(allocator);
+    defer multi.deinit();
+    _ = try multi.addRange(0, 499_999);
+    var multi_clone = try multi.clone(allocator);
+    defer multi_clone.deinit();
+    try expectPortableClone(&multi, &multi_clone);
+}
+
+test "clone is leak-free and preserves source across allocation failures" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        cloneAllocationFailureCase,
+        .{},
+    );
+}
+
+fn cloneAllocationFailureCase(allocator: std.mem.Allocator) !void {
+    var source = try RoaringBitmap.init(std.testing.allocator);
+    defer source.deinit();
+    _ = try source.addRange(0, 499_999);
+
+    const before = try source.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(before);
+
+    var cloned = source.clone(allocator) catch |err| {
+        const after = try source.serialize(std.testing.allocator);
+        defer std.testing.allocator.free(after);
+        try std.testing.expectEqualSlices(u8, before, after);
+        return err;
+    };
+    defer cloned.deinit();
+    try expectPortableClone(&source, &cloned);
+}
+
+fn expectPortableClone(source: *const RoaringBitmap, cloned: *const RoaringBitmap) !void {
+    const source_bytes = try source.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(source_bytes);
+    const clone_bytes = try cloned.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(clone_bytes);
+    try std.testing.expectEqualSlices(u8, source_bytes, clone_bytes);
+}
+
 test "ensureTotalCapacity grows once and preserves contents" {
     const allocator = std.testing.allocator;
     var bm = try RoaringBitmap.initCapacity(allocator, 1);
