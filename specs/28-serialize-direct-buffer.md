@@ -42,19 +42,22 @@ operation. Phase 1 must state, per variant: the **output-buffer allocator**, the
 **temporary-table allocator**, and the **allocation counts + bytes for each** — so no result is
 misread as fully allocator-matched.
 
-**A/B — a factorial matrix, interactions treated as interactions (not additive %):**
+**A/B — a true `construction × output` factorial (temp/direct × Writer/direct-index),
+interactions treated as interactions (not additive %):**
 
-1. **current** — temp tables + `Writer.fixed`;
-2. **direct destination tables** — descriptor/offset written in place, **Writer retained** for
-   cookie/container data;
-3. **Writer bypass** — temp tables still allocated, but copied in via **direct indexing** (no
-   Writer);
-4. **fully direct** — in-place tables **and** no Writer.
+1. **temp tables + Writer** — the current implementation;
+2. **direct construction + Writer** — table entries **streamed through the Writer** as they are
+   computed, **no temp tables** (this cell naturally makes more `Writer` calls — that is inherent
+   to the cell, note it);
+3. **temp tables + direct index** — temp tables still allocated, copied into the buffer via
+   **direct indexed stores** (no Writer);
+4. **direct construction + direct index** — in-place table entries **and** direct indexing (the
+   candidate shipping shape).
 
 Untimed allocation/byte counters; each cell a fresh process; **rawr-SMP and rawr-libc** plus
-CRoaring, on M4 and Zen 4; no nested timers. The 2×2 (temp-arrays × Writer) separates the two
-levers and their interaction — which matters because removing allocations alone might replay
-spec 27's M4-SMP regression, while the Writer lever is allocator-independent.
+CRoaring, on M4 and Zen 4; no nested timers. The 2×2 cleanly separates the **construction** lever
+(temp allocation — carries the spec-27 M4-SMP risk) from the **output** lever (Writer abstraction
+— allocator-independent) and their interaction.
 
 Phase 1 stands alone: "which cell wins, per host, and why" is the deliverable.
 
@@ -72,9 +75,10 @@ Add a **direct fixed-buffer path for `serialize()`** implementing the components
 
 ## Constraints / gates
 
-- **Byte-identical output — non-negotiable.** `serialize()` produces a wire format. The direct
-  path's bytes must be **identical to the current output** for every corpus, and both **rawr
-  `deserialize`** and **CRoaring** must read it (roundtrip + `roaring_bitmap_portable_deserialize`
+- **Byte-identical output — non-negotiable, with an in-repo legacy oracle.** `serialize()`
+  produces a wire format. The direct path's bytes must be **byte-identical to the unchanged
+  `serializeToWriter()` output** (the in-repository legacy oracle — checked *before* CRoaring and
+  round-trip), and then both **rawr `deserialize`** and **CRoaring** must read it (roundtrip + `roaring_bitmap_portable_deserialize`
   equality). This is the portable-byte contract; a differential across container-type mixes
   (array/bitset/run, run and no-run formats, the empty bitmap, and **run-format container counts
   immediately below and exactly at `NO_OFFSET_THRESHOLD`** — the branch that decides whether the
