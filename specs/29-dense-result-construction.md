@@ -26,8 +26,8 @@ Both dense ops route through `twoWayAllocatingMerge` (`bitwiseAnd`/`bitwiseOr` a
   identity fast paths** CRoaring has (full-run ∩ X = X; full-run ∪ X = full-run).
 - Both implementations still allocate independently-owned result containers — a full-run identity
   still produces an **owned** container: AND clones the other operand's container; **OR clones the
-  full-run operand or constructs a new canonical full-run container** (it cannot *keep* an input
-  container — the result is independently owned).
+  selected full-run operand** (it cannot *keep* an input container — the result is independently
+  owned).
 
 ## Pinned corpus inventory (assert before any timing)
 
@@ -55,8 +55,9 @@ Levers are **not** an orthogonal 2×2 — **B subsumes A** (B bypasses `runInter
 
 - **A — full-run kernel identity branches** in `runIntersectRun`/`runUnionRun`: an early
   identity return inside the kernel. **Allocation-shape-preserving by construction:** A must
-  **allocate the same run capacity as baseline** — `min(a.n_runs + b.n_runs, 65535)` (the baseline
-  clamp, not unbounded) — and copy the identity runs; it does **not** get to request a tighter
+  **allocate the same run capacity as baseline** — `min(@as(usize, a.n_runs) + b.n_runs, 65535)`
+  (widen before adding so the `u16` sum cannot overflow before the clamp; the baseline clamp, not
+  unbounded) — and copy the identity runs; it does **not** get to request a tighter
   allocation via `clone()`. (If a variant instead
   allocates identity-sized via `clone()`, that is allocation-shape-changing and takes the spec-27
   gate — but the pinned A above does not.) Layout-affected regardless.
