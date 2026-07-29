@@ -55,14 +55,16 @@ Levers are **not** an orthogonal 2×2 — **B subsumes A** (B bypasses `runInter
 
 - **A — full-run kernel identity branches** in `runIntersectRun`/`runUnionRun`: an early
   identity return inside the kernel. **Allocation-shape-preserving by construction:** A must
-  **allocate the same run capacity as baseline** (`a.n_runs + b.n_runs`) and copy the identity
-  runs — it does **not** get to request a tighter allocation via `clone()`. (If a variant instead
+  **allocate the same run capacity as baseline** — `min(a.n_runs + b.n_runs, 65535)` (the baseline
+  clamp, not unbounded) — and copy the identity runs; it does **not** get to request a tighter
+  allocation via `clone()`. (If a variant instead
   allocates identity-sized via `clone()`, that is allocation-shape-changing and takes the spec-27
   gate — but the pinned A above does not.) Layout-affected regardless.
 - **B — bitmap-level full-run identity**: on a matched full-run pair, skip scratch/kernel and
   directly produce the owned identity result. **Pinned implementation:** produce the result by the
-  **existing container `clone()`** — AND clones the other operand's container; OR clones the
-  full-run operand. (Clone-vs-construct-canonical is **not** a "whichever wins" choice; if a
+  **existing container `clone()`**, with **deterministic operand selection when both runs are
+  full** — AND: `if a is full, clone b; otherwise clone a`; OR: `if a is full, clone a; otherwise
+  clone b`. (Clone-vs-construct-canonical is **not** a "whichever wins" choice; if a
   canonical-full-run construction is ever worth testing it is a **separate subcell** with its own
   numbers, not folded into B.) **Changes allocation/execution shape for AND** (bypasses the
   scratch-then-clone) — B carries the spec-27 measurement obligation, layout-affected.
@@ -106,11 +108,13 @@ corpus is added, it becomes lever **D** then; not now.
 - **AND:** `min(self.size, other.size)`.
 - **OR:** `min(self.size + other.size, 65536)` (clamp — the key space is 16-bit).
 - Tests must include **empty and disjoint results** and **mutation after a zero-capacity result**.
-  Precisely: an AND of two nonempty **disjoint** inputs produces **0 output containers** but C
-  still reserves `min(a.size, b.size)` — so the *true zero-capacity* case (top-level reserve of 0)
-  requires an **empty operand** (`min(0, n) = 0`). Name that explicitly: AND/OR with one empty
-  operand → zero top-level reserve, then **add to that result** (growth from zero capacity) is the
-  test.
+  The *true zero-capacity* case (top-level reserve of 0) is operation-specific: **AND reserves 0
+  when either operand is empty** (`min(0, n) = 0`); **OR reserves 0 only when both operands are
+  empty** (`min(0 + 0, 65536) = 0` — OR with one empty operand returns the nonempty operand and
+  reserves its size). Name both: AND with an empty operand, and OR with both empty → zero
+  top-level reserve, then **add to that result** (growth from zero capacity) is the test. (A
+  nonempty **disjoint** AND still reserves `min(a.size, b.size) > 0`, so it is not the
+  zero-capacity case.)
 
 ## Constraints / gates
 
