@@ -54,13 +54,18 @@ Levers are **not** an orthogonal 2×2 — **B subsumes A** (B bypasses `runInter
 | B+C | — | ✓ | ✓ |
 
 - **A — full-run kernel identity branches** in `runIntersectRun`/`runUnionRun`: an early
-  identity return inside the kernel. **Does not change allocation shape** (still one owned result
-  per pair) — but is **not** immune to code-layout effects.
+  identity return inside the kernel. **Allocation-shape-preserving by construction:** A must
+  **allocate the same run capacity as baseline** (`a.n_runs + b.n_runs`) and copy the identity
+  runs — it does **not** get to request a tighter allocation via `clone()`. (If a variant instead
+  allocates identity-sized via `clone()`, that is allocation-shape-changing and takes the spec-27
+  gate — but the pinned A above does not.) Layout-affected regardless.
 - **B — bitmap-level full-run identity**: on a matched full-run pair, skip scratch/kernel and
-  directly produce the owned identity result (AND → clone the other operand's container; OR →
-  clone the full-run / construct a canonical full-run). **Changes allocation/execution shape for
-  AND** (bypasses the scratch-then-clone) — so B carries the spec-27 measurement obligation and is
-  layout-affected.
+  directly produce the owned identity result. **Pinned implementation:** produce the result by the
+  **existing container `clone()`** — AND clones the other operand's container; OR clones the
+  full-run operand. (Clone-vs-construct-canonical is **not** a "whichever wins" choice; if a
+  canonical-full-run construction is ever worth testing it is a **separate subcell** with its own
+  numbers, not folded into B.) **Changes allocation/execution shape for AND** (bypasses the
+  scratch-then-clone) — B carries the spec-27 measurement obligation, layout-affected.
 - **C — pre-sized top-level storage** (formulas below), removing the grow-from-4 cycles.
 - Measured **for AND and OR separately** (their dominant lever likely differs — OR's multi-growth
   vs AND's scratch-clone).
@@ -70,13 +75,21 @@ allocator" (scratch-bypass for *non-full* runs) is **not** in this matrix — on
 already bypasses scratch for every matched pair, so it is unnecessary. If a later, non-full-run
 corpus is added, it becomes lever **D** then; not now.
 
-**Measurement discipline:** construction and teardown measured **separately** (26a matched-
-boundary; teardown subtraction-derived, **diagnostic not gated**; no nested timers); allocation
-counts + bytes per cell (scratch / clone / top-level / payloads separately). Four+ rawr-SMP cells
-per op, fresh process each, M4 and Zen 4, vs **one CRoaring reference per host**; rawr-libc a
-**conditional control** only. **`29-00` must not change the production default** — benchmark-local
-variants or gated internal helpers only; the shipping path changes in later chunks after
-attribution.
+**Measurement discipline:**
+- **Six rawr-SMP cells per operation** (baseline/A/B/C/A+C/B+C), fresh process each, M4 and
+  Zen 4, vs **one CRoaring reference per operation per host**. rawr-libc a **conditional control**
+  only.
+- Canonical protocol: **3 warmup / 21 timed**, **five process medians** + full range, the
+  **canonical batch count** for the dense-AND/OR rows.
+- Construction and teardown measured **separately** (26a matched-boundary; teardown
+  subtraction-derived, **diagnostic not gated**; no nested timers).
+- **Accounting per cell, kept distinct:** the dense-AND **scratch** work is reported as **stack
+  reservations / constructions in the `FixedBufferAllocator`**, *not* allocator allocations —
+  separate from **persistent allocator calls + requested bytes** (clone / top-level / payloads).
+- **"Identity fires exactly 5 times" is asserted only in the identity-enabled cells** (A, B, A+C,
+  B+C) — not in baseline or C.
+- **`29-00` must not change the production default** — benchmark-local variants or gated internal
+  helpers only; the shipping path changes in later chunks after attribution.
 
 ## Phase 2 — Fix (conditional, per lever, on its own numbers)
 
@@ -92,8 +105,12 @@ attribution.
 
 - **AND:** `min(self.size, other.size)`.
 - **OR:** `min(self.size + other.size, 65536)` (clamp — the key space is 16-bit).
-- Tests must include **empty and disjoint results** (min-capacity / zero-overlap) and
-  **mutation after a zero-capacity result** (adding to a bitmap whose op produced 0 containers).
+- Tests must include **empty and disjoint results** and **mutation after a zero-capacity result**.
+  Precisely: an AND of two nonempty **disjoint** inputs produces **0 output containers** but C
+  still reserves `min(a.size, b.size)` — so the *true zero-capacity* case (top-level reserve of 0)
+  requires an **empty operand** (`min(0, n) = 0`). Name that explicitly: AND/OR with one empty
+  operand → zero top-level reserve, then **add to that result** (growth from zero capacity) is the
+  test.
 
 ## Constraints / gates
 
