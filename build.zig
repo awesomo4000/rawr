@@ -314,6 +314,39 @@ pub fn build(b: *std.Build) void {
     );
     bench_select_diag_step.dependOn(&b.addInstallArtifact(bench_select_diag_exe, .{}).step);
 
+    // Fresh-process fixed-buffer serialization diagnosis harness.
+    const serialize_diag_optimize = if (optimize == .Debug) .ReleaseFast else optimize;
+    const serialize_diag_lib_mod = b.createModule(.{
+        .root_source_file = b.path("src/serialize_bench_root.zig"),
+        .target = target,
+        .optimize = serialize_diag_optimize,
+    });
+    const bench_serialize_diag_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_serialize_diag.zig"),
+        .target = target,
+        .optimize = serialize_diag_optimize,
+    });
+    bench_serialize_diag_mod.addImport("rawr", serialize_diag_lib_mod);
+    addBenchmarkPlatformShim(b, bench_serialize_diag_mod, target);
+    addTranslatedCImport(b, bench_serialize_diag_mod, .{
+        .header = "tools/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = serialize_diag_optimize,
+    });
+
+    const bench_serialize_diag_exe = b.addExecutable(.{
+        .name = "bench_serialize_diag",
+        .root_module = bench_serialize_diag_mod,
+    });
+    const bench_serialize_diag_step = b.step(
+        "bench-serialize-diag",
+        "Build fixed-buffer serialization diagnosis benchmark",
+    );
+    bench_serialize_diag_step.dependOn(&b.addInstallArtifact(bench_serialize_diag_exe, .{}).step);
+
     // Fresh-process component attribution for architecture-specific parity rows.
     const m4_cluster_diag_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_m4_cluster_diag.zig"),

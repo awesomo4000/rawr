@@ -197,6 +197,52 @@ Run the retained broad screening dashboard only when a quick, non-authoritative 
 ./scripts/run-compare-bench.sh --dashboard
 ```
 
+## Fixed-buffer serialization diagnosis
+
+Captured 07/28/2026 with Zig 0.16.0, `ReleaseFast`, and the canonical one-million-value
+random corpus. The factorial runner executes each cell in five fresh processes, reports the
+median and full process range, validates bytes after timing against the unchanged
+`serializeToWriter()` path and CRoaring, and records output and temporary allocations
+separately.
+
+| Host | Cell | Median ms [min, max] | Ratio to CRoaring |
+| --- | --- | ---: | ---: |
+| Apple M4 | temp tables + Writer | 1.182 [1.179, 1.205] | 1.144x |
+| Apple M4 | direct construction + Writer | 1.505 [1.425, 1.593] | 1.457x |
+| Apple M4 | temp tables + direct indexing | 1.120 [1.083, 1.156] | 1.084x |
+| Apple M4 | direct construction + direct indexing | 1.069 [1.046, 1.211] | 1.035x |
+| Apple M4 | CRoaring | 1.033 [0.991, 1.051] | 1.000x |
+| Zen 4 | temp tables + Writer | 1.236 [1.058, 2.328] | 0.803x |
+| Zen 4 | direct construction + Writer | 1.323 [1.300, 2.197] | 0.860x |
+| Zen 4 | temp tables + direct indexing | 1.641 [0.922, 2.168] | 1.067x |
+| Zen 4 | direct construction + direct indexing | 1.233 [1.061, 1.381] | 0.802x |
+| Zen 4 | CRoaring | 1.538 [0.980, 1.764] | 1.000x |
+
+The M4 factorial attributes the useful improvement to bypassing `std.Io.Writer`; removing
+the temporary tables is beneficial only once output is direct. Direct construction through
+the Writer is slower because it replaces bulk table writes with per-entry Writer calls. The
+Zen 4 process ranges are wider, but direct construction plus direct output is neutral to the
+legacy cell and does not reproduce the M4 allocation-removal regression from spec 27.
+
+Production `serialize()` now writes descriptors, offsets, and container data directly into
+its exactly-sized owned buffer. It performs one output allocation and no temporary table
+allocations; the legacy cell performs the same output allocation plus two SMP allocations
+totaling 524288 bytes on this corpus. `serializeToWriter()` remains unchanged for generic
+writers and serves as the byte oracle.
+
+The canonical board moved M4 rawr-SMP serialize from 1.128 ms to 1.068 ms (5.3%) and Zen 4
+rawr-SMP serialize from 1.035 ms to 0.824 ms (20.4%). The matched all-row comparison was not
+uniformly within 5%: untouched rawr and CRoaring rows moved on both hosts. The largest M4
+movement was `rankMany`, from 166.875 to 203.875 ns/op, despite instruction-identical rawr
+`rankMany` disassembly; its function and benchmark globals moved within the monolithic worker.
+This is retained as a whole-binary code-layout sensitivity, not attributed to the serializer
+algorithm, and means the strict all-row regression gate did not pass cleanly.
+
+Artifacts: `misc/serialize-diag-20260729-061550-summary.txt` (M4),
+`misc/serialize-diag-20260729-061649-summary.txt` (Zen 4),
+`misc/parity-20260728-203158-summary.txt` (M4 production), and
+`misc/parity-20260728-204017-summary.txt` (Zen 4 production).
+
 ## Canonical cross-machine tables
 
 Captured 07/24/2026 from the canonical runner. Each value is the median of five

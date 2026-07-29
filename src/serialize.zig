@@ -146,6 +146,10 @@ fn ensureAvailable(data: []const u8, offset: usize, len: usize) !void {
 
 /// Serialize the bitmap to a byte slice (RoaringFormatSpec compatible).
 pub fn serialize(bm: *const RoaringBitmap, allocator: std.mem.Allocator) ![]u8 {
+    return serializeFixedDirect(bm, allocator, false);
+}
+
+fn serializeLegacy(bm: *const RoaringBitmap, allocator: std.mem.Allocator) ![]u8 {
     const size_bytes = serializedSizeInBytes(bm);
     const buf = try allocator.alloc(u8, size_bytes);
     errdefer allocator.free(buf);
@@ -155,6 +159,237 @@ pub fn serialize(bm: *const RoaringBitmap, allocator: std.mem.Allocator) ![]u8 {
     try serializeToWriter(bm, &writer);
 
     return buf;
+}
+
+/// Repository-only fixed-buffer variants used by serialization diagnostics.
+pub const FixedSerializeVariant = enum {
+    temp_writer,
+    direct_writer,
+    temp_direct,
+    direct_direct,
+};
+
+pub const FixedSerializeAllocationStats = struct {
+    output_allocations: u8,
+    output_bytes: usize,
+    temporary_allocations: u8,
+    temporary_bytes: usize,
+};
+
+pub fn fixedSerializeAllocationStats(bm: *const RoaringBitmap, variant: FixedSerializeVariant) FixedSerializeAllocationStats {
+    var temporary_allocations: u8 = 0;
+    var temporary_bytes: usize = 0;
+    if (bm.size != 0 and (variant == .temp_writer or variant == .temp_direct)) {
+        temporary_allocations = 1;
+        temporary_bytes = @as(usize, bm.size) * 4;
+        const has_runs = hasRunContainers(bm);
+        if (!has_runs or bm.size >= fmt.NO_OFFSET_THRESHOLD) {
+            temporary_allocations += 1;
+            temporary_bytes += @as(usize, bm.size) * 4;
+        }
+    }
+    return .{
+        .output_allocations = 1,
+        .output_bytes = serializedSizeInBytes(bm),
+        .temporary_allocations = temporary_allocations,
+        .temporary_bytes = temporary_bytes,
+    };
+}
+
+/// Serialize using one of the fixed-buffer diagnostic cells. The current cell
+/// deliberately calls the production implementation so it remains the exact baseline.
+pub fn serializeFixedDiagnostic(
+    bm: *const RoaringBitmap,
+    allocator: std.mem.Allocator,
+    variant: FixedSerializeVariant,
+) ![]u8 {
+    return switch (variant) {
+        .temp_writer => serializeLegacy(bm, allocator),
+        .direct_writer => serializeFixedWriterDirectConstruction(bm, allocator),
+        .temp_direct => serializeFixedDirect(bm, allocator, true),
+        .direct_direct => serializeFixedDirect(bm, allocator, false),
+    };
+}
+
+fn serializeFixedWriterDirectConstruction(bm: *const RoaringBitmap, allocator: std.mem.Allocator) ![]u8 {
+    const buf = try allocator.alloc(u8, serializedSizeInBytes(bm));
+    errdefer allocator.free(buf);
+    var writer = std.Io.Writer.fixed(buf);
+
+    if (bm.size == 0) {
+        try writer.writeInt(u32, fmt.SERIAL_COOKIE_NO_RUNCONTAINER, .little);
+        try writer.writeInt(u32, 0, .little);
+        return buf;
+    }
+
+    const has_runs = hasRunContainers(bm);
+    if (has_runs) {
+        const cookie: u32 = fmt.SERIAL_COOKIE | (@as(u32, bm.size - 1) << 16);
+        try writer.writeInt(u32, cookie, .little);
+        const bitset_bytes = (bm.size + 7) / 8;
+        var run_bitset_buf: [8192]u8 = undefined;
+        const run_bitset = run_bitset_buf[0..bitset_bytes];
+        @memset(run_bitset, 0);
+        for (bm.containers[0..bm.size], 0..) |tp, i| {
+            if (TaggedPtr.getType(tp) == .run) {
+                run_bitset[i / 8] |= @as(u8, 1) << @intCast(i % 8);
+            }
+        }
+        try writer.writeAll(run_bitset);
+    } else {
+        try writer.writeInt(u32, fmt.SERIAL_COOKIE_NO_RUNCONTAINER, .little);
+        try writer.writeInt(u32, bm.size, .little);
+    }
+
+    for (bm.containers[0..bm.size], bm.keys[0..bm.size]) |tp, key| {
+        try writer.writeInt(u16, key, .little);
+        try writer.writeInt(u16, @intCast(Container.fromTagged(tp).getCardinality() - 1), .little);
+    }
+
+    if (!has_runs or bm.size >= fmt.NO_OFFSET_THRESHOLD) {
+        var offset = fixedContainerDataStart(bm.size, has_runs);
+        for (bm.containers[0..bm.size]) |tp| {
+            try writer.writeInt(u32, offset, .little);
+            offset += containerSerializedSize(Container.fromTagged(tp));
+        }
+    }
+
+    try writeContainersToWriter(bm, &writer);
+    return buf;
+}
+
+const FixedCursor = struct {
+    buf: []u8,
+    pos: usize = 0,
+
+    fn writeInt(self: *FixedCursor, comptime T: type, value: T) void {
+        const end = self.pos + @sizeOf(T);
+        std.debug.assert(end <= self.buf.len);
+        const bytes: *[@sizeOf(T)]u8 = @ptrCast(self.buf[self.pos..end].ptr);
+        std.mem.writeInt(T, bytes, value, .little);
+        self.pos = end;
+    }
+
+    fn writeAll(self: *FixedCursor, bytes: []const u8) void {
+        const end = self.pos + bytes.len;
+        std.debug.assert(end <= self.buf.len);
+        @memcpy(self.buf[self.pos..end], bytes);
+        self.pos = end;
+    }
+
+    fn reserve(self: *FixedCursor, len: usize) []u8 {
+        const end = self.pos + len;
+        std.debug.assert(end <= self.buf.len);
+        const result = self.buf[self.pos..end];
+        self.pos = end;
+        return result;
+    }
+};
+
+fn serializeFixedDirect(bm: *const RoaringBitmap, allocator: std.mem.Allocator, comptime temporary_tables: bool) ![]u8 {
+    const buf = try allocator.alloc(u8, serializedSizeInBytes(bm));
+    errdefer allocator.free(buf);
+    var cursor = FixedCursor{ .buf = buf };
+
+    if (bm.size == 0) {
+        cursor.writeInt(u32, fmt.SERIAL_COOKIE_NO_RUNCONTAINER);
+        cursor.writeInt(u32, 0);
+        std.debug.assert(cursor.pos == buf.len);
+        return buf;
+    }
+
+    const has_runs = hasRunContainers(bm);
+    if (has_runs) {
+        cursor.writeInt(u32, fmt.SERIAL_COOKIE | (@as(u32, bm.size - 1) << 16));
+        const run_bitset = cursor.reserve((bm.size + 7) / 8);
+        @memset(run_bitset, 0);
+        for (bm.containers[0..bm.size], 0..) |tp, i| {
+            if (TaggedPtr.getType(tp) == .run) {
+                run_bitset[i / 8] |= @as(u8, 1) << @intCast(i % 8);
+            }
+        }
+    } else {
+        cursor.writeInt(u32, fmt.SERIAL_COOKIE_NO_RUNCONTAINER);
+        cursor.writeInt(u32, bm.size);
+    }
+
+    if (temporary_tables) {
+        const desc_buf = try bm.allocator.alloc(u16, bm.size * 2);
+        defer bm.allocator.free(desc_buf);
+        for (bm.containers[0..bm.size], bm.keys[0..bm.size], 0..) |tp, key, i| {
+            desc_buf[i * 2] = key;
+            desc_buf[i * 2 + 1] = @intCast(Container.fromTagged(tp).getCardinality() - 1);
+        }
+        cursor.writeAll(std.mem.sliceAsBytes(desc_buf));
+    } else {
+        for (bm.containers[0..bm.size], bm.keys[0..bm.size]) |tp, key| {
+            cursor.writeInt(u16, key);
+            cursor.writeInt(u16, @intCast(Container.fromTagged(tp).getCardinality() - 1));
+        }
+    }
+
+    if (!has_runs or bm.size >= fmt.NO_OFFSET_THRESHOLD) {
+        var offset = fixedContainerDataStart(bm.size, has_runs);
+        if (temporary_tables) {
+            const offset_buf = try bm.allocator.alloc(u32, bm.size);
+            defer bm.allocator.free(offset_buf);
+            for (bm.containers[0..bm.size], 0..) |tp, i| {
+                offset_buf[i] = offset;
+                offset += containerSerializedSize(Container.fromTagged(tp));
+            }
+            cursor.writeAll(std.mem.sliceAsBytes(offset_buf));
+        } else {
+            for (bm.containers[0..bm.size]) |tp| {
+                cursor.writeInt(u32, offset);
+                offset += containerSerializedSize(Container.fromTagged(tp));
+            }
+        }
+    }
+
+    for (bm.containers[0..bm.size]) |tp| {
+        const container = Container.fromTagged(tp);
+        switch (container) {
+            .array => |ac| cursor.writeAll(std.mem.sliceAsBytes(ac.values[0..ac.cardinality])),
+            .bitset => |bc| cursor.writeAll(std.mem.sliceAsBytes(bc.words)),
+            .run => |rc| {
+                cursor.writeInt(u16, rc.n_runs);
+                cursor.writeAll(std.mem.sliceAsBytes(rc.runs[0..rc.n_runs]));
+            },
+            .reserved => unreachable,
+        }
+    }
+    std.debug.assert(cursor.pos == buf.len);
+    return buf;
+}
+
+fn fixedContainerDataStart(size: u32, has_runs: bool) u32 {
+    if (has_runs) {
+        return 4 + (size + 7) / 8 + size * 4 + size * 4;
+    }
+    return 8 + size * 4 + size * 4;
+}
+
+fn containerSerializedSize(container: Container) u32 {
+    return switch (container) {
+        .array => |ac| @as(u32, ac.cardinality) * 2,
+        .bitset => BitsetContainer.SIZE_BYTES,
+        .run => |rc| 2 + @as(u32, rc.n_runs) * 4,
+        .reserved => unreachable,
+    };
+}
+
+fn writeContainersToWriter(bm: *const RoaringBitmap, writer: anytype) !void {
+    for (bm.containers[0..bm.size]) |tp| {
+        switch (Container.fromTagged(tp)) {
+            .array => |ac| try writer.writeAll(std.mem.sliceAsBytes(ac.values[0..ac.cardinality])),
+            .bitset => |bc| try writer.writeAll(std.mem.sliceAsBytes(bc.words)),
+            .run => |rc| {
+                try writer.writeInt(u16, rc.n_runs, .little);
+                try writer.writeAll(std.mem.sliceAsBytes(rc.runs[0..rc.n_runs]));
+            },
+            .reserved => unreachable,
+        }
+    }
 }
 
 /// Serialize to any writer.
@@ -401,6 +636,55 @@ test "serialize and deserialize empty bitmap" {
 
     try std.testing.expect(restored.isEmpty());
     try std.testing.expect(bm.equals(&restored));
+}
+
+fn expectFixedSerializeMatchesLegacy(bm: *const RoaringBitmap, allocator: std.mem.Allocator) !void {
+    const direct = try serialize(bm, allocator);
+    defer allocator.free(direct);
+
+    const legacy = try allocator.alloc(u8, serializedSizeInBytes(bm));
+    defer allocator.free(legacy);
+    var writer = std.Io.Writer.fixed(legacy);
+    try serializeToWriter(bm, &writer);
+
+    try std.testing.expectEqualSlices(u8, legacy, direct);
+    var restored = try deserialize(allocator, direct);
+    defer restored.deinit();
+    try std.testing.expect(bm.equals(&restored));
+}
+
+test "fixed serialize matches writer across container representations" {
+    const allocator = std.testing.allocator;
+
+    var empty = try RoaringBitmap.init(allocator);
+    defer empty.deinit();
+    try expectFixedSerializeMatchesLegacy(&empty, allocator);
+
+    var mixed = try RoaringBitmap.init(allocator);
+    defer mixed.deinit();
+    _ = try mixed.add(1);
+    _ = try mixed.add(100);
+    var value: u32 = 1 << 16;
+    while (value < (1 << 16) + 10_000) : (value += 2) _ = try mixed.add(value);
+    _ = try mixed.addRange(2 << 16, (2 << 16) + 10_000);
+    _ = try mixed.runOptimize();
+    try expectFixedSerializeMatchesLegacy(&mixed, allocator);
+}
+
+test "fixed serialize matches writer at run offset threshold" {
+    const allocator = std.testing.allocator;
+
+    inline for (.{ fmt.NO_OFFSET_THRESHOLD - 1, fmt.NO_OFFSET_THRESHOLD }) |container_count| {
+        var bm = try RoaringBitmap.init(allocator);
+        defer bm.deinit();
+        for (0..container_count) |key| {
+            const base: u32 = @as(u32, @intCast(key)) << 16;
+            _ = try bm.addRange(base + 10, base + 100);
+        }
+        _ = try bm.runOptimize();
+        try std.testing.expect(hasRunContainers(&bm));
+        try expectFixedSerializeMatchesLegacy(&bm, allocator);
+    }
 }
 
 test "serialize and deserialize array container" {

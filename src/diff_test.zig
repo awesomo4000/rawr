@@ -52,6 +52,7 @@ pub fn main() !void {
     {
         try runSparseDenseOrCase(allocator);
         try runConsumingOrCases(allocator);
+        try runSerializeOffsetThresholdCases(allocator);
         try runOperationMatrix(allocator);
         try runJaccardEmptyCase(allocator);
         try runFlipCases(allocator);
@@ -66,6 +67,28 @@ pub fn main() !void {
 
     if (gpa.deinit() != .ok) {
         return error.MemoryLeak;
+    }
+}
+
+fn runSerializeOffsetThresholdCases(allocator: Allocator) !void {
+    // Portable run format omits offsets below four containers and includes them at four.
+    for (&[_]usize{ 3, 4 }) |container_count| {
+        var ranges: [4]Range = undefined;
+        for (ranges[0..container_count], 0..) |*range, key| {
+            const base = @as(u32, @intCast(key)) << 16;
+            range.* = .{ .start = base + 10, .end = base + 99 };
+        }
+
+        const values = try valuesFromRanges(allocator, ranges[0..container_count]);
+        defer allocator.free(values);
+        var bitmap = try buildRawrFromValues(allocator, values, true);
+        defer bitmap.deinit();
+        const oracle = try buildOracle(values, true);
+        defer c.roaring_bitmap_free(oracle);
+
+        var name_buf: [64]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "serialize:run-offset-threshold:{d}", .{container_count});
+        try assertAgree(allocator, name, &bitmap, oracle);
     }
 }
 
