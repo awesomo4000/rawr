@@ -8,6 +8,21 @@ difference is verified in source, and this is also the **cheap probe** of the "d
 + write directly" pattern that dense AND/OR want next — on a small, no-public-API surface, before
 we bet the bigger rewrites on it.
 
+> **Outcome (2026-07-29, commit `2ba714a`) — GO; target met, and the lever proved safe.**
+> `serialize()` now writes directly into its fixed buffer (no temp descriptor/offset tables);
+> `serializeToWriter()` unchanged for generic writers; the four diagnostic cells call production
+> so the winning cell can't drift. **M4 SMP 1.128 → 1.068 ms (5.3% faster, 1.05x — meets the
+> ≤1.10x gate); Zen 4 SMP 1.035 → 0.824 ms (20.4% faster, 0.81x — rawr ahead).** Byte-identity
+> (legacy oracle + round-trip + CRoaring) + threshold-boundary coverage green. **Dual payoff:
+> the drop-temp-arrays + direct-write lever is proven *safe* on M4 SMP here — no spec-27-style
+> regression — de-risking that pattern for future work.**
+>
+> **Caveat (measurement, not a regression):** the strict all-row 5% board gate was **not clean**
+> — adding the diagnostic/direct code shifted **whole-binary layout**, moving *untouched* rawr
+> **and** CRoaring rows; M4 `rankMany` slowed with **instruction-identical disassembly**.
+> Documented, not misrepresented as a serializer regression. Implication: sub-~1.2x M4 ratios now
+> carry a **layout-noise floor** — `rankMany`'s 1.194x is contaminated by this, not a real gap.
+
 **Diagnosis first — because spec 27 is the hard prior.** Removing allocations *regressed* the
 M4-SMP clone body (20→18 allocs, ~50% slower). So we do **not** assume the temp arrays are the
 cost or that removing them wins on M4 SMP; we measure which component it is, then fix that.
