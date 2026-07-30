@@ -102,7 +102,7 @@ Therefore measure three cells (both hosts, SMP, canonical protocol):
 |---|---|---|
 | baseline | — (clone + removeRange) | current clone default |
 | fused-default | ✓ | normal top-level growth |
-| fused-presized | ✓ | exact / upper-bound reserve |
+| fused-presized | ✓ | exact final container count (survivors + boundary) |
 
 **Winner-selection policy (architecture-neutral):** choose **one** fused implementation that passes
 **both** the M4 and Zen 4 gates — not a per-host shape. "Fusion and pre-sizing decided on their own
@@ -192,14 +192,26 @@ Ownership/source invariants (assert on success **and every injected failure**):
 ## Acceptance
 
 - **Phase 1 GO:** corpus inventory asserted (8 source → 2 result; survive 1 / boundary 1 /
-  deleted 6); the five allocation-accounting figures reported per side per fused cell; the three
+  deleted 6); the five allocation-accounting figures reported **for each rawr cell**
+  (baseline / fused-default / fused-presized), and **for CRoaring only if memory hooks are
+  enabled** (otherwise CRoaring is timing-only); the three
   cells timed on M4/Zen 4 SMP with the pinned boundary; byte-identity + differential +
   failure-injection green; no canonical row changed.
-- **Phase 2 GO — hard:** the canonical **removeRange (wide) row reaches ≤ 1.10x on M4 SMP** (via
-  legitimate copy-vs-copy, winning fused shape only), **Zen 4 not regressed**, board gate held
-  (layout exception), row renamed to `removeRangeCopy`. **Anything above 1.10x is a partial result
-  and the row stays open** — a residual would be the shared M4 SMP per-container-clone cost, which
-  reopens with the next lever.
+- **Phase 2 — adopt-if-beneficial, close-at-parity:**
+  - **Close (full GO):** the canonical **removeRange (wide) row reaches ≤ 1.10x on M4 SMP** (via
+    legitimate copy-vs-copy, winning fused shape only), **Zen 4 not regressed**, board gate held
+    (layout exception), row renamed to `removeRangeCopy` — the row **closes** and the spec moves to
+    `done/`.
+  - **Adopt a partial (row stays open):** if the winning fused shape **moves the number down** and
+    is **cross-host-safe** (Zen 4 not regressed, board gate held) but lands **above 1.10x on M4**,
+    `30-01` **may still ship it** and record the partial — as spec 29 retained dense-AND 1.479x.
+    **≤ 1.10x is required to *close* the row, not to *adopt* a beneficial improvement.** The
+    residual (shared M4 SMP per-container-clone cost) keeps the row **open** for the next lever.
+    Adoption is a judgement call, gated on: real measured improvement, no host regression, and **no
+    future avenue foreclosed** (the in-place `removeRange` primitive and the clone/dense-AND levers
+    stay available).
+  - **Ship nothing** only if the fused shape fails to improve M4 or regresses either host / the
+    board gate.
 - `zig build test`; `zig build difftest`; canonical `run-compare-bench.sh` both hosts;
   `ReleaseSafe` / `ReleaseFast` green; `docs/parity-measurement.md` updated.
 
