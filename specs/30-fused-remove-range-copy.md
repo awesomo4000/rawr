@@ -102,7 +102,15 @@ Therefore measure three cells (both hosts, SMP, canonical protocol):
 |---|---|---|
 | baseline | — (clone + removeRange) | current clone default |
 | fused-default | ✓ | normal top-level growth |
-| fused-presized | ✓ | exact final container count (survivors + boundary) |
+| fused-presized | ✓ | exact final container count (survivors + **non-empty** boundary results) |
+
+**Exact-sizing rule (fused-presized): count only non-empty boundary results.** A boundary
+container can come out **empty** — when every present value in that chunk lies inside a
+partial-chunk removal range (its surviving remainder is 0). Exact sizing must **not** assume every
+boundary container survives: reserve `survivors + (boundary results whose surviving cardinality >
+0)`, determined by a **pre-scan using range cardinality** (or an equivalent exact method) before
+reserving. An over-count here reintroduces the very capacity slack fused-presized exists to
+remove — and on full removal collapses to the zero-capacity contract only if empties are excluded.
 
 **Winner-selection policy (architecture-neutral):** choose **one** fused implementation that passes
 **both** the M4 and Zen 4 gates — not a per-host shape. "Fusion and pre-sizing decided on their own
@@ -207,9 +215,13 @@ Ownership/source invariants (assert on success **and every injected failure**):
     `30-01` **may still ship it** and record the partial — as spec 29 retained dense-AND 1.479x.
     **≤ 1.10x is required to *close* the row, not to *adopt* a beneficial improvement.** The
     residual (shared M4 SMP per-container-clone cost) keeps the row **open** for the next lever.
-    Adoption is a judgement call, gated on: real measured improvement, no host regression, and **no
-    future avenue foreclosed** (the in-place `removeRange` primitive and the clone/dense-AND levers
-    stay available).
+    Adoption is a **human keep/not-keep judgement call** — the numeric gates *inform* it, they do
+    not fully automate it. The default inputs are: real measured improvement, no host regression,
+    and **no future avenue foreclosed** (the in-place `removeRange` primitive and the
+    clone/dense-AND levers stay available). But a **large M4 win against a marginal cross-host cost**
+    (e.g. a ~1% Zen 4 slip) is exactly the kind of tradeoff the owner may accept at review — the
+    "no Zen 4 regression" gate is the presumption, not an automatic veto. The final call is made on
+    the numbers at hand, not pre-committed here.
   - **Ship nothing** only if the fused shape fails to improve M4 or regresses either host / the
     board gate.
 - `zig build test`; `zig build difftest`; canonical `run-compare-bench.sh` both hosts;
@@ -223,7 +235,8 @@ Ownership/source invariants (assert on success **and every injected failure**):
   the pinned boundary in a named diagnostic; **no canonical row changed**.
 - **`30-01`** — adopt the winning fused shape into the canonical parity row (legitimate
   copy-vs-copy), rename the row to `removeRangeCopy`, full board gate, ship on M4/Zen 4 SMP
-  numbers; hard ≤ 1.10x acceptance (row stays open above it).
+  numbers; **close at ≤ 1.10x; beneficial partial adoption permitted above it under the stated
+  gates** (row stays open above 1.10x).
 
 ## Estimate
 
