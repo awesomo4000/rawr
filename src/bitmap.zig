@@ -1848,7 +1848,8 @@ pub const RoaringBitmap = struct {
     }
 
     fn twoWayAllocatingMergeAnd(self: *const Self, allocator: std.mem.Allocator, other: *const Self) !Self {
-        var result = try Self.init(allocator);
+        // Dense result diagnosis showed exact top-level sizing wins on both M4 and Zen 4.
+        var result = try Self.initCapacity(allocator, @min(self.size, other.size));
         errdefer result.deinit();
 
         // Scratch buffer for temporary array containers (avoids malloc/free churn for empty results)

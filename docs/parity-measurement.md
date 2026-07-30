@@ -712,6 +712,76 @@ The Zen 4 after-table initially flagged addMany-random/libc, serialize, and clon
 addMany below 5%, kept serialize inside the baseline process ranges, and improved clone/libc
 against its rerun reference. No regression is attributable to the retained change.
 
+## Dense result-construction attribution (07/29/2026)
+
+Spec 29 measured six construction cells for the canonical dense AND and OR corpus before changing
+production behavior. The corpus assertion found eight left run containers, nine right run
+containers, five matched run/run keys with a full run on every match, five AND result containers,
+and twelve OR result containers. Each identity-enabled cell fired exactly five times. Construction
+body timings use the spec-26a matched-boundary timer control; teardown is subtraction-derived and
+diagnostic only. Values below are canonical full-operation ratios against one CRoaring reference
+per operation, aggregated from five fresh processes.
+
+| Host | Operation | Baseline | A kernel identity | B bitmap identity | C pre-size | A+C | B+C |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| M4 | dense AND | 1.903x | 1.910x | 2.170x | 1.643x | 1.655x | 1.787x |
+| M4 | dense OR | 1.197x | 1.101x | 1.069x | 1.673x | 1.588x | 1.523x |
+| Zen 4 | dense AND | 0.543x | 0.511x | 0.381x | 0.497x | 0.485x | 0.338x |
+| Zen 4 | dense OR | 0.452x | 0.459x | 0.404x | 0.411x | 0.440x | 0.379x |
+
+Allocation accounting explains part, but not all, of the outcome. Baseline dense AND performs 14
+persistent allocations requesting 320 bytes plus five FBA constructions (ten stack reservations,
+200 requested bytes). C removes two persistent top-level allocations and 40 requested bytes. B
+removes all FBA work but does not reduce persistent allocation count and regresses M4, so bypassing
+scratch is rejected for AND. Baseline dense OR performs 30 persistent allocations requesting 760
+bytes. B preserves that allocation shape but skips five run/run constructions and closes the M4
+row. C reduces OR to 26 allocations and 650 requested bytes yet regresses M4 sharply, repeating the
+spec-27 lesson that fewer SMP allocations do not imply lower latency.
+
+Production therefore retains only the independently supported per-operation changes:
+
+- dense AND initializes top-level result storage to `min(left.size, right.size)`;
+- run/run union clones a full-run identity operand after container dispatch has already established
+  both operand types;
+- kernel-level A, bitmap-level B for AND, and pre-sizing C for OR are not shipped.
+
+The original bitmap-level placement of the OR identity check closed the dense row but added work to
+every matched sparse array pair. A nine-process Zen 4 rerun measured sparse OR with arena at 2.855 ms
+versus a 2.704 ms baseline, a 5.6% regression. Moving the same clone shortcut into the existing
+run/run dispatch removes that tax: the final focused medians are 1.630 ms on M4 and 2.568 ms on
+Zen 4, both neutral-to-better than baseline.
+
+The final canonical M4 board measures dense AND at 261.597 ns/op versus CRoaring 176.880 ns/op
+(`1.479x`), down from the aligned 314.453 ns/op / 167.480 ns/op baseline (`1.878x`). Dense OR
+measures 341.431 ns/op versus 313.232 ns/op (`1.090x`), down from the aligned `1.253x` baseline,
+and meets the hard target. The Zen 4 board moves dense AND from `0.775x` to `0.709x`; dense OR
+remains ahead at `0.435x`. Dense AND remains open for a new attributed lever; spec 29 does not
+treat its partial M4 improvement as parity.
+
+The parity worker gives the dense targets, iteration, and skewed `andCardinality` explicit
+`noinline align(64)` benchmark boundaries. Without those boundaries, changing the dense operation
+body moved unrelated worker branches enough to create repeatable false regressions. The final
+full-board comparison has no changed-path regression above 5%. M4 cardinality was the sole nominal
+flag and its nine-process focused median was 1.321 ms before versus 1.319 ms after. On Zen 4,
+random add and contains-hit also collapsed below 5% in focused reruns. Cardinality, large
+range-cardinality, and rankMany retained address-sensitive shifts even though their source paths
+are unchanged; rankMany was instruction-identical in the M4 disassembly and changed only its
+cache-line offset. They are recorded as linker-layout exceptions, not effects of the retained AND
+or OR changes.
+
+The diagnostic is reproducible with:
+
+```sh
+./scripts/run-bench-dense-result-diag.sh
+```
+
+Recorded runs:
+
+- `misc/dense-result-diag-20260729-151428-summary.txt` (M4)
+- `misc/dense-result-diag-20260729-152559-summary.txt` (Zen 4)
+- `misc/parity-20260729-212124-summary.txt` (final M4 production board)
+- `misc/parity-20260729-212134-summary.txt` (final Zen 4 production board, retained on the host)
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad
@@ -766,6 +836,12 @@ Build and run the clone/removeRange attribution diagnosis:
 
 ```sh
 ./scripts/run-bench-range-attrib.sh
+```
+
+Build and run the dense result-construction diagnosis:
+
+```sh
+./scripts/run-bench-dense-result-diag.sh
 ```
 
 These scripts build native `ReleaseFast` executables, retain individual process output under

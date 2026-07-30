@@ -487,7 +487,7 @@ fn benchRawrAndArraySkewedWithAllocator(comptime result_allocator: std.mem.Alloc
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn benchRawrAndCardinalityArraySkewed() void {
+noinline fn benchRawrAndCardinalityArraySkewed() align(64) void {
     const cardinality = rawr_array_skewed_a.?.andCardinality(&rawr_array_skewed_b.?);
     std.mem.doNotOptimizeAway(cardinality);
 }
@@ -625,7 +625,7 @@ fn benchRawrAndDense() void {
     benchRawrAndDenseWithAllocator(allocator);
 }
 
-fn benchRawrAndDenseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+noinline fn benchRawrAndDenseWithAllocator(comptime result_allocator: std.mem.Allocator) align(64) void {
     const a = &rawr_dense_a.?;
     const b = &rawr_dense_b.?;
     var result = a.bitwiseAnd(result_allocator, b) catch unreachable;
@@ -637,7 +637,7 @@ fn benchRawrOrDense() void {
     benchRawrOrDenseWithAllocator(allocator);
 }
 
-fn benchRawrOrDenseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+noinline fn benchRawrOrDenseWithAllocator(comptime result_allocator: std.mem.Allocator) align(64) void {
     const a = &rawr_dense_a.?;
     const b = &rawr_dense_b.?;
     var result = a.bitwiseOr(result_allocator, b) catch unreachable;
@@ -645,7 +645,7 @@ fn benchRawrOrDenseWithAllocator(comptime result_allocator: std.mem.Allocator) v
     std.mem.doNotOptimizeAway(&result);
 }
 
-fn benchRawrIterate() void {
+noinline fn benchRawrIterate() align(64) void {
     const bm = &rawr_contains_bm.?;
     var count: u64 = 0;
     var sum: u64 = 0;

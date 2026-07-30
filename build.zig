@@ -365,6 +365,38 @@ pub fn build(b: *std.Build) void {
     );
     bench_m4_cluster_diag_step.dependOn(&b.addInstallArtifact(bench_m4_cluster_diag_exe, .{}).step);
 
+    // Fresh-process dense result-construction diagnosis harness.
+    const dense_result_diag_lib_mod = b.createModule(.{
+        .root_source_file = b.path("src/dense_result_bench_root.zig"),
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    const bench_dense_result_diag_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_dense_result_diag.zig"),
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    bench_dense_result_diag_mod.addImport("rawr", dense_result_diag_lib_mod);
+    addBenchmarkPlatformShim(b, bench_dense_result_diag_mod, target);
+    addTranslatedCImport(b, bench_dense_result_diag_mod, .{
+        .header = "tools/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+
+    const bench_dense_result_diag_exe = b.addExecutable(.{
+        .name = "bench_dense_result_diag",
+        .root_module = bench_dense_result_diag_mod,
+    });
+    const bench_dense_result_diag_step = b.step(
+        "bench-dense-result-diag",
+        "Build dense result-construction diagnosis benchmark",
+    );
+    bench_dense_result_diag_step.dependOn(&b.addInstallArtifact(bench_dense_result_diag_exe, .{}).step);
+
     // Focused skewed array-cardinality diagnosis harness.
     const bench_and_card_diag_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_and_cardinality_diag.zig"),

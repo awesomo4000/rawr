@@ -606,6 +606,10 @@ fn bitsetUnionRun(allocator: std.mem.Allocator, bc: *BitsetContainer, rc: *RunCo
 }
 
 fn runUnionRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer) !Container {
+    // Full-run union is an identity; clone it without constructing and merging runs.
+    if (isFullRun(a)) return .{ .run = try a.clone(allocator) };
+    if (isFullRun(b)) return .{ .run = try b.clone(allocator) };
+
     // Merge runs directly - O(n_runs) instead of O(cardinality)
     const max_runs = @as(usize, a.n_runs) + b.n_runs;
     const result = try RunContainer.init(allocator, @intCast(@min(max_runs, 65535)));
@@ -635,6 +639,11 @@ fn runUnionRun(allocator: std.mem.Allocator, a: *RunContainer, b: *RunContainer)
     result.n_runs = @intCast(k);
     result.cardinality = -1;
     return .{ .run = result };
+}
+
+fn isFullRun(run: *const RunContainer) bool {
+    return run.n_runs == 1 and run.runs[0].start == 0 and
+        run.runs[0].length == std.math.maxInt(u16);
 }
 
 // ============================================================================

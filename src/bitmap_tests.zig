@@ -420,6 +420,79 @@ test "bitwiseAnd" {
     try std.testing.expect(!result.contains(4));
 }
 
+test "dense set operations handle full-run identities and zero-capacity results" {
+    const allocator = std.testing.allocator;
+
+    var full = try RoaringBitmap.init(allocator);
+    defer full.deinit();
+    _ = try full.addRange(0, std.math.maxInt(u16));
+    var partial = try RoaringBitmap.init(allocator);
+    defer partial.deinit();
+    _ = try partial.addRange(10, 20);
+
+    var union_result = try full.bitwiseOr(allocator, &partial);
+    defer union_result.deinit();
+    try expectPortableClone(&full, &union_result);
+    try std.testing.expectEqual(TaggedPtr.ContainerType.run, union_result.containers[0].getType());
+
+    var sparse = try RoaringBitmap.init(allocator);
+    defer sparse.deinit();
+    _ = try sparse.add(1);
+    _ = try sparse.add(1000);
+    var run_array_union = try full.bitwiseOr(allocator, &sparse);
+    defer run_array_union.deinit();
+    try expectPortableClone(&full, &run_array_union);
+    try std.testing.expectEqual(TaggedPtr.ContainerType.run, run_array_union.containers[0].getType());
+
+    var bitset = try RoaringBitmap.init(allocator);
+    defer bitset.deinit();
+    for (0..5000) |value| _ = try bitset.add(@intCast(value * 2));
+    try std.testing.expectEqual(TaggedPtr.ContainerType.bitset, bitset.containers[0].getType());
+    var run_bitset_union = try full.bitwiseOr(allocator, &bitset);
+    defer run_bitset_union.deinit();
+    try expectPortableClone(&full, &run_bitset_union);
+    try std.testing.expectEqual(TaggedPtr.ContainerType.run, run_bitset_union.containers[0].getType());
+
+    var empty = try RoaringBitmap.init(allocator);
+    defer empty.deinit();
+    var intersection = try full.bitwiseAnd(allocator, &empty);
+    defer intersection.deinit();
+    try std.testing.expectEqual(@as(u32, 0), intersection.capacity);
+    try std.testing.expect(try intersection.add(42));
+    try std.testing.expect(intersection.contains(42));
+
+    var empty_union = try empty.bitwiseOr(allocator, &empty);
+    defer empty_union.deinit();
+    try std.testing.expect(try empty_union.add(99));
+    try std.testing.expect(empty_union.contains(99));
+}
+
+test "dense set-operation construction is leak-free across allocation failures" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        denseSetOperationAllocationFailureCase,
+        .{},
+    );
+}
+
+fn denseSetOperationAllocationFailureCase(result_allocator: std.mem.Allocator) !void {
+    const source_allocator = std.testing.allocator;
+    var left = try RoaringBitmap.init(source_allocator);
+    defer left.deinit();
+    var right = try RoaringBitmap.init(source_allocator);
+    defer right.deinit();
+    _ = try left.addRange(0, 499_999);
+    _ = try right.addRange(250_000, 749_999);
+
+    var intersection = try left.bitwiseAnd(result_allocator, &right);
+    intersection.deinit();
+    var union_result = try left.bitwiseOr(result_allocator, &right);
+    union_result.deinit();
+
+    try std.testing.expectEqual(@as(u64, 500_000), left.cardinality());
+    try std.testing.expectEqual(@as(u64, 500_000), right.cardinality());
+}
+
 test "bitwiseDifference" {
     const allocator = std.testing.allocator;
 
