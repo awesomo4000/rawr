@@ -10,11 +10,16 @@ Gated on: [30-00](30-00-fused-op-and-measure.md) (the three-cell attribution).
 
 ## Winner selection (architecture-neutral)
 
-Choose **one** fused implementation that passes **both** the M4 and Zen 4 gates — not a per-host
-shape. Each *lever* (doomed-skip fusion; exact pre-sizing) is included only if it helps without
-regressing either host, yielding a single shipped shape. **If each host favors a different shape
-and no single shape passes both gates, ship neither** — that requires a separate
-architecture-specific design (out of scope), not an M4-only or Zen4-only binary.
+Choose **one** fused implementation (one capacity policy) — **not** a per-host shape; two different
+binaries per architecture is out of scope. Each *lever* (doomed-skip fusion; exact pre-sizing) is
+included only if it improves M4 while keeping **Zen 4 within noise** (per the Zen 4 policy below),
+yielding a single shipped shape.
+
+**If no single shape keeps Zen 4 within noise** — the only M4-improving shape carries a **real**
+Zen 4 regression — that is **not** an automatic "ship neither." It routes to the **keep decision**
+below: a single shape with a real Zen 4 cost may be adopted via the **explicit owner exception**, or
+declined. "Ship neither" is the outcome only when no single shape improves M4 *and* the owner
+declines any exception.
 
 ## Canonical row change
 
@@ -40,24 +45,28 @@ architecture-specific design (out of scope), not an M4-only or Zen4-only binary.
   pre-change baseline, both hosts; an untouched row's movement is layout (not a regression) **only
   when BOTH** its focused before/after timing is stable *and* its disassembly is
   instruction-identical. CRoaring also moving is *not* sufficient alone.
-- **Zen 4 presumption:** rawr is ahead (0.411x); the change is expected to help or hold. A Zen 4
-  regression is the presumption against, **not an automatic veto** (see keep decision).
+- **Zen 4 policy (single, from the toplevel):** rawr is ahead (0.411x). Movement **within noise**
+  (≤ 5% *and* layout-classifiable — stable focused timing **and** instruction-identical
+  disassembly) is **not a regression** and passes. Movement **beyond noise** is a **real
+  regression** that **fails by default** and may be adopted **only via the explicit owner exception**
+  recorded with the numbers — never silently waived.
 
 ## Keep / close decision
 
-- **Close (full GO):** M4 SMP **≤ 1.10x**, Zen 4 not regressed, board gate held (layout exception),
-  row renamed → the **row closes** and the spec moves to `specs/done/`.
-- **Adopt a partial (row stays open):** the winning shape **moves M4 down** and is cross-host-safe
+- **Close (full GO):** M4 SMP **≤ 1.10x**, Zen 4 within noise (per policy), board gate held (layout
+  exception), row renamed → the **row closes** and the spec moves to `specs/done/`.
+- **Adopt a partial (row stays open):** the winning shape **moves M4 down** with Zen 4 within noise
   but lands **above 1.10x on M4** → `30-01` **may still ship it** and record the partial (as spec 29
   kept dense-AND 1.479x). **≤ 1.10x is required to *close*, not to *adopt*.** The residual (shared
   M4 SMP per-container-clone cost) keeps the row **open** for the next lever.
 - **Human keep/not-keep judgement call:** the numeric gates **inform** the decision, they do not
-  automate it. A **large M4 win against a marginal cross-host cost** (e.g. a ~1% Zen 4 slip) is a
-  tradeoff the owner may accept at review. The final call is made on the numbers at hand, gated only
-  on **no future avenue foreclosed** (in-place `removeRange`, clone, and dense-AND levers stay
+  automate it. A Zen 4 slip **within noise** needs no exception (it is not a regression). A **real**
+  Zen 4 regression against a **large M4 win** may be accepted via the **explicit owner exception**
+  (Zen 4 policy), recorded with the numbers. The final call is made on the numbers at hand, gated on
+  **no future avenue foreclosed** (in-place `removeRange`, clone, and dense-AND levers stay
   available).
-- **Ship nothing** only if the fused shape fails to improve M4, or regresses a host / the board gate
-  beyond what review accepts.
+- **Ship nothing** only if the fused shape fails to improve M4, or carries a real Zen 4 / board-gate
+  regression the owner declines to except.
 
 ## Acceptance
 

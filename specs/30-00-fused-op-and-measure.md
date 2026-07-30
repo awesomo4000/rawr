@@ -3,8 +3,9 @@
 # Spec 30-00: `removeRangeCopy` — implement, verify, measure
 
 Build the fused copy-with-range-removed path and its correctness surface, then measure the three
-cells on both hosts. **No canonical parity row changes in this chunk** — the diagnostic is a named
-benchmark-local artifact; the manifest and shipping path change in `30-01` after the numbers land.
+cells on both hosts. This chunk **adds the public `removeRangeCopy` library operation**; what
+`30-01` changes is the **canonical parity-row** (manifest), not the library API. **No canonical
+parity row changes in this chunk** — the diagnostic is a named benchmark-local artifact.
 
 Toplevel: [30-fused-remove-range-copy.md](30-fused-remove-range-copy.md).
 
@@ -23,7 +24,18 @@ Add `removeRangeCopy(self: *const Self, allocator, lo, hi) !Self` — produces a
    `result.size` before returning the error so `errdefer` sees partial containers — spec-27/
    `3e27675` clone-leak discipline).
 
-The in-place `removeRange` primitive is **unchanged**; this op is additive.
+The in-place `removeRange` primitive is **unchanged**; this op is additive (**one** public
+operation).
+
+**API exposure — exactly one public API (measure two policies without two APIs):**
+
+- **Public `removeRangeCopy`** initially calls the **normal-growth** implementation.
+- A **shared internal helper** takes the **capacity policy** parameter (normal-growth vs
+  exact-presize).
+- The **repository-only diagnostic module** invokes the helper with **both** policies to produce the
+  fused-default and fused-presized cells.
+- No `removeRangeCopyPresized` public API — `30-01` selects the production policy **inside**
+  `removeRangeCopy`.
 
 ## Top-level capacity is a variable (two fused shapes)
 

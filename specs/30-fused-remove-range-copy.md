@@ -3,8 +3,8 @@
 # Spec 30: Fused copy-with-range-removed (`removeRangeCopy`)
 
 Close the biggest M4 row on the board: **removeRange (wide, dense) 1.932x** (rawr *ahead* on
-Zen 4 — 0.411x — a hard no-regress gate). **Parity is a hard requirement:** the row closes only
-at **≤ 1.10x**; anything above stays open for a further lever.
+Zen 4 — 0.411x, a no-regress gate — see the single Zen 4 policy below). **Parity is a hard
+requirement:** the row closes only at **≤ 1.10x**; anything above stays open for a further lever.
 
 **This is not a range-algorithm fix — the algorithm already wins.** 26a exonerated the mutation
 body (rawr 49.8 ns vs CRoaring 78.5 ns); the 1.932x is the **copy+remove workflow**: the canonical
@@ -88,9 +88,20 @@ Add a **new owned-result path** (proposed `removeRangeCopy(self: *const Self, al
    deinited (set `result.size` before returning the error so `errdefer` sees the partial
    containers — the spec-27/`3e27675` clone-leak discipline).
 
-Top-level result capacity is a **separate variable**, measured in `30-00` (below) — **not** baked
-into this path. The existing in-place `removeRange` stays unchanged (a separate, exonerated
-primitive still used by mutate-in-place callers). This op is **additive**.
+**API exposure — exactly one public operation.** Top-level result capacity is a **separate
+variable** measured in `30-00`, but that must **not** add a second public API:
+
+- **Public `removeRangeCopy`** is the only exposed operation; it initially calls the
+  **normal-growth** implementation.
+- A **shared internal helper** takes the **capacity policy** as a parameter (normal-growth vs
+  exact-presize).
+- The **repository-only diagnostic module** invokes the helper with **both** policies to produce
+  the `30-00` cells.
+- `30-01` selects the production policy **inside** `removeRangeCopy` — **without** exposing a
+  `removeRangeCopyPresized` public API.
+
+The existing in-place `removeRange` stays unchanged (a separate, exonerated primitive still used by
+mutate-in-place callers). This op is **additive** (it adds **one** public library operation).
 
 ## `30-00` diagnostic cells — separate fusion from pre-sizing
 
@@ -182,8 +193,14 @@ Ownership/source invariants (assert on success **and every injected failure**):
 
 ## Constraints / gates
 
-- **Zen 4 no-regress (hard):** rawr is ahead (0.411x); the change stays within noise (≤ 5%, rerun
-  on overlap) — it should only help.
+- **Zen 4 policy (single, consistent — used everywhere in this spec):** rawr is ahead (0.411x).
+  Movement **within noise** — ≤ 5% *and* layout-classifiable (stable focused timing **and**
+  instruction-identical disassembly) — is **not a regression** and **passes** the gate; this is the
+  expected case. Movement **beyond noise** is a **real regression** that **fails the gate by
+  default** and may be adopted **only via an explicit owner-approved exception recorded with the
+  numbers** — it is **never silently waived**. So "no Zen 4 regression" is the requirement; the
+  owner judgement call (below) is the sole, explicit escape hatch for a large-M4-win /
+  small-real-Zen-cost tradeoff.
 - **Spec-27 M4 SMP gate:** the allocation reduction and any pre-sizing are **measured on M4 SMP,
   per the canonical protocol, before shipping** — not assumed from the count; fusion and pre-sizing
   ship independently.
@@ -207,21 +224,22 @@ Ownership/source invariants (assert on success **and every injected failure**):
   failure-injection green; no canonical row changed.
 - **Phase 2 — adopt-if-beneficial, close-at-parity:**
   - **Close (full GO):** the canonical **removeRange (wide) row reaches ≤ 1.10x on M4 SMP** (via
-    legitimate copy-vs-copy, winning fused shape only), **Zen 4 not regressed**, board gate held
-    (layout exception), row renamed to `removeRangeCopy` — the row **closes** and the spec moves to
-    `done/`.
-  - **Adopt a partial (row stays open):** if the winning fused shape **moves the number down** and
-    is **cross-host-safe** (Zen 4 not regressed, board gate held) but lands **above 1.10x on M4**,
+    legitimate copy-vs-copy, winning fused shape only), **Zen 4 within noise** (per policy), board
+    gate held (layout exception), row renamed to `removeRangeCopy` — the row **closes** and the spec
+    moves to `done/`.
+  - **Adopt a partial (row stays open):** if the winning fused shape **moves the number down** with
+    **Zen 4 within noise** (per policy) and board gate held, but lands **above 1.10x on M4**,
     `30-01` **may still ship it** and record the partial — as spec 29 retained dense-AND 1.479x.
     **≤ 1.10x is required to *close* the row, not to *adopt* a beneficial improvement.** The
     residual (shared M4 SMP per-container-clone cost) keeps the row **open** for the next lever.
     Adoption is a **human keep/not-keep judgement call** — the numeric gates *inform* it, they do
-    not fully automate it. The default inputs are: real measured improvement, no host regression,
-    and **no future avenue foreclosed** (the in-place `removeRange` primitive and the
-    clone/dense-AND levers stay available). But a **large M4 win against a marginal cross-host cost**
-    (e.g. a ~1% Zen 4 slip) is exactly the kind of tradeoff the owner may accept at review — the
-    "no Zen 4 regression" gate is the presumption, not an automatic veto. The final call is made on
-    the numbers at hand, not pre-committed here.
+    not fully automate it. The default inputs are: real measured improvement, Zen 4 within noise
+    (per the Zen 4 policy above — a ≤5% layout-classifiable slip is **not** a regression and needs
+    no exception), and **no future avenue foreclosed** (the in-place `removeRange` primitive and the
+    clone/dense-AND levers stay available). A **real Zen 4 regression** (beyond noise) against a
+    **large M4 win** is exactly the tradeoff the owner may accept **via the explicit exception** in
+    the Zen 4 policy — recorded with the numbers, not silently. The final call is made on the
+    numbers at hand, not pre-committed here.
   - **Ship nothing** only if the fused shape fails to improve M4 or regresses either host / the
     board gate.
 - `zig build test`; `zig build difftest`; canonical `run-compare-bench.sh` both hosts;
