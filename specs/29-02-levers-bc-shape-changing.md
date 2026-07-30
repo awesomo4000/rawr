@@ -2,6 +2,16 @@
 
 # Spec 29-02: Levers B and/or C — allocation-shape-changing
 
+> **Outcome (2026-07-30) — OR CLOSED, AND PARTIAL (open).** **OR:** shipped the full-run identity
+> clone shortcut — but the pinned bitmap-level placement (B) caused a reproducible **5.6%
+> sparse-arena Zen 4 regression**, so it was moved into the existing **run/run dispatch**, removing
+> the tax while keeping the dense win: OR **1.253x → 1.090x, closed**. **AND:** shipped **exact
+> top-level sizing (C for AND)** → **1.878x → 1.479x, retained but above the 1.10x gate → row stays
+> open**. **Rejected on M4 SMP regression (spec-27 trap):** pre-sizing OR, and bypassing AND
+> scratch allocation. Zen 4 no-regress held (after the OR relocation). Next AND lever must cut
+> remaining M4 run-result construction/allocation cost **without** disturbing the successful AND
+> scratch behavior.
+
 Ship the bitmap-level full-run identity (**B**) and/or the pre-sized top-level storage (**C**) —
 whichever `29-00` implicates — to close the dense-AND / dense-OR rows to **≤ 1.10x on M4 SMP**.
 Both change allocation shape, so **neither is assumed; each carries the spec-27 measurement

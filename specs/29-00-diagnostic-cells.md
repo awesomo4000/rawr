@@ -2,6 +2,11 @@
 
 # Spec 29-00: Dense set-op construction — six-cell diagnostic
 
+> **Outcome (2026-07-30) — DONE.** Attribution delivered: dense **AND** benefits from **exact
+> top-level result sizing** (C); dense **OR** benefits from **cloning the full-run identity
+> operand** (B). Ruled out (regressed M4 despite less work/allocations, spec-27 trap): pre-sizing
+> OR, and bypassing AND scratch allocation. Fed `29-01`/`29-02`.
+
 Attribute the M4 dense-AND (1.911x) and dense-OR (1.167x) gaps across the three construction levers
 before any production change. **No production default changes in this chunk** — benchmark-local
 variants / gated internal helpers only. Output: a per-host, per-op attribution that tells `29-01`

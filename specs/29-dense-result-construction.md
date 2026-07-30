@@ -2,6 +2,18 @@
 
 # Spec 29: Dense set-op result construction (AND / OR)
 
+> **Outcome (2026-07-30) — OR CLOSED, AND OPEN (partial, retained).** Six-cell diagnostic ran;
+> dense **OR** closed **1.253x → 1.090x** by cloning the full-run identity operand — placed in
+> run/run dispatch, **not** at bitmap level (the bitmap-level check caused a reproducible 5.6%
+> sparse-arena Zen 4 regression; moving the clone shortcut into existing run/run dispatch removed
+> that tax while keeping the dense win). Dense **AND** improved **1.878x → 1.479x** via exact
+> top-level result sizing (lever C for AND only) — **material but above the hard 1.10x gate, so the
+> row STAYS OPEN**; the 1.479x win is retained. **Rejected on M4 SMP regression** (spec-27 trap,
+> as feared): pre-sizing OR, and bypassing AND scratch allocation — both reduced work/allocations
+> yet regressed M4. Both ops remain faster than CRoaring on Zen 4. **Next AND lever must address
+> remaining M4 run-result construction/allocation cost WITHOUT changing the successful scratch
+> behavior** (full-run identity + scratch-bypass are ruled out). See chunk outcomes below.
+
 Close the two biggest real M4 gaps: **bitwiseAnd dense 1.911x**, **bitwiseOr dense 1.167x**
 (rawr *ahead* on Zen 4 — 0.56x / 0.46x — so Zen 4 is a hard no-regress gate). **Parity is a hard
 requirement:** the row closes only at **≤ 1.10x**; anything above that is a partial result and the

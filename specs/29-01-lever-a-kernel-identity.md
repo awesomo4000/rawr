@@ -2,6 +2,11 @@
 
 # Spec 29-01: Lever A — full-run kernel identity branches
 
+> **Outcome (2026-07-30) — NOT IMPLICATED.** The six-cell diagnostic did not implicate the
+> full-run kernel identity branch as the dense-AND/OR lever (the kernel skip alone cannot explain
+> the gap on this one-run-per-pair corpus). Winning levers were C for AND and the run/run-dispatch
+> clone shortcut for OR (see `29-02`). Lever A not shipped.
+
 Ship the full-run identity fast paths inside `runIntersectRun` / `runUnionRun`
 (`src/container_ops.zig:742` / `:608`) **if `29-00` implicates lever A**. A is
 allocation-shape-neutral but layout-affected, so it ships on its measured M4/Zen 4 numbers — no
