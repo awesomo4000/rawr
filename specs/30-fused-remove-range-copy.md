@@ -60,10 +60,17 @@ must therefore report, per side, **separately**:
 - **requested bytes**,
 - **result-teardown frees**.
 
-**"Zero frees" applies only during fused construction** — the fused op allocates nothing for the
-doomed containers, so it frees nothing mid-build. **Destroying the returned result still frees its
-2 owned containers** (the same teardown the baseline pays). Do not claim zero frees for the whole
-workflow.
+**"Zero frees during fused construction" is qualified to the pinned canonical corpus** — on this
+8→2 shape the fused op allocates nothing for the doomed containers and the top-level result never
+grows, so nothing is freed mid-build. **Ordinary-growth implementations can free a top-level buffer
+if growth occurs on other shapes** — the claim is corpus-specific, not a universal invariant.
+Separately, **destroying the returned result still frees its 2 owned containers** (the same
+teardown the baseline pays). Do not claim zero frees for the whole workflow.
+
+**Accounting rows to report:** rawr **baseline**, rawr **fused-default**, rawr **fused-presized**,
+and **one CRoaring reference**. State the CRoaring method explicitly: CRoaring is **timing-only**
+unless allocator-call accounting via memory hooks is added — decide in `30-00` and record which,
+so a rawr-vs-CRoaring allocator-call comparison is only claimed if actually instrumented.
 
 ## The fused operation
 
@@ -97,8 +104,12 @@ Therefore measure three cells (both hosts, SMP, canonical protocol):
 | fused-default | ✓ | normal top-level growth |
 | fused-presized | ✓ | exact / upper-bound reserve |
 
-**Ship whichever fused shape wins independently** — fusion and pre-sizing are decided on their own
-numbers, per host.
+**Winner-selection policy (architecture-neutral):** choose **one** fused implementation that passes
+**both** the M4 and Zen 4 gates — not a per-host shape. "Fusion and pre-sizing decided on their own
+numbers" means each *lever* is included only if it helps without regressing either host, yielding a
+single shipped shape. **If each host favors a different shape and no single shape passes both
+gates, ship neither** — that outcome requires a separate architecture-specific design (out of scope
+here), not an M4-only or Zen4-only binary.
 
 ## Timing boundary (pin for both sides)
 
@@ -125,6 +136,11 @@ removed"). Leaving it named `removeRange` would imply the **mutating primitive**
 that primitive is unchanged and already faster than CRoaring (26a). The current
 `rawr_operation = "RoaringBitmap.clone plus removeRange"` label updates to the fused op.
 
+**Stable `row_id` unchanged:** the manifest `row_id` **stays `remove-range`** (scripts, historical
+comparisons, and `docs/parity-measurement.md` keep tracking the same row); **only the display /
+operation label changes** to `removeRangeCopy`. Do not mint a new ID — downstream tooling must not
+have to expect one.
+
 ## Correctness (pin explicitly; byte-identity + differential + failure injection)
 
 `removeRangeCopy(self)` must serialize **byte-identical** to `clone(self)`-then-`removeRange`, and
@@ -133,12 +149,22 @@ match CRoaring set-parity, across at least:
 - **`lo > hi`** → returns an independent clone (no removal);
 - **empty source**;
 - **range entirely before or after** all set bits (no-op copy);
-- **full-source removal** → **zero-capacity result**, then **`add`** into it (growth from zero);
+- **full-source removal** → an **empty result that remains usable by `add`** (adding into it
+  succeeds and grows correctly). The *zero top-level capacity* assertion applies **only to
+  fused-presized** (that is its reserve contract); **fused-default may retain default growth
+  capacity** and is only required to be empty-and-usable — do not assert zero capacity on it;
 - **`0` and `maxInt(u32)` boundaries**;
 - **single-container** and **exact chunk-boundary** ranges;
 - **different source and result allocators**;
-- **cached and unknown (`-1`) cardinality** states on the source containers;
 - a boundary diff producing the **same container type** the in-place path would.
+
+**Cardinality / cache parity (bitmap and container level):**
+
+- **Bitmap-level:** a known `cached_cardinality` on the result is adjusted **exactly as
+  clone-then-remove** yields; an unknown source cardinality **stays unknown** on the result.
+- **Per-container:** preserve the appropriate lazy-cardinality states — a cloned survivor keeps its
+  source's cached/unknown (`-1`) state; a boundary diff sets the state the in-place path would.
+  Assert both **cached and unknown** source states.
 
 Ownership/source invariants (assert on success **and every injected failure**):
 
