@@ -8,8 +8,13 @@
 > the tax while keeping the dense win: OR **1.253x → 1.090x, closed**. **AND:** shipped **exact
 > top-level sizing (C for AND)** → **1.878x → 1.479x, retained but above the 1.10x gate → row stays
 > open**. **Rejected on M4 SMP regression (spec-27 trap):** pre-sizing OR, and bypassing AND
-> scratch allocation. Zen 4 no-regress held (after the OR relocation). Next AND lever must cut
-> remaining M4 run-result construction/allocation cost **without** disturbing the successful AND
+> scratch allocation. **Board-gate caveat (open):** after the OR relocation the dense wins held,
+> but on **Zen 4** three untouched rows — `cardinality`, large `rangeCardinality`, `rankMany` —
+> retained focused-timing shifts **> 5%**. Their source paths were established unchanged, but
+> **instruction-identical disassembly was not completed for all three**, so the layout-exception
+> classification is **not fully proven**; treat the Zen 4 board gate as **provisionally held,
+> pending that disassembly** (verify or the "board gate held" claim softens). Next AND lever must
+> cut remaining M4 run-result construction/allocation cost **without** disturbing the successful AND
 > scratch behavior.
 
 Ship the bitmap-level full-run identity (**B**) and/or the pre-sized top-level storage (**C**) —
