@@ -18,8 +18,9 @@ yielding a single shipped shape.
 **If no single shape keeps Zen 4 within noise** — the only M4-improving shape carries a **real**
 Zen 4 regression — that is **not** an automatic "ship neither." It routes to the **keep decision**
 below: a single shape with a real Zen 4 cost may be adopted via the **explicit owner exception**, or
-declined. "Ship neither" is the outcome only when no single shape improves M4 *and* the owner
-declines any exception.
+declined. **"Ship neither" is the outcome when *either* no single shape improves M4, *or* every
+M4-improving shape carries a real Zen 4 / board-gate regression and the owner declines the
+exception.**
 
 ## Canonical row change
 

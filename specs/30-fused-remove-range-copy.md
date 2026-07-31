@@ -245,14 +245,15 @@ Ownership/source invariants (assert on success **and every injected failure**):
     residual (shared M4 SMP per-container-clone cost) keeps the row **open** for the next lever.
     Adoption is a **human keep/not-keep judgement call** — the numeric gates *inform* it, they do
     not fully automate it. The default inputs are: real measured improvement, Zen 4 within noise
-    (per the Zen 4 policy above — a ≤5% layout-classifiable slip is **not** a regression and needs
-    no exception), and **no future avenue foreclosed** (the in-place `removeRange` primitive and the
+    (per the Zen 4 policy above — a ≤5% target-row slip with **overlapping repeated focused process
+    ranges** is **not** a regression and needs no exception; layout classification applies only to
+    untouched rows), and **no future avenue foreclosed** (the in-place `removeRange` primitive and the
     clone/dense-AND levers stay available). A **real Zen 4 regression** (beyond noise) against a
     **large M4 win** is exactly the tradeoff the owner may accept **via the explicit exception** in
     the Zen 4 policy — recorded with the numbers, not silently. The final call is made on the
     numbers at hand, not pre-committed here.
-  - **Ship nothing** only if the fused shape fails to improve M4 or regresses either host / the
-    board gate.
+  - **Ship nothing** when *either* no fused shape improves M4, *or* every M4-improving shape carries
+    a real Zen 4 / board-gate regression the owner declines to except.
 - `zig build test`; `zig build difftest`; canonical `run-compare-bench.sh` both hosts;
   `ReleaseSafe` / `ReleaseFast` green; `docs/parity-measurement.md` updated.
 
