@@ -45,11 +45,13 @@ declines any exception.
   pre-change baseline, both hosts; an untouched row's movement is layout (not a regression) **only
   when BOTH** its focused before/after timing is stable *and* its disassembly is
   instruction-identical. CRoaring also moving is *not* sufficient alone.
-- **Zen 4 policy (single, from the toplevel):** rawr is ahead (0.411x). Movement **within noise**
-  (≤ 5% *and* layout-classifiable — stable focused timing **and** instruction-identical
-  disassembly) is **not a regression** and passes. Movement **beyond noise** is a **real
-  regression** that **fails by default** and may be adopted **only via the explicit owner exception**
-  recorded with the numbers — never silently waived.
+- **Zen 4 policy (single, from the toplevel):** rawr is ahead (0.411x). The **target `remove-range`
+  row** changes implementation by design, so its disassembly differs — judge a Zen 4 movement as
+  **within noise** by **repeated focused timing and process-range overlap** (≤ 5%), **not**
+  instruction-identity. (Instruction-identical disassembly stays with the **board gate**, for
+  **untouched** rows.) Within noise = **not a regression**, passes. Movement **beyond noise** is a
+  **real regression** that **fails by default** and may be adopted **only via the explicit owner
+  exception** recorded with the numbers — never silently waived.
 
 ## Keep / close decision
 
@@ -65,8 +67,8 @@ declines any exception.
   (Zen 4 policy), recorded with the numbers. The final call is made on the numbers at hand, gated on
   **no future avenue foreclosed** (in-place `removeRange`, clone, and dense-AND levers stay
   available).
-- **Ship nothing** only if the fused shape fails to improve M4, or carries a real Zen 4 / board-gate
-  regression the owner declines to except.
+- **Ship nothing** when *either* no fused shape improves M4, *or* every M4-improving shape carries a
+  real Zen 4 / board-gate regression the owner declines to except.
 
 ## Acceptance
 

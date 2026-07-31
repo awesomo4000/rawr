@@ -130,8 +130,9 @@ while keeping **Zen 4 within noise** (per the Zen 4 policy), yielding a single s
 single shape keeps Zen 4 within noise** — the only M4-improving shape carries a **real** Zen 4
 regression — that is **not** an automatic "ship neither": it routes to the keep decision, where a
 single shape with a real Zen 4 cost may be adopted via the **explicit owner exception** (Zen 4
-policy) or declined. **"Ship neither" is the outcome only when no single shape improves M4 *and* the
-owner declines any exception.**
+policy) or declined. **"Ship neither" is the outcome when *either* no shape improves M4, *or* every
+M4-improving shape carries a real Zen 4 / board-gate regression and the owner declines the
+exception.**
 
 ## Timing boundary (pin for both sides)
 
@@ -197,13 +198,20 @@ Ownership/source invariants (assert on success **and every injected failure**):
 ## Constraints / gates
 
 - **Zen 4 policy (single, consistent — used everywhere in this spec):** rawr is ahead (0.411x).
-  Movement **within noise** — ≤ 5% *and* layout-classifiable (stable focused timing **and**
-  instruction-identical disassembly) — is **not a regression** and **passes** the gate; this is the
-  expected case. Movement **beyond noise** is a **real regression** that **fails the gate by
-  default** and may be adopted **only via an explicit owner-approved exception recorded with the
-  numbers** — it is **never silently waived**. So "no Zen 4 regression" is the requirement; the
-  owner judgement call (below) is the sole, explicit escape hatch for a large-M4-win /
-  small-real-Zen-cost tradeoff.
+  Two distinct classifications, do **not** conflate them:
+  - **The target `remove-range` row** intentionally changes the measured implementation
+    (`clone`+`removeRange` → `removeRangeCopy`), so its before/after **disassembly will differ** —
+    instruction-identity is **inapplicable** here. Judge whether a Zen 4 target-row movement is
+    **within noise** by **repeated focused timing and process-range overlap** (≤ 5%, ranges
+    overlap). Within noise = **not a regression**, passes; this is the expected case.
+  - **Untouched board rows** are classified as **layout (not a regression)** only by the spec-28
+    rule — **stable focused timing *and* instruction-identical disassembly** (that requirement lives
+    with the board gate, for rows whose code did *not* change).
+  - Movement **beyond noise** on the target row is a **real regression** that **fails the gate by
+    default** and may be adopted **only via an explicit owner-approved exception recorded with the
+    numbers** — **never silently waived**. So "no Zen 4 regression" is the requirement; the owner
+    judgement call (below) is the sole, explicit escape hatch for a large-M4-win /
+    small-real-Zen-cost tradeoff.
 - **Spec-27 M4 SMP gate:** the allocation reduction and any pre-sizing are **measured on M4 SMP,
   per the canonical protocol, before shipping** — not assumed from the count; fusion and pre-sizing
   ship independently.
