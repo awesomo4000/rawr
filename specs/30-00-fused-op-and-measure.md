@@ -133,5 +133,7 @@ matches CRoaring set-parity, across at least:
 - Byte-identity + differential + failure-injection green; source-preservation proven on success and
   every injected failure.
 - **No canonical manifest row changed.**
-- `zig build test`; `zig build difftest` green; diagnostic section of `docs/parity-measurement.md`
-  updated.
+- `zig build test`; `zig build difftest` green; **`ReleaseSafe` and `ReleaseFast` both green**
+  (this chunk introduces the public operation and its OOM-cleanup path — validate both build modes
+  before committing Phase 1, not deferred to `30-01`); diagnostic section of
+  `docs/parity-measurement.md` updated.

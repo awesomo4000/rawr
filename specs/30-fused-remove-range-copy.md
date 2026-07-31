@@ -123,12 +123,15 @@ boundary container survives: reserve `survivors + (boundary results whose surviv
 reserving. An over-count here reintroduces the very capacity slack fused-presized exists to
 remove — and on full removal collapses to the zero-capacity contract only if empties are excluded.
 
-**Winner-selection policy (architecture-neutral):** choose **one** fused implementation that passes
-**both** the M4 and Zen 4 gates — not a per-host shape. "Fusion and pre-sizing decided on their own
-numbers" means each *lever* is included only if it helps without regressing either host, yielding a
-single shipped shape. **If each host favors a different shape and no single shape passes both
-gates, ship neither** — that outcome requires a separate architecture-specific design (out of scope
-here), not an M4-only or Zen4-only binary.
+**Winner-selection policy (architecture-neutral):** choose **one** fused implementation (one
+capacity policy) — **not** a per-host shape; two per-architecture binaries are out of scope. "Fusion
+and pre-sizing decided on their own numbers" means each *lever* is included only if it improves M4
+while keeping **Zen 4 within noise** (per the Zen 4 policy), yielding a single shipped shape. **If no
+single shape keeps Zen 4 within noise** — the only M4-improving shape carries a **real** Zen 4
+regression — that is **not** an automatic "ship neither": it routes to the keep decision, where a
+single shape with a real Zen 4 cost may be adopted via the **explicit owner exception** (Zen 4
+policy) or declined. **"Ship neither" is the outcome only when no single shape improves M4 *and* the
+owner declines any exception.**
 
 ## Timing boundary (pin for both sides)
 
