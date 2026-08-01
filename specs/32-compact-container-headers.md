@@ -4,9 +4,9 @@
 
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md) (Wave 1). Shrink
 `ArrayContainer` and `RunContainer` headers from **24 B → 16 B** so they drop from the **32-byte SMP
-size class to the 16-byte class**, **keeping the payload in its existing separate power-of-two
-allocation**. Allocation **count is unchanged**; only the header slot halves. This is the widest
-structural lever on the board.
+size class to the 16-byte class**, **leaving the payload in its own separate allocation with an
+unchanged requested length, alignment, and SMP class**. Allocation **count is unchanged**; only the
+header slot halves. This is the widest structural lever on the board.
 
 **Targets (M4 SMP):** clone 1.786x, dense-AND 1.570x, select 1.486x (pointer locality), lazy-OR
 construction 1.708x (the array-clone share of the 2-way merge).
@@ -32,9 +32,15 @@ Current headers (grounded in `src/array_container.zig`, `src/run_container.zig`,
 ## Not spec 13
 
 Spec 13 co-located header **and** payload in one allocation, so the combined block crossed into the
-next SMP size class (8 KB payload + header → 16 KB class). **E1 keeps the payload in its own
-existing allocation and class** — only the small header slot changes (32→16). This is the firewall
-that makes E1 legitimate.
+next SMP size class (8 KB payload + header → 16 KB class). **E1 leaves the payload in its own
+separate allocation** — only the small header slot changes (32→16). This is the firewall that makes
+E1 legitimate.
+
+**Payload is NOT assumed power-of-two.** Run payload capacities are not consistently power-of-two, so
+the firewall is stated as an **assertion per case**, not an assumption: for **every** baseline and
+candidate cell, the payload's **requested length, alignment, and resulting SMP-class bytes are
+unchanged** vs baseline (host class accounting). Any cell where the candidate shifts the payload
+class **fails** — that would be spec 13 in disguise.
 
 ## Array and Run are decided independently
 
@@ -55,30 +61,51 @@ and select.
 - **Header `@sizeOf` / `@alignOf`** (24→16) are **compile-time asserted**. The **SMP slot class**
   (32→16) is **allocator behavior, not a compile-time property** — **calculated and reported by the
   benchmark's class accounting on each host**, not asserted from the type.
-- **Payload class unchanged** — asserted (same power-of-two allocation as baseline).
+- **Payload unchanged** — asserted per case: same **requested length, alignment, and SMP-class
+  bytes** as baseline (not assumed power-of-two).
 
 ## Phase 1 — diagnostic prototype (benchmark-only, both hosts)
 
-Add a separate-payload/**compact-header** variant (Array and Run as **separate** cells) to the
-existing single-allocation prototype module — a **repository-only diagnostic**, no production default
-changed.
+**Module: a new E1-owned diagnostic module** (e.g. `bench_compact_header.zig`). The existing
+`bench_single_alloc.zig` is **Array-only** and uses a **1 warmup / 9 timed** protocol — E1 does
+**not** edit it; it may reuse its harness patterns but adds a **separate module** covering **both**
+Array and Run at the **canonical 3 warmup / 21 timed, five-process-median** protocol. Repository-only
+diagnostic; no production default changed.
 
-- **Per representation (Array, Run), measure both hosts, SMP, canonical protocol** (3 warmup /
-  21 timed, five process medians + full range): reserved build, growth, clone, deinit, membership,
-  iteration, dense run-AND, select.
+**Pinned diagnostic corpora (assert before timing).** Each is fixed with an explicit seed, count, and
+build mode so the diagnostic cannot drift into a different workload:
+
+- **Array distribution** — pinned cardinality/value distribution and seed for the build / growth /
+  clone / deinit / membership / iteration cells (state the exact N and seed).
+- **Run distribution** — pinned run count / run-length distribution and seed (RunContainer replicas),
+  distinct from Array.
+- **dense-AND operands** — the canonical dense run/run operands used for the dense-run-AND cell.
+- **select queries** — the query set and seed for the select cell.
+- **build mode** — `ReleaseFast` for timing cells, `ReleaseSafe` for the correctness/bounds pass;
+  state which cell runs where.
+- **artifact format** — the committed output columns (per cell: ns, alloc calls, free calls,
+  requested bytes, effective SMP-class bytes, teardown), so runs are comparable across branches.
+
+**Per representation (Array, Run), both hosts, SMP, canonical protocol** — cells: reserved build,
+growth, clone, deinit, membership, iteration, dense run-AND, select. **Real compact-header Run
+replicas** — never infer Run from the Array prototype.
+
 - **Accounting per cell:** allocations, frees, requested bytes, **effective SMP-class bytes** (host
   class accounting), teardown — kept distinct (container instances ≠ allocator calls).
-- **Assert:** 16-byte headers (`@sizeOf`), header now in the 16-byte class (host accounting),
-  payload class unchanged.
-- Named, committed diagnostic artifact (E1 owns its own bench module — no shared-file edits).
+- **Assert:** 16-byte headers (`@sizeOf`), header now in the 16-byte class (host accounting), payload
+  requested-length/alignment/class unchanged (per case).
+- Named, committed diagnostic artifact (E1 owns its own bench module — no shared-file edits; shared
+  `build.zig` / runner / docs are implementer-owned).
 
 ## Phase 2 — production migration (conditional, per representation)
 
 If a representation's Phase 1 shows a real M4 improvement with Zen 4 within noise, migrate **that
 representation** (Array and/or Run) to the compact header in production:
 
-- **Operation-appropriate identity outside timing** — byte-identity via `serialize` where defined,
-  set-identity + CRoaring differential elsewhere; representation-identical output across every op.
+- **Testable output invariants (outside timing)** — for every op, the compact-header result has the
+  **same container kind, same cardinality, same values** as the baseline, and **identical portable
+  bytes** where serialization is valid; CRoaring differential across container-type mixes. (Not the
+  vaguer "representation-identical output" — these are the checked invariants.)
 - **Exhaustive allocation-failure injection** on every changed path (this is an ownership/layout
   change): valid-or-cleanly-errored, inputs untouched, no leak.
 - **Board gate + spec-28 layout exception** — full-board before/after, both hosts; untouched-row
@@ -99,14 +126,20 @@ representation** (Array and/or Run) to the compact header in production:
 
 ## Proposed chunk plan (confirm at review)
 
-- **`32-00`** — compact-header prototype + measurement (Array and Run as separate cells), both hosts,
-  the assert gate; no production change. Produces the per-representation GO/NO-GO.
-- **`32-01`** — Array production migration (conditional on `32-00`): identity, failure injection,
-  board gate.
-- **`32-02`** — Run production migration (conditional on `32-00`): identity, failure injection,
-  board gate.
+Diagnostics split by representation (the Run prototype + op matrix is substantial and independently
+decidable); production migrations **serialized** (Wave 2 — one change at a time).
+
+- **`32-00`** — **Array** compact-header prototype + measurement, both hosts, assert gate; no
+  production change. Array GO/NO-GO.
+- **`32-01`** — **Run** compact-header prototype + measurement (real Run replicas), both hosts, assert
+  gate; no production change. Run GO/NO-GO.
+- **`32-02`** — production migration of the **first** winning representation (conditional): invariants,
+  failure injection, board gate.
+- **`32-03`** — production migration of the **second** winning representation (conditional): **only
+  after `32-02` is adopted, rebased onto, and board-gated** — adopt one, gate it, rebase, then the
+  other; never both in one board window.
 
 ## Estimate
 
-M–L for `32-00` (prototype for two representations × the op matrix × two hosts). M each for `32-01` /
-`32-02` (core representation change with full correctness + failure injection).
+M each for `32-00` / `32-01` (one representation × the op matrix × two hosts). M each for `32-02` /
+`32-03` (core representation change with full correctness + failure injection).
