@@ -2,6 +2,20 @@
 
 # Spec 30: Fused copy-with-range-removed (`removeRangeCopy`)
 
+> **Outcome (2026-08-01) — CLOSED (full GO, hard parity met and beaten).** The fused
+> `removeRangeCopy` constructs only the **2** containers in the final result instead of cloning
+> **8** then freeing 6. Measured allocation drop: container constructions **9 → 2**, allocator calls
+> **22 → 6**, construction frees **16 → 0**, requested bytes **480 → 120**. **M4 SMP 1.862x →
+> 0.792x** (rawr now *faster* than CRoaring); **Zen 4 0.412x → 0.187x**. **fused-presized LOST on
+> both arches** — the cardinality pre-scan cost outweighed the ~20 bytes saved, so **normal growth
+> (fused-default) shipped**; separating fusion from pre-sizing (per review) is what kept the
+> pre-sizing regression from masking the fusion win. Legitimacy held: both sides preserve source,
+> construct the copy, and destroy the result inside timing. Correctness / OOM cleanup /
+> source-preservation / differential / both-host gates green. Row renamed `removeRangeCopy`,
+> `row_id` stayed `remove-range`. **Scope held:** the standalone `clone (dense)` 1.786x row and
+> dense-AND are untouched, as specced — this closed removeRange only. First concrete win for the
+> **demand-reduction** lever family (fewer clones), validating it over allocator/capacity tuning.
+
 Close the biggest M4 row on the board: **removeRange (wide, dense) 1.932x** (rawr *ahead* on
 Zen 4 — 0.411x, a no-regress gate — see the single Zen 4 policy below). **Parity is a hard
 requirement:** the row closes only at **≤ 1.10x**; anything above stays open for a further lever.

@@ -2,6 +2,13 @@
 
 # Spec 30-01: Adopt `removeRangeCopy` into the canonical row
 
+> **Outcome (2026-08-01) — CLOSED (full GO).** Selected the architecture-neutral **fused-default**
+> (normal growth) shape — passed both host gates cleanly, no exception needed. Canonical
+> `remove-range` row repointed at `removeRangeCopy` (stable `row_id`, operation relabeled),
+> copy-vs-copy timing boundary intact. **M4 1.862x → 0.792x, Zen 4 0.412x → 0.187x** — row
+> **closes** at well under 1.10x (rawr ahead on both). Board gate held (untouched-row movements were
+> variance). Spec 30 moves to `done/`.
+
 Wire the winning fused shape from `30-00` into the canonical `remove-range` parity row (legitimate
 copy-vs-copy), rename the row operation, hold the board gate, and make the keep/close decision.
 

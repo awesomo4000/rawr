@@ -2,6 +2,13 @@
 
 # Spec 30-00: `removeRangeCopy` — implement, verify, measure
 
+> **Outcome (2026-08-01) — DONE.** `removeRangeCopy` shipped (public API, normal-growth default;
+> internal helper parameterized by capacity policy; repo-only diagnostic ran both policies).
+> Corpus + partition asserted (8 → 2). Allocation accounting: constructions 9→2, allocator calls
+> 22→6, construction frees 16→0, bytes 480→120. **fused-presized slower on both arches** (pre-scan
+> cost > 20 bytes saved) → not selected. Byte-identity / differential / OOM cleanup /
+> source-preservation green; ReleaseSafe + ReleaseFast green. No canonical row changed here.
+
 Build the fused copy-with-range-removed path and its correctness surface, then measure the three
 cells on both hosts. This chunk **adds the public `removeRangeCopy` library operation**; what
 `30-01` changes is the **canonical parity-row** (manifest), not the library API. **No canonical
