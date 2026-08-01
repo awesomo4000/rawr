@@ -67,14 +67,31 @@ compact.
 **Not applicable to Bitset:** `BitsetContainer` is already `ptr(8) + i32(4) = 16 B`. E1 is
 Array + Run only.
 
+**Array and Run are decided independently.** They target different rows (Array headers →
+lazy-OR-construction array clones; Run headers → clone / dense-AND / select) and may produce
+different results. The child spec requires **independent prototype cells and independent GO/NO-GO
+decisions** — do **not** couple the two representation migrations, and do **not** infer Run
+performance from the prior Array prototype: E1 needs **real compact-header Run replicas** measured on
+dense clone, dense-AND, and select.
+
+**Pointer contract (child spec must pin):**
+- **`cardinality`/`n_runs` bound the readable** values/runs; **`capacity` controls growth and
+  deallocation** (the freed length).
+- Use sites reconstruct a **temporary slice** (`ptr[0..cardinality]` / `ptr[0..capacity]`) so
+  **`ReleaseSafe` bounds checking is restored** at access.
+- **Tagged-pointer alignment stays valid** (the 2-bit tag still fits the pointer's low bits).
+- Baseline **24 B → 32-byte slot** and candidate **16 B → 16-byte slot** are **mechanically asserted
+  on both hosts** (compile-time `@sizeOf`/`@alignOf` + the effective SMP-class bytes).
+- Production migration gets **exhaustive allocation-failure testing** (each op's changed path).
+
 **Risk / surface:** this changes the **core container representation** — every op touches it, and
-losing the slice means reconstructing bounds (including `ReleaseSafe` bounds checks) at use sites.
-Large correctness surface; benchmark-only prototype first.
+losing the slice means reconstructing bounds at use sites. Large correctness surface; benchmark-only
+prototype first.
 
 **First step:** add a separate-payload/**compact-header** variant to the existing single-allocation
-prototype. Measure reserved build, growth, clone, deinit, membership, iteration, dense run-AND, and
-select on both hosts. **Assert 16-byte headers and unchanged payload classes** before any production
-migration.
+prototype (Array and Run as **separate** cells). Measure reserved build, growth, clone, deinit,
+membership, iteration, dense run-AND, and select on both hosts. **Assert 16-byte headers and
+unchanged payload classes** before any production migration.
 
 ### E2 — Fused N-way bitset accumulation for `orMany` (independent; run early)
 
@@ -88,8 +105,12 @@ registers, and stores the destination **once** — cutting destination memory tr
 OR per key; (4) first-bitset seeding + word-major.
 
 **Discipline:** first **split accumulation time by array/bitset/run source** — the word-major kernel
-only helps the **bitset** share; establish that share before building it. **OR-specific; do not
-touch `xorMany`** (already well ahead).
+only helps the **bitset** share; establish that share before building it. **Assert bitset
+multiplicity per output key** — word-major accumulation only helps keys that receive **multiple**
+bitset inputs; a corpus where each key gets one bitset gains nothing. Add a **bitset-only ceiling
+cell** (the maximum the kernel could recover) **before** the full mixed-corpus cell, and verify
+**unknown-cardinality handling** and **input immutability** (inputs are read, never mutated).
+**OR-specific; do not touch `xorMany`** (already well ahead).
 
 **Independence:** a compute/bandwidth lever, orthogonal to the header work — can run in parallel
 with E1.
@@ -103,18 +124,29 @@ bounds**, and the spec-17 arena is closed).
 **Mechanism (the closest analogue to removeRangeCopy — avoid metadata guaranteed to die):** an
 **unrepaired** lazy bitset has implicitly-unknown cardinality and may not need a separately
 allocated 16-byte `BitsetContainer` header until repair. Allocate **only the aligned 8 KB words**;
-represent internally as a **transient lazy-bitset tag** (the `reserved = 0b11` tag slot is free);
-repair computes cardinality directly; **if it demotes, free the words with no header ever
-allocated**; if it survives, allocate the normal 16-byte header and adopt the words.
+represent internally as a **transient lazy-bitset tag**; repair computes cardinality directly; **if
+it demotes, free the words with no header ever allocated**; if it survives, allocate the normal
+16-byte header and adopt the words.
 
-**Stop-gate:** prototype benchmark-only; **count exactly how many header allocations disappear** and
-measure construction, repair, and full lifecycle (including repeated lazy ops and
-deinit-before-repair). **If removing the small headers cannot materially move the M4 result, stop
-before changing the container union** — the payoff is the doomed-header **alloc call**, not bytes,
-so it must clear the bar on call-count alone.
+**The `reserved = 0b11` tag is free in the enum but NOT operationally free.** The `Container` union
+has no member for it, and existing generic paths **return false/zero, skip deallocation, or treat
+reserved as unreachable**. The child spec must supply a **complete dispatch/lifecycle inventory** for
+the transient representation covering: repeated lazy operations, **clone/move**, **repair failure**,
+**deinit-before-repair**, **serialization attempts**, and **generic queries** (contains, cardinality,
+rank/select, iteration) — each must have defined, tested behavior, not fall through a default.
 
-**Depends on E1:** if E1 already makes headers cheap, E3's marginal value shrinks — evaluate E3
-against E1's measured header cost.
+**Numeric stop-gate:** prototype benchmark-only; **count exactly how many header allocations
+disappear** and measure construction, repair, and full lifecycle (repeated lazy ops,
+deinit-before-repair). Pin a **numeric bar** before touching the container union — either a
+**required focused-time improvement** on lazy-OR construction, or a **demonstrated projected path to
+the ≤ 1.10x row gate** (header-alloc-calls removed × measured per-call cost ≥ the residual). "Materially
+move" is not acceptable as the gate; the payoff is the doomed-header **alloc call**, not bytes.
+
+**Depends on E1 as a REBASELINE, not a header-cost change.** E1 excludes Bitset, so it does **not**
+make E3's bitset headers cheaper. But E1's **Array** compact-header lands in the same lazy-OR
+construction path (the 2-way-merge array clones), so **lazy-OR construction / repair must be
+re-measured after E1** before E3's numbers mean anything. E3's own lever (skipping doomed bitset
+headers) is independent of E1's header size.
 
 ### E4 — `select`: container-skip kernel matrix (independent)
 
@@ -125,21 +157,30 @@ cardinality walk** dominates.
 specialization; **precomputed prefix-cardinality lookup as a ceiling experiment only**; plus rawr
 vs CRoaring disassembly and branch counts on the canonical corpus.
 
+**Homogeneous-run specialization risks repeating a rejected experiment** — a prior integrated run
+loop already **regressed** (`docs/parity-measurement.md`). The child spec must **explain how
+homogeneous-run dispatch differs** from that, or **retain it explicitly as a control**, not a
+presumed candidate. **Prefix cardinalities remain the strongest ceiling experiment.**
+
 **Decision rule:** if unrolling or homogeneous dispatch closes it → ship, no storage change. If
 **only** prefix cardinalities close it, choose **explicitly** between (a) an **optional caller-owned
 `RankSelectIndex`** (helps indexed users, does **not** close the base row) or (b) **maintained
 bitmap metadata** (must pay mutation + memory gates across the whole board). **Do not add a
 permanent index until the ceiling experiment proves it recovers the full gap.**
 
-### E5 — Clone / dense-AND allocation ordering (fallback only)
+### E5 — Clone / dense-AND allocation ordering + direct construction (fallback only; two experiments)
 
-**Only if E1 does not close clone / dense-AND.** The remaining unexplored allocator lever is
-**ordering**, not count or size: interleaved vs all-headers-then-payloads-grouped-by-class;
-interleaved vs grouped teardown; and for dense-AND a **two-pass run-result plan** that fills all
-permanent outputs directly **without scratch construction** (distinct from spec 29's rejected
-bypass: compute cardinalities first, then allocate exact and fill once — no scratch, no empty
-allocs). Matches the observed allocator-history sensitivity while preserving counts and
-representation.
+**Only if E1 does not close clone / dense-AND.** Conceptually **two separate experiments**, do not
+conflate:
+
+- **E5a — allocation ordering, counts/classes unchanged:** interleaved vs
+  all-headers-then-payloads-grouped-by-class; interleaved vs grouped teardown. Preserves counts and
+  representation; probes the observed allocator-history sensitivity only.
+- **E5b — two-pass direct run-result constructor (dense-AND):** eliminate scratch allocation by
+  filling all permanent outputs directly. Distinct from spec 29's rejected bypass, but **"compute
+  cardinalities first" is insufficient** — the **first pass must determine the exact non-empty
+  output keys, each result's container type, and each run count, WITHOUT allocating**; only then does
+  the second pass allocate exact and fill once (no scratch, no empty allocs).
 
 **Lower confidence** (exact sizing, combined blocks, scratch bypass already failed) —
 **benchmark-only unless focused M4 exceeds noise and Zen 4 stays neutral.**
@@ -149,14 +190,17 @@ representation.
 **E1 → E2 → E3 → E4 → E5.**
 
 - **E1 first** is both highest-leverage *and* information-ordering: its result **gates E5** (if
-  compact headers close clone/dense-AND, E5 is moot) and **informs E3** (a cheap 16-byte header
-  weakens the case for removing it). One structural experiment that could move three of the largest
-  rows, with a layout that specifically dodges spec 13's size-class failure.
+  compact headers close clone/dense-AND, E5 is moot) and **shifts the lazy-OR baseline E3 measures
+  against** (via the Array-clone path — not by changing bitset-header cost). One structural
+  experiment that could move three of the largest rows, with a layout that specifically dodges
+  spec 13's size-class failure.
 - **E2 and E4 are independent** compute levers (orMany, select) — orthogonal to headers, safe to
   interleave / parallelize; sequenced here after E1 only to keep one active structural change at a
   time.
-- **E3 after E1**, evaluated against E1's measured header cost.
-- **E5 last**, and only if E1 leaves clone/dense-AND open.
+- **E3 after E1**, evaluated against a **post-E1 lazy-OR rebaseline** (E1's Array change moves the
+  lazy-OR construction baseline; E1 does **not** change bitset-header cost).
+- **E5 last**, and only if E1 leaves clone/dense-AND open — and E5a (ordering) vs E5b (direct
+  construction) are separate experiments.
 
 ## Shared experimental discipline (every experiment inherits)
 
@@ -164,13 +208,20 @@ representation.
 2. **Benchmark-only A/B cells before any production change.**
 3. Report **allocations, frees, requested bytes, effective SMP-class bytes, and teardown** — kept
    distinct (container instances ≠ allocator calls, per spec 30).
-4. Validate **byte / set identity outside timing** (+ CRoaring differential).
+4. Validate **operation-appropriate identity outside timing** — byte-identity where a serialized
+   form is defined, set-identity + CRoaring differential otherwise; pick per experiment, don't
+   assume byte-identity everywhere.
 5. **Five fresh-process medians + full ranges on M4 and Zen 4** (canonical protocol).
 6. Adopt **one architecture-neutral shape** only (per the spec-30 Zen 4 policy: within-noise passes;
    a real regression needs an explicit owner exception).
-7. Fresh **full-board before/after gate**; investigate any untouched movement > 5% (spec-28 layout
-   exception: stable focused timing *and* instruction-identical disassembly for **untouched** rows).
-8. **Retain partial wins only when they introduce a new proven mechanism**, not another tuning pass
+7. **Full-board before/after gates PRODUCTION ADOPTION, not every diagnostic prototype** — the
+   benchmark-only A/B cells (step 2) do not each trigger a full board run; the fresh full-board gate
+   runs when a shape is proposed for the shipping path. Investigate any untouched movement > 5%
+   (spec-28 layout exception: stable focused timing *and* instruction-identical disassembly for
+   **untouched** rows).
+8. **Any ownership change** (new representation, adopted words, transient tags) requires
+   **OOM / allocation-failure injection** — valid-or-cleanly-errored, source untouched, no leak.
+9. **Retain partial wins only when they introduce a new proven mechanism**, not another tuning pass
    over a prior NO-GO. Parity stays a hard requirement — a row **closes** at ≤ 1.10x; a partial is
    adopted by owner judgement and the row stays open.
 
