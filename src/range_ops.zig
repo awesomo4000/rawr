@@ -15,6 +15,71 @@ pub fn removeRange(
     return removeRangeDirect(bitmap, lo, hi);
 }
 
+pub const RemoveRangeCopyCapacity = enum {
+    normal_growth,
+    exact,
+};
+
+pub fn removeRangeCopy(
+    bitmap: anytype,
+    allocator: std.mem.Allocator,
+    lo: u32,
+    hi: u32,
+) !@TypeOf(bitmap.*) {
+    return removeRangeCopyWithCapacity(bitmap, allocator, lo, hi, .normal_growth);
+}
+
+/// Repository tooling uses this entry point to compare capacity policies.
+pub fn removeRangeCopyWithCapacity(
+    bitmap: anytype,
+    allocator: std.mem.Allocator,
+    lo: u32,
+    hi: u32,
+    comptime capacity_policy: RemoveRangeCopyCapacity,
+) !@TypeOf(bitmap.*) {
+    if (lo > hi) return cloneWithCapacity(bitmap, allocator, capacity_policy);
+
+    const Bitmap = @TypeOf(bitmap.*);
+    var result = switch (capacity_policy) {
+        .normal_growth => try Bitmap.init(allocator),
+        .exact => try Bitmap.initCapacity(allocator, exactRemoveRangeCopyCapacity(bitmap, lo, hi)),
+    };
+    errdefer result.deinit();
+
+    const start_key: u16 = @truncate(lo >> 16);
+    const end_key: u16 = @truncate(hi >> 16);
+    const start_low: u16 = @truncate(lo);
+    const end_low: u16 = @truncate(hi);
+    var removed: u64 = 0;
+
+    for (bitmap.keys[0..bitmap.size], bitmap.containers[0..bitmap.size]) |key, tagged| {
+        const container = Container.fromTagged(tagged);
+        if (key < start_key or key > end_key) {
+            try appendClone(&result, key, container);
+            continue;
+        }
+
+        const low = if (key == start_key) start_low else 0;
+        const high = if (key == end_key) end_low else std.math.maxInt(u16);
+        removed += container_ops.containerRangeCardinality(container, low, high);
+
+        if (low == 0 and high == std.math.maxInt(u16)) continue;
+
+        const difference = try containerDifferenceRange(allocator, container, low, high);
+        if (difference.getCardinality() == 0) {
+            difference.deinit(allocator);
+        } else {
+            try appendOwned(&result, key, difference);
+        }
+    }
+
+    result.cached_cardinality = if (bitmap.cached_cardinality >= 0)
+        bitmap.cached_cardinality - @as(i64, @intCast(removed))
+    else
+        -1;
+    return result;
+}
+
 pub fn flip(
     bitmap: anytype,
     allocator: std.mem.Allocator,
@@ -59,18 +124,7 @@ fn removeRangeDirect(bitmap: anytype, lo: u32, hi: u32) !u64 {
             continue;
         }
 
-        var range_pair = RunContainer.RunPair{ .start = low, .length = high - low };
-        var range_view = RunContainer{
-            .runs = @as(*[1]RunContainer.RunPair, &range_pair)[0..],
-            .n_runs = 1,
-            .capacity = 1,
-            .cardinality = @intCast(@as(u32, high) - low + 1),
-        };
-        const result = container_ops.containerDifference(
-            bitmap.allocator,
-            old_container,
-            .{ .run = &range_view },
-        ) catch |err| {
+        const result = containerDifferenceRange(bitmap.allocator, old_container, low, high) catch |err| {
             retainCurrentAndTail(bitmap, write, read, original_size);
             bitmap.cached_cardinality = -1;
             return err;
@@ -94,6 +148,81 @@ fn removeRangeDirect(bitmap: anytype, lo: u32, hi: u32) !u64 {
         bitmap.cached_cardinality = original_cache - @as(i64, @intCast(removed));
     }
     return removed;
+}
+
+fn cloneWithCapacity(
+    bitmap: anytype,
+    allocator: std.mem.Allocator,
+    comptime capacity_policy: RemoveRangeCopyCapacity,
+) !@TypeOf(bitmap.*) {
+    if (capacity_policy == .normal_growth) return bitmap.clone(allocator);
+
+    const Bitmap = @TypeOf(bitmap.*);
+    var result = try Bitmap.initCapacity(allocator, bitmap.size);
+    errdefer result.deinit();
+    for (bitmap.keys[0..bitmap.size], bitmap.containers[0..bitmap.size]) |key, tagged| {
+        const cloned = try Container.fromTagged(tagged).clone(allocator);
+        appendContainer(&result, key, cloned);
+    }
+    result.cached_cardinality = bitmap.cached_cardinality;
+    return result;
+}
+
+fn exactRemoveRangeCopyCapacity(bitmap: anytype, lo: u32, hi: u32) u32 {
+    const start_key: u16 = @truncate(lo >> 16);
+    const end_key: u16 = @truncate(hi >> 16);
+    const start_low: u16 = @truncate(lo);
+    const end_low: u16 = @truncate(hi);
+    var count: u32 = 0;
+
+    for (bitmap.keys[0..bitmap.size], bitmap.containers[0..bitmap.size]) |key, tagged| {
+        if (key < start_key or key > end_key) {
+            count += 1;
+            continue;
+        }
+
+        const low = if (key == start_key) start_low else 0;
+        const high = if (key == end_key) end_low else std.math.maxInt(u16);
+        if (survivingCardinality(Container.fromTagged(tagged), low, high) != 0) count += 1;
+    }
+    return count;
+}
+
+fn survivingCardinality(container: Container, low: u16, high: u16) u32 {
+    var count: u32 = 0;
+    if (low != 0) count += container_ops.containerRangeCardinality(container, 0, low - 1);
+    if (high != std.math.maxInt(u16)) {
+        count += container_ops.containerRangeCardinality(container, high + 1, std.math.maxInt(u16));
+    }
+    return count;
+}
+
+fn containerDifferenceRange(
+    allocator: std.mem.Allocator,
+    container: Container,
+    low: u16,
+    high: u16,
+) !Container {
+    var range_pair = RunContainer.RunPair{ .start = low, .length = high - low };
+    var range_view = RunContainer{
+        .runs = @as(*[1]RunContainer.RunPair, &range_pair)[0..],
+        .n_runs = 1,
+        .capacity = 1,
+        .cardinality = @intCast(@as(u32, high) - low + 1),
+    };
+    return container_ops.containerDifference(allocator, container, .{ .run = &range_view });
+}
+
+fn appendClone(bitmap: anytype, key: u16, container: Container) !void {
+    try ensureTotalCapacity(bitmap, bitmap.size + 1);
+    const cloned = try container.clone(bitmap.allocator);
+    appendContainer(bitmap, key, cloned);
+}
+
+fn appendOwned(bitmap: anytype, key: u16, container: Container) !void {
+    errdefer container.deinit(bitmap.allocator);
+    try ensureTotalCapacity(bitmap, bitmap.size + 1);
+    appendContainer(bitmap, key, container);
 }
 
 fn retainCurrentAndTail(bitmap: anytype, write: usize, read: usize, original_size: usize) void {

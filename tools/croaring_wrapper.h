@@ -56,6 +56,7 @@ void roaring_bitmap_to_uint32_array(const roaring_bitmap_t *r, uint32_t *ans);
 void roaring_bitmap_remove_range_closed(roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
 uint64_t roaring_bitmap_range_cardinality_closed(const roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
 bool roaring_bitmap_contains_range_closed(const roaring_bitmap_t *r, uint32_t lo, uint32_t hi);
+void rawr_cr_set_copy_on_write(roaring_bitmap_t *bitmap, bool enabled);
 
 // Set operations
 roaring_bitmap_t *roaring_bitmap_and(const roaring_bitmap_t *r1, const roaring_bitmap_t *r2);

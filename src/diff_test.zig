@@ -1610,6 +1610,20 @@ fn assertRangeOpsAgree(
     var remove_name_buf: [128]u8 = undefined;
     const remove_name = try std.fmt.bufPrint(&remove_name_buf, "{s}:removeRange", .{name});
     try assertSameValues(allocator, remove_name, &rawr_removed, oracle_removed);
+
+    var rawr_removed_copy = try bm.removeRangeCopy(allocator, lo, hi);
+    defer rawr_removed_copy.deinit();
+    var remove_copy_name_buf: [128]u8 = undefined;
+    const remove_copy_name = try std.fmt.bufPrint(
+        &remove_copy_name_buf,
+        "{s}:removeRangeCopy",
+        .{name},
+    );
+    try assertSameValues(allocator, remove_copy_name, &rawr_removed_copy, oracle_removed);
+    if (!rawr_removed_copy.equals(&rawr_removed)) {
+        bench_time.print("FAIL: {s}:removeRangeCopy differs from clone plus removeRange\n", .{name});
+        return error.PredicateMismatch;
+    }
 }
 
 fn rawrAllocatingOp(allocator: Allocator, op: BinaryOp, a: *RoaringBitmap, b: *RoaringBitmap) !RoaringBitmap {

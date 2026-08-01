@@ -23,4 +23,6 @@ rawr_cr_clone_inventory rawr_cr_range_clone_inventory(
     const roaring_bitmap_t *bitmap
 );
 
+void rawr_cr_set_copy_on_write(roaring_bitmap_t *bitmap, bool enabled);
+
 #endif

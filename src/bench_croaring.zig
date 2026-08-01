@@ -822,10 +822,8 @@ fn benchRawrCloneDenseWithAllocator(comptime result_allocator: std.mem.Allocator
 
 fn benchRawrRemoveRangeWideDenseWithAllocator(comptime result_allocator: std.mem.Allocator) void {
     const bm = &rawr_dense_a.?;
-    var result = bm.clone(result_allocator) catch unreachable;
+    var result = bm.removeRangeCopy(result_allocator, 100_000, 650_000) catch unreachable;
     defer result.deinit();
-    const removed = result.removeRange(100_000, 650_000) catch unreachable;
-    std.mem.doNotOptimizeAway(removed);
     std.mem.doNotOptimizeAway(&result);
 }
 
@@ -1718,12 +1716,7 @@ fn makeRawrResult(row: ParityRow, result_allocator: std.mem.Allocator) !RoaringB
         .deserialize, .deserialize_arena => try RoaringBitmap.deserialize(result_allocator, rawr_serialized.?),
         .flip => try rawr_dense_a.?.flip(result_allocator, 100_000, 650_000),
         .clone => try rawr_dense_a.?.clone(result_allocator),
-        .remove_range => result: {
-            var result = try rawr_dense_a.?.clone(result_allocator);
-            errdefer result.deinit();
-            _ = try result.removeRange(100_000, 650_000);
-            break :result result;
-        },
+        .remove_range => try rawr_dense_a.?.removeRangeCopy(result_allocator, 100_000, 650_000),
         else => unreachable,
     };
 }

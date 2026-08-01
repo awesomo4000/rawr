@@ -612,6 +612,41 @@ pub fn build(b: *std.Build) void {
     );
     bench_range_attrib_step.dependOn(&b.addInstallArtifact(bench_range_attrib_exe, .{}).step);
 
+    // Fused copy-with-range-removed construction and allocation diagnostic.
+    const remove_range_copy_diag_lib_mod = b.createModule(.{
+        .root_source_file = b.path("src/remove_range_copy_bench_root.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_remove_range_copy_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_remove_range_copy.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_remove_range_copy_mod.addImport("rawr", remove_range_copy_diag_lib_mod);
+    addBenchmarkPlatformShim(b, bench_remove_range_copy_mod, target);
+    addTranslatedCImport(b, bench_remove_range_copy_mod, .{
+        .header = "tools/croaring_wrapper.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{"tools/croaring_range_attrib.c"},
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_remove_range_copy_exe = b.addExecutable(.{
+        .name = "bench_remove_range_copy",
+        .root_module = bench_remove_range_copy_mod,
+    });
+    const bench_remove_range_copy_step = b.step(
+        "bench-remove-range-copy",
+        "Build the fused removeRangeCopy diagnostic",
+    );
+    bench_remove_range_copy_step.dependOn(
+        &b.addInstallArtifact(bench_remove_range_copy_exe, .{}).step,
+    );
+
     // Tarball
     const tarball_step = b.step("tarball", "Create source tarball from git HEAD");
     const tarball_cmd = b.addSystemCommand(&.{

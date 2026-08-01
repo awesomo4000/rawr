@@ -453,6 +453,11 @@ pub const RoaringBitmap = struct {
         return range_ops.removeRange(self, lo, hi);
     }
 
+    /// Create an independently owned copy with [lo, hi] removed.
+    pub fn removeRangeCopy(self: *const Self, allocator: std.mem.Allocator, lo: u32, hi: u32) !Self {
+        return range_ops.removeRangeCopy(self, allocator, lo, hi);
+    }
+
     /// Add a range within a single chunk.
     fn addRangeToChunk(self: *Self, key: u16, start: u16, end: u16) !u64 {
         const range_size: u32 = @as(u32, end) - start + 1;

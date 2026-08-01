@@ -782,6 +782,68 @@ Recorded runs:
 - `misc/parity-20260729-212124-summary.txt` (final M4 production board)
 - `misc/parity-20260729-212134-summary.txt` (final Zen 4 production board, retained on the host)
 
+## Fused removeRangeCopy attribution (07/31/2026)
+
+Spec 30 separated the wide remove-range row into three rawr construction cells while preserving
+the canonical copy-producing contract and timed teardown: baseline `clone` plus `removeRange`, a
+fused copy with normal top-level growth, and the same fused copy with exact final-container
+pre-sizing. CRoaring remained `roaring_bitmap_copy` plus
+`roaring_bitmap_remove_range_closed`, with copy-on-write disabled. Each result is destroyed inside
+the timed region.
+
+The asserted corpus has eight source run containers. One survives unchanged, one produces a
+non-empty boundary difference, and six are fully removed. The fused path therefore constructs two
+result containers instead of cloning eight containers and subsequently constructing the boundary
+difference. Instrumented rawr accounting was identical on both hosts:
+
+| Cell | Container constructions | Alloc calls | Construction frees | Requested bytes | Teardown frees |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 9 | 22 | 16 | 480 | 6 |
+| fused-default | 2 | 6 | 0 | 120 | 6 |
+| fused-presized | 2 | 6 | 0 | 100 | 6 |
+
+CRoaring was timing-only; no allocator-call comparison is claimed. Five fresh processes per cell
+produced these full-operation medians and process ranges:
+
+| Host | CRoaring | Baseline rawr | Fused default | Fused presized |
+| --- | ---: | ---: | ---: | ---: |
+| M4 | 241.577 ns | 286.987 ns (`1.188x`) | 183.716 ns (`0.760x`) | 218.384 ns (`0.904x`) |
+| Zen 4 | 509.180 ns | 312.024 ns (`0.613x`) | 167.310 ns (`0.329x`) | 177.710 ns (`0.349x`) |
+
+Normal growth is the architecture-neutral winner. Exact pre-sizing saves only 20 requested bytes
+and is slower on both hosts, so it remains diagnostic-only. Production `removeRangeCopy` uses
+normal growth and exposes no capacity-policy variant in the public API.
+
+The canonical row therefore keeps its stable `remove-range` ID but now measures
+`removeRangeCopy` against CRoaring copy plus closed-range removal, with result teardown timed on
+both sides. The final production boards closed the M4 gap and improved the already-ahead Zen 4
+result:
+
+| Host | Pre-change rawr / CRoaring | `removeRangeCopy` rawr / CRoaring | Outcome |
+| --- | ---: | ---: | --- |
+| M4 | 427.979 / 229.858 ns (`1.862x`) | 183.228 / 231.323 ns (`0.792x`) | closed |
+| Zen 4 | 254.407 / 617.273 ns (`0.412x`) | 113.257 / 604.248 ns (`0.187x`) | improved |
+
+The full-board regression gate held. The only untouched tuples that worsened by more than 5% in
+the broad boards had overlapping process ranges and disappeared in nine-process focused reruns:
+M4 skewed `andCardinality` moved from 13.711 to 13.609 microseconds (`-0.74%`), and Zen 4 libc
+serialization moved from 0.866 to 0.858 milliseconds (`-0.92%`). No layout exception was needed.
+
+The diagnostic is reproducible with:
+
+```sh
+./scripts/run-bench-remove-range-copy.sh
+```
+
+Recorded runs:
+
+- `misc/remove-range-copy-20260731-100833-summary.txt` (M4)
+- `misc/remove-range-copy-20260731-103146-summary.txt` (Zen 4, retained on the host)
+- `misc/parity-20260731-132111-summary.txt` (M4 pre-change production board)
+- `misc/parity-20260731-194058-summary.txt` (M4 final production board)
+- `misc/parity-20260731-184458-summary.txt` (Zen 4 pre-change production board, retained on the host)
+- `misc/parity-20260731-194353-summary.txt` (Zen 4 final production board, retained on the host)
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad
@@ -842,6 +904,12 @@ Build and run the dense result-construction diagnosis:
 
 ```sh
 ./scripts/run-bench-dense-result-diag.sh
+```
+
+Build and run the fused removeRangeCopy diagnosis:
+
+```sh
+./scripts/run-bench-remove-range-copy.sh
 ```
 
 These scripts build native `ReleaseFast` executables, retain individual process output under

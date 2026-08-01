@@ -65,6 +65,84 @@ test "direct flip keeps its input unchanged across allocation failures" {
     );
 }
 
+test "removeRangeCopy remains source-preserving across allocation failures" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        removeRangeCopyNormalAllocationFailureCase,
+        .{},
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        removeRangeCopyExactAllocationFailureCase,
+        .{},
+    );
+}
+
+test "removeRangeCopy exact sizing excludes an empty boundary" {
+    var input = try RoaringBitmap.init(std.testing.allocator);
+    defer input.deinit();
+    for (10..21) |low| _ = try input.add(value(4, @intCast(low)));
+
+    var result = try range_ops.removeRangeCopyWithCapacity(
+        &input,
+        std.testing.allocator,
+        value(4, 10),
+        value(4, 20),
+        .exact,
+    );
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), result.size);
+    try std.testing.expectEqual(@as(u32, 0), result.capacity);
+    try std.testing.expectEqual(@as(u64, 11), input.cardinality());
+    _ = try result.add(value(9, 1));
+    try std.testing.expect(result.contains(value(9, 1)));
+}
+
+test "removeRangeCopy preserves cache states and independent ownership" {
+    var input = try RoaringBitmap.init(std.testing.allocator);
+    defer input.deinit();
+    try addBitsetChunk(&input, 1);
+    _ = try input.addRange(value(2, 100), value(2, 1000));
+    input.cached_cardinality = -1;
+    input.containers[0].getBitset().cardinality = -1;
+
+    var result = try input.removeRangeCopy(
+        std.testing.allocator,
+        value(2, 200),
+        value(2, 800),
+    );
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(i64, -1), input.cached_cardinality);
+    try std.testing.expectEqual(@as(i64, -1), result.cached_cardinality);
+    try std.testing.expectEqual(@as(i32, -1), input.containers[0].getBitset().cardinality);
+    try std.testing.expectEqual(@as(i32, -1), result.containers[0].getBitset().cardinality);
+    try expectIndependentContainers(&input, &result);
+
+    _ = try result.add(value(50, 7));
+    try std.testing.expect(!input.contains(value(50, 7)));
+    _ = try input.add(value(51, 8));
+    try std.testing.expect(!result.contains(value(51, 8)));
+}
+
+test "removeRangeCopy supports a different result allocator" {
+    var input = try buildFixture(std.testing.allocator, .mixed);
+    defer input.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var result = try input.removeRangeCopy(
+        arena.allocator(),
+        value(10, 50),
+        value(13, 9000),
+    );
+    defer result.deinit();
+
+    try result.validate();
+    try expectIndependentContainers(&input, &result);
+}
+
 fn removeRangeAllocationFailureCase(allocator: std.mem.Allocator) !void {
     var bitmap = try RoaringBitmap.init(allocator);
     defer bitmap.deinit();
@@ -125,6 +203,48 @@ fn flipAllocationFailureCase(allocator: std.mem.Allocator) !void {
     try std.testing.expect(input.equals(&expected));
 }
 
+fn removeRangeCopyNormalAllocationFailureCase(allocator: std.mem.Allocator) !void {
+    return removeRangeCopyAllocationFailureCase(allocator, .normal_growth);
+}
+
+fn removeRangeCopyExactAllocationFailureCase(allocator: std.mem.Allocator) !void {
+    return removeRangeCopyAllocationFailureCase(allocator, .exact);
+}
+
+fn removeRangeCopyAllocationFailureCase(
+    allocator: std.mem.Allocator,
+    comptime capacity_policy: range_ops.RemoveRangeCopyCapacity,
+) !void {
+    var input = try buildFixture(std.testing.allocator, .mixed);
+    defer input.deinit();
+    input.cached_cardinality = -1;
+    input.containers[1].getBitset().cardinality = -1;
+
+    const before = try input.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(before);
+
+    var result = range_ops.removeRangeCopyWithCapacity(
+        &input,
+        allocator,
+        value(10, 50),
+        value(13, 9000),
+        capacity_policy,
+    ) catch |err| {
+        const after = try input.serialize(std.testing.allocator);
+        defer std.testing.allocator.free(after);
+        try std.testing.expectEqualSlices(u8, before, after);
+        try input.validate();
+        return err;
+    };
+    defer result.deinit();
+
+    const after = try input.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(after);
+    try std.testing.expectEqualSlices(u8, before, after);
+    try result.validate();
+    try expectIndependentContainers(&input, &result);
+}
+
 fn runCase(backing: std.mem.Allocator, case: Case) !void {
     var arena = std.heap.ArenaAllocator.init(backing);
     defer arena.deinit();
@@ -134,9 +254,31 @@ fn runCase(backing: std.mem.Allocator, case: Case) !void {
     defer input.deinit();
 
     try compareRemoveRange(allocator, case, &input);
+    try compareRemoveRangeCopy(allocator, case, &input);
     try compareFlipInPlace(allocator, case, &input);
     try compareFlip(allocator, case, &input);
     try compareFlipOwned(allocator, case, &input);
+}
+
+fn compareRemoveRangeCopy(allocator: std.mem.Allocator, case: Case, input: *const RoaringBitmap) !void {
+    var expected = try input.clone(allocator);
+    defer expected.deinit();
+    _ = try expected.removeRange(case.lo, case.hi);
+
+    var normal = try input.removeRangeCopy(allocator, case.lo, case.hi);
+    defer normal.deinit();
+    var exact = try range_ops.removeRangeCopyWithCapacity(input, allocator, case.lo, case.hi, .exact);
+    defer exact.deinit();
+
+    try expectPortableEqual(case.name, &expected, &normal);
+    try expectPortableEqual(case.name, &expected, &exact);
+    try std.testing.expectEqual(expected.cached_cardinality, normal.cached_cardinality);
+    try std.testing.expectEqual(expected.cached_cardinality, exact.cached_cardinality);
+    try std.testing.expectEqual(exact.size, exact.capacity);
+    try expectContainerCacheParity(&expected, &normal);
+    try expectContainerCacheParity(&expected, &exact);
+    try expectIndependentContainers(input, &normal);
+    try expectIndependentContainers(input, &exact);
 }
 
 fn compareRemoveRange(allocator: std.mem.Allocator, case: Case, input: *const RoaringBitmap) !void {
@@ -202,6 +344,24 @@ fn expectPortableEqual(name: []const u8, legacy: *RoaringBitmap, direct: *Roarin
             direct_bytes.len,
         });
         return error.RangeStrategyByteMismatch;
+    }
+}
+
+fn expectContainerCacheParity(expected: *const RoaringBitmap, actual: *const RoaringBitmap) !void {
+    try std.testing.expectEqual(expected.size, actual.size);
+    for (expected.containers[0..expected.size], actual.containers[0..actual.size]) |want, got| {
+        try std.testing.expectEqual(want.getType(), got.getType());
+        if (want.getType() == .bitset) {
+            try std.testing.expectEqual(want.getBitset().cardinality, got.getBitset().cardinality);
+        }
+    }
+}
+
+fn expectIndependentContainers(source: *const RoaringBitmap, result: *const RoaringBitmap) !void {
+    for (source.containers[0..source.size]) |source_container| {
+        for (result.containers[0..result.size]) |result_container| {
+            try std.testing.expect(source_container.addr != result_container.addr);
+        }
     }
 }
 
