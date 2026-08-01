@@ -222,7 +222,9 @@ change adopted at a time so a board-gate movement is attributable to a single ch
   structural (headers), E2 and E4 are compute levers (orMany, select) orthogonal to headers.
   Prototype and measure all three concurrently.
 - **Wave 2 — adoption, one at a time:** integrate at most **one production change at a time**, each
-  behind its own full-board gate.
+  behind its own full-board gate. **If E1 is a GO, adopt its Array and Run changes independently and
+  BEFORE any E2/E4 production change**, then **rebase and re-measure E2/E4** — both access the
+  affected container representations, so their pre-E1 numbers are stale once E1 lands.
 - **Wave 3 — E3**, after the **post-E1 lazy-OR rebaseline** (E1's Array-clone change moves the
   lazy-OR construction baseline E3 measures against; E1 does **not** change bitset-header cost).
 - **Wave 4 — E5**, only if E1 leaves clone/dense-AND open — and E5a (ordering) vs E5b (direct
@@ -236,7 +238,10 @@ Wave 1 alongside E1.
 
 **Parallel-work hygiene:** every diagnostic agent/branch **records the same baseline commit and
 benchmark artifact**; a production candidate is **re-run after rebasing onto the latest accepted
-campaign state** before its board gate (no candidate is judged against a stale baseline).
+campaign state** before its board gate (no candidate is judged against a stale baseline). Give
+parallel agents **disjoint diagnostic files/scripts** (E1 / E2 / E4 each own their own bench module);
+**shared integration points — `build.zig`, parity infrastructure, measurement documentation — are
+owned by the implementer**, not edited concurrently by diagnostic branches.
 
 ## Shared experimental discipline (every experiment inherits)
 
