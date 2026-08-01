@@ -80,8 +80,10 @@ dense clone, dense-AND, and select.
 - Use sites reconstruct a **temporary slice** (`ptr[0..cardinality]` / `ptr[0..capacity]`) so
   **`ReleaseSafe` bounds checking is restored** at access.
 - **Tagged-pointer alignment stays valid** (the 2-bit tag still fits the pointer's low bits).
-- Baseline **24 B → 32-byte slot** and candidate **16 B → 16-byte slot** are **mechanically asserted
-  on both hosts** (compile-time `@sizeOf`/`@alignOf` + the effective SMP-class bytes).
+- Header **`@sizeOf` / `@alignOf`** (24 B → 16 B) are **compile-time asserted**. The **SMP slot
+  class** (32-byte → 16-byte) is **allocator behavior, not a compile-time type property** — it must
+  be **calculated and reported by the benchmark's class accounting on each host**, not asserted from
+  the type.
 - Production migration gets **exhaustive allocation-failure testing** (each op's changed path).
 
 **Risk / surface:** this changes the **core container representation** — every op touches it, and
@@ -103,6 +105,11 @@ destination **once per input bitset**. A **word-major N-way OR** loads each inpu
 registers, and stores the destination **once** — cutting destination memory traffic K-fold. Cells:
 (1) baseline zero-then-input-major; (2) clone first bitset instead of zero+OR; (3) word-major N-way
 OR per key; (4) first-bitset seeding + word-major.
+
+**Pin how the per-key bitset pointers are gathered** for word-major traversal — a **fresh allocation
+per output key** to hold the pointer list could **erase the gain**. The child spec must state the
+collection mechanism (e.g. a reused scratch pointer buffer) and **include collection overhead inside
+the full mixed-corpus cell's timing** — it may **not** be silently excluded.
 
 **Discipline:** first **split accumulation time by array/bitset/run source** — the word-major kernel
 only helps the **bitset** share; establish that share before building it. **Assert bitset
@@ -135,12 +142,28 @@ the transient representation covering: repeated lazy operations, **clone/move**,
 **deinit-before-repair**, **serialization attempts**, and **generic queries** (contains, cardinality,
 rank/select, iteration) — each must have defined, tested behavior, not fall through a default.
 
+**Eliminated vs deferred headers (the load-bearing distinction).** A **surviving** lazy bitset still
+needs its normal header **at repair** — its allocation is merely **moved from construction to
+repair**, not removed. Only bitsets that **demote** permanently eliminate a header allocation. The
+diagnostic must report all five:
+
+1. headers **permanently eliminated** (via demotion),
+2. headers **deferred** to repair (survivors),
+3. **construction-only** allocation reduction,
+4. **full construction-plus-repair** allocation reduction,
+5. **repair regression** from allocating surviving headers there.
+
+Without this split, E3 could greatly improve the **construction-only** row while doing nothing for —
+or **regressing** — the **combined** row. The gate is the **combined** row.
+
 **Numeric stop-gate:** prototype benchmark-only; **count exactly how many header allocations
-disappear** and measure construction, repair, and full lifecycle (repeated lazy ops,
-deinit-before-repair). Pin a **numeric bar** before touching the container union — either a
-**required focused-time improvement** on lazy-OR construction, or a **demonstrated projected path to
-the ≤ 1.10x row gate** (header-alloc-calls removed × measured per-call cost ≥ the residual). "Materially
-move" is not acceptable as the gate; the payoff is the doomed-header **alloc call**, not bytes.
+disappear** (permanently, per split above) and measure construction, repair, and full lifecycle
+(repeated lazy ops, deinit-before-repair). Pin a **numeric bar** before touching the container
+union — either a **required focused-time improvement on the combined construction-plus-repair
+lifecycle**, or a **demonstrated projected path to the ≤ 1.10x row gate** (permanently-eliminated
+header calls × measured per-call cost ≥ the residual). "Materially move" is not acceptable as the
+gate; the payoff is the **permanently-doomed** header **alloc call**, not bytes and not deferred
+survivors.
 
 **Depends on E1 as a REBASELINE, not a header-cost change.** E1 excludes Bitset, so it does **not**
 make E3's bitset headers cheaper. But E1's **Array** compact-header lands in the same lazy-OR
@@ -161,6 +184,11 @@ vs CRoaring disassembly and branch counts on the canonical corpus.
 loop already **regressed** (`docs/parity-measurement.md`). The child spec must **explain how
 homogeneous-run dispatch differs** from that, or **retain it explicitly as a control**, not a
 presumed candidate. **Prefix cardinalities remain the strongest ceiling experiment.**
+
+**Tooling:** **disassembly and focused timing are mandatory** on both hosts; **branch-counter
+collection is best-effort where host tooling permits** — Apple M4 branch counters may not be
+reachable through the same tooling as Zen 4, so a missing M4 branch count does not block the
+experiment.
 
 **Decision rule:** if unrolling or homogeneous dispatch closes it → ship, no storage change. If
 **only** prefix cardinalities close it, choose **explicitly** between (a) an **optional caller-owned
@@ -185,22 +213,30 @@ conflate:
 **Lower confidence** (exact sizing, combined blocks, scratch bypass already failed) —
 **benchmark-only unless focused M4 exceeds noise and Zen 4 stays neutral.**
 
-## Recommended order + information dependencies
+## Waves (diagnostics parallelize; production integration is serial)
 
-**E1 → E2 → E3 → E4 → E5.**
+**Diagnostics parallelize; only production integration serializes** (one representation/behavior
+change adopted at a time so a board-gate movement is attributable to a single change).
 
-- **E1 first** is both highest-leverage *and* information-ordering: its result **gates E5** (if
-  compact headers close clone/dense-AND, E5 is moot) and **shifts the lazy-OR baseline E3 measures
-  against** (via the Array-clone path — not by changing bitset-header cost). One structural
-  experiment that could move three of the largest rows, with a layout that specifically dodges
-  spec 13's size-class failure.
-- **E2 and E4 are independent** compute levers (orMany, select) — orthogonal to headers, safe to
-  interleave / parallelize; sequenced here after E1 only to keep one active structural change at a
-  time.
-- **E3 after E1**, evaluated against a **post-E1 lazy-OR rebaseline** (E1's Array change moves the
-  lazy-OR construction baseline; E1 does **not** change bitset-header cost).
-- **E5 last**, and only if E1 leaves clone/dense-AND open — and E5a (ordering) vs E5b (direct
+- **Wave 1 — diagnostics, in parallel:** **E1, E2, E4.** Independent at the diagnostic stage — E1 is
+  structural (headers), E2 and E4 are compute levers (orMany, select) orthogonal to headers.
+  Prototype and measure all three concurrently.
+- **Wave 2 — adoption, one at a time:** integrate at most **one production change at a time**, each
+  behind its own full-board gate.
+- **Wave 3 — E3**, after the **post-E1 lazy-OR rebaseline** (E1's Array-clone change moves the
+  lazy-OR construction baseline E3 measures against; E1 does **not** change bitset-header cost).
+- **Wave 4 — E5**, only if E1 leaves clone/dense-AND open — and E5a (ordering) vs E5b (direct
   construction) are separate experiments.
+
+**Why E1 still leads structurally** (not sequentially): it is highest-leverage (could move clone,
+dense-AND, select, lazy-array-clones), its result **gates E5** (if it closes clone/dense-AND, E5 is
+moot) and **shifts the lazy-OR baseline E3 measures against** — with a layout that dodges spec 13's
+size-class failure. Leading structurally does **not** mean E2/E4 wait: their diagnostics run in
+Wave 1 alongside E1.
+
+**Parallel-work hygiene:** every diagnostic agent/branch **records the same baseline commit and
+benchmark artifact**; a production candidate is **re-run after rebasing onto the latest accepted
+campaign state** before its board gate (no candidate is judged against a stale baseline).
 
 ## Shared experimental discipline (every experiment inherits)
 
@@ -228,13 +264,15 @@ conflate:
 ## Numbering plan
 
 - **31** — this umbrella (not chunked).
-- Each experiment → **its own toplevel spec number** on activation (E1 first), with its own
-  diagnostic-first chunks (`NN-00` prototype+measure, later chunks conditional on the numbers).
-  Numbers are assigned **when activated**, not reserved now — order and inclusion may change with
-  findings.
+- Each experiment → **its own toplevel spec number** on activation, with its own diagnostic-first
+  chunks (`NN-00` prototype+measure, later chunks conditional on the numbers). Numbers are assigned
+  **when activated**, not reserved now — order and inclusion may change with findings.
 
 ## Immediate next step
 
-Promote **E1 (compact headers)** to its own toplevel spec, draft it in full (prototype variant,
-measurement matrix across both hosts, the assert-16-byte-headers gate, the production-migration
-decision), take review, then chunk. Hold E2–E5 as briefs here until E1's numbers land.
+Promote the **Wave 1** experiments — **E1 (compact headers), E2 (n-way OR fusion), E4 (select
+kernel matrix)** — to their own toplevel specs and **chunk them concurrently**; their diagnostics
+run in parallel. Each: prototype variant, measurement matrix across both hosts, the experiment's
+assert/ceiling gate, the production-migration decision, take review, then chunk. **Production
+integration stays serial** (Wave 2 — one change at a time). E3 (Wave 3) and E5 (Wave 4) stay briefs
+here until their preconditions (post-E1 rebaseline; E1 leaving rows open) are met.
