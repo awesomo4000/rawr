@@ -72,23 +72,33 @@ and select.
 Array and Run at the **canonical 3 warmup / 21 timed, five-process-median** protocol. Repository-only
 diagnostic; no production default changed.
 
-**Pinned diagnostic corpora (assert before timing).** Each is fixed with an explicit seed, count, and
-build mode so the diagnostic cannot drift into a different workload:
+**Pinned diagnostic corpora (assert before timing), tied to the authoritative canonical generators
+in `bench_croaring.zig`:**
 
-- **Array distribution** — pinned cardinality/value distribution and seed for the build / growth /
-  clone / deinit / membership / iteration cells (state the exact N and seed).
-- **Run distribution** — pinned run count / run-length distribution and seed (RunContainer replicas),
-  distinct from Array.
-- **dense-AND operands** — the canonical dense run/run operands used for the dense-run-AND cell.
-- **select queries** — the query set and seed for the select cell.
-- **build mode** — `ReleaseFast` for timing cells, `ReleaseSafe` for the correctness/bounds pass;
-  state which cell runs where.
-- **artifact format** — the committed output columns (per cell: ns, alloc calls, free calls,
-  requested bytes, effective SMP-class bytes, teardown), so runs are comparable across branches.
+- **Run corpus (clone / dense-AND / select / build / growth / deinit / membership / iteration Run
+  cells):** the canonical dense operands — `a = addRange(0, 499999)` → **8 run containers** (keys
+  0–7), `b = addRange(250000, 749999)` (`initRawrDenseBitmaps`). dense-run-AND cell = `a AND b`;
+  select cell operates on `a`.
+- **select queries:** the canonical set — **1,000,000** queries, each `uintLessThan(u32, 500_000)`,
+  from `std.Random.DefaultPrng.init(12345)` (`initTestData`), drawn as the **3rd** per-iteration
+  value (after `int(u32)` then a `uintLessThan(500_000)`).
+- **Array corpus (build / growth / clone / deinit / membership / iteration Array cells AND the
+  targeted lazy-OR-construction array-clone cell):** the canonical **sparse** corpus —
+  `std.Random.DefaultPrng.init(54321)`, `500_000` values `int(u32)` across full u32 space, sorted +
+  deduped (`initSparseValues`), split into halves — which populates the many small **array
+  containers** the sparse 2-way lazy-OR merge clones. The array-clone cell **clones that array-
+  container population** (the E1 Array lever's actual target).
+- **build mode:** `ReleaseFast` for the timing cells; `ReleaseSafe` for the correctness/bounds pass.
+- **artifact format:** committed columns per cell — ns, alloc calls, free calls, requested bytes,
+  effective SMP-class bytes, teardown.
 
-**Per representation (Array, Run), both hosts, SMP, canonical protocol** — cells: reserved build,
-growth, clone, deinit, membership, iteration, dense run-AND, select. **Real compact-header Run
-replicas** — never infer Run from the Array prototype.
+### Operation matrix, split by representation
+
+- **Run cells:** reserved build, growth, clone, deinit, membership, iteration, **dense run-AND**,
+  **select** — on **real compact-header Run replicas** (never inferred from the Array prototype).
+- **Array cells:** reserved build, growth, clone, deinit, membership, iteration, **and the targeted
+  lazy-OR-construction array-clone cell** (clone the sparse array-container population) — the Array
+  lever's actual target row.
 
 - **Accounting per cell:** allocations, frees, requested bytes, **effective SMP-class bytes** (host
   class accounting), teardown — kept distinct (container instances ≠ allocator calls).
@@ -119,7 +129,8 @@ representation** (Array and/or Run) to the compact header in production:
 - **Phase 1 GO/NO-GO recorded per representation** (Array, Run) with the full accounting, both hosts;
   16 B header + 16-byte class + unchanged payload class asserted; no production default changed.
 - **Phase 2 (per representation, if GO):** the targeted rows improve on M4 SMP with Zen 4 within
-  noise, representation-identical output, differential + failure-injection green, board gate held.
+  noise, the **output invariants** (same kind / cardinality / values + portable bytes where
+  serialize valid) + differential + failure-injection green, board gate held.
   **Rows close at ≤ 1.10x; a beneficial partial is adopted by owner judgement and stays open.**
 - `zig build test`; `zig build difftest`; `ReleaseSafe` / `ReleaseFast` green; canonical
   `run-compare-bench.sh` both hosts on any production adoption; `docs/parity-measurement.md` updated.

@@ -12,23 +12,28 @@ dominates.
 
 ## Canonical corpus (pin invariants; assert before timing)
 
-The `select` row: **1,000,000 deterministic select probes over dense range `0..499999`**
-(`bench_parity_worker.zig`) → **8 Run containers** (keys 0–7). Assert before timing:
+The bitmap under `select` is the canonical dense `a = addRange(0, 499999)` → **8 Run containers**
+(keys 0–7) (`initRawrDenseBitmaps`). `select(k: u64) ?u32`. Assert before timing:
 
-- **1,000,000 seeded queries** (state the seed), **values `0..499999`**, **8 Run containers**;
-- the **query distribution** (e.g. uniform over `[0, cardinality)` at the pinned seed) — fixed so
-  cells are comparable.
+- **1,000,000 queries**, each **`uintLessThan(u32, 500_000)`**, from
+  **`std.Random.DefaultPrng.init(12345)`** (`initTestData`), drawn as the **3rd** per-iteration value
+  (order per `i`: `int(u32)` → `uintLessThan(500_000)` → **`uintLessThan(500_000)` ← select** → range
+  draws). This is the exact existing draw — not a re-parameterized uniform.
+- **8 Run containers** over `0..499999`; assert the container inventory.
 
 ## Kernel matrix (both hosts)
 
-1. **Current scalar walk** (baseline).
-2. **2-container unrolled** walk — **shippable candidate**.
-3. **4-container unrolled** walk — **shippable candidate**.
-4. **Homogeneous-run specialization** — **CONTROL, not a presumed candidate.** A prior **integrated
-   run loop already regressed** (`docs/parity-measurement.md`); we cannot yet articulate a concrete
-   algorithm that provably differs, so cell 4 is measured to **confirm/deny that regression on this
-   corpus**, not to ship. It is promoted to a candidate only if a concrete differing algorithm
-   emerges *and* it wins without regressing the mixed-container controls below.
+1. **Current scalar walk** (baseline). The **`noinline` full-`select` boundary** used here is the
+   fixed measurement boundary for **all** cells.
+2. **2-container unrolled walk** — **shippable candidate.** A **full-`select` implementation** that
+   advances the top-level cardinality walk in **2-container groups**, with **identical dispatch and
+   cardinality behavior** to the scalar walk and a **scalar tail** for the remainder; same `noinline`
+   boundary.
+3. **4-container unrolled walk** — **shippable candidate.** As cell 2 but **4-container groups** +
+   scalar tail.
+4. **Homogeneous-run integrated loop** — **historical control only, defined as the exact previously
+   rejected integrated-run implementation** (`docs/parity-measurement.md`). Re-run **solely** to
+   confirm/deny that regression on this corpus; **not a shipping candidate** in this spec.
 5. **Precomputed prefix-cardinality lookup** — **ceiling experiment only** (fully defined below);
    bounds the maximum recoverable, not shippable as-is.
 6. **rawr vs CRoaring disassembly + branch counts** on the canonical corpus.
@@ -48,10 +53,20 @@ The `select` row: **1,000,000 deterministic select probes over dense range `0..4
 
 ## Mixed-container performance controls (before shipping an all-Run winner)
 
-The canonical corpus is **all-Run**. Before adopting any unrolled/specialized kernel, run **control
-cells on Array, Bitset, and mixed-container bitmaps, and on a non-multiple-of-four container count**,
-to ensure the winner does not regress non-Run or non-aligned shapes. A kernel that wins all-Run but
-regresses these controls is **not** architecture-neutral and does not ship.
+The canonical corpus is **all-Run**. Before adopting any unrolled kernel, run pinned control cells to
+ensure the winner does not regress non-Run or non-aligned shapes:
+
+- **Array control** — a bitmap whose containers are **array** containers, built from
+  `std.Random.DefaultPrng.init(54321)` sparse values (`initSparseValues`); select the same 1M
+  `uintLessThan` queries clamped to its cardinality.
+- **Bitset control** — a bitmap of **bitset** containers (e.g. the canonical `bitset_range` corpus,
+  values `0..60000` step 3 per chunk → bitset), same query protocol.
+- **Mixed control** — array + bitset + run containers in one bitmap (the `orMany`-style mixed shape).
+- **Non-multiple-of-four container count** — a bitmap with a container count **not** divisible by 4
+  (e.g. **5** or **7** containers) to exercise the unrolled tail.
+- **Acceptable regression threshold: ≤ 5%** (board noise) on each control at the pinned seed. A
+  kernel that wins all-Run but exceeds 5% on any control is **not** architecture-neutral and does
+  **not** ship.
 
 ## Tooling
 
@@ -86,11 +101,12 @@ regresses these controls is **not** architecture-neutral and does not ship.
 
 - **Identical result** — `select(n)` returns the identical value to the baseline for all valid n;
   CRoaring differential across container-type mixes.
-- **Boundary validation (corrected)** — **`n = 0` is VALID for a nonempty bitmap** (returns the
-  smallest element), not an error. Test: **`0`**, **each prefix boundary** (the first index of each
-  container), **`cardinality - 1`** (last valid), **`cardinality`** (first out-of-range),
-  **empty bitmap**, **`maxInt(u32)`**, and **values above `cardinality`** — each matching the
-  baseline's value or error exactly.
+- **Boundary validation (`?u32` value / null)** — `select(k: u64)` returns the value or **`null`**
+  when out of range (never an error). **`k = 0` is VALID for a nonempty bitmap** (returns the
+  smallest element). Test each returns the **identical `?u32`** to baseline: **`0`**, **each prefix
+  boundary** (first index of each container), **`cardinality - 1`** (last valid → value),
+  **`cardinality`** (first out-of-range → `null`), **empty bitmap** (any k → `null`),
+  **`maxInt(u32) + 1`** and **`maxInt(u64)`** (→ `null`).
 
 ## Acceptance
 
@@ -101,8 +117,9 @@ regresses these controls is **not** architecture-neutral and does not ship.
   production change.
 - **Phase 2 (if a storage-free shape wins):** `select` closes to **≤ 1.10x M4 SMP** (or a beneficial
   partial adopted by owner judgement, row stays open), Zen 4 within noise, identical results, board
-  gate held. **An index (a/b) is out of scope for this spec** unless the ceiling proves it recovers
-  the full gap and a follow-up spec takes the board-wide mutation/memory gates.
+  gate held. **An index is ALWAYS out of scope for this spec** — a winning ceiling does not authorize
+  building one here; it only **authorizes a separate follow-up index spec** (which then takes the
+  board-wide mutation/memory gates and the a/b architecture choice).
 - `zig build test`; `zig build difftest`; `ReleaseSafe` / `ReleaseFast` green; canonical
   `run-compare-bench.sh` both hosts on adoption; `docs/parity-measurement.md` updated.
 

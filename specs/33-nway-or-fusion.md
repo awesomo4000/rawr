@@ -16,13 +16,23 @@ The corpus maps **multiple bitset inputs to one output key**; today rawr streams
 the destination). A **word-major N-way OR** loads each input word, reduces in registers, and stores
 the destination **once** — cutting destination memory traffic ~K-fold.
 
-## Canonical corpus (fingerprint before timing)
+## Canonical corpus (authoritative generator + expected fingerprint)
 
-The canonical row is `or-many`: **"32 deterministic mixed array, bitset, and run-heavy bitmaps"**,
-`batch_count = 128` (`bench_parity_worker.zig`). The diagnostic must **fingerprint this exact
-corpus** — count of inputs (32), per-input container-type inventory, the set of output keys, and the
-resulting per-key source composition — and **assert the fingerprint** so the new diagnostic **cannot
-accidentally construct a different workload** than the shipping row measures.
+The canonical row is `or-many` (`batch_count = 128`). The authoritative generator is
+**`initRawrManyBitmaps` / `addManyPatternRawr`** in `bench_croaring.zig` — the diagnostic **calls the
+same generator** (or asserts an identical fingerprint), never a re-implementation. Expected
+fingerprint:
+
+- **`N_MANY_BITMAPS = 32`** input bitmaps; **6 output keys** (chunks 0–5, `base = chunk << 16`).
+- Per bitmap `i`, per chunk, the pattern is `(i + chunk) % 4`: **0** → 128 scattered adds (array);
+  **1** → 5000 adds (bitset, > 4096); **2** → `addRange(start, start+12000)` (run); **3** → 4 values
+  (tiny array). Bitmaps with `i % 3 == 0` (11 of 32) get `runOptimize()`.
+- **Per output key: for fixed chunk, `i` ∈ 0..31 gives 8 of each pattern** → ~8 bitset sources
+  (pattern 1) per key — the multiplicity the word-major kernel exploits, after accounting for
+  `runOptimize` conversions.
+
+The diagnostic **asserts this fingerprint** (32 inputs, 6 keys, per-key source composition) so it
+**cannot drift** from the shipping row's workload.
 
 ## Establish the bitset share first (gating)
 
@@ -45,17 +55,22 @@ The word-major kernel **only helps the bitset share** of accumulation. Before bu
 
 ## `foldManyKey` — pin the algorithm
 
-Define the exact per-key fold used by the mixed accumulation for **zero, one, and multiple bitsets
-mixed with Array/Run sources**:
+Define the exact per-key fold used by the mixed accumulation. **Distinguish total sources from bitset
+sources** — the existing **total-source-count == 1** clone fast path is preserved; bitset
+multiplicity is classified **only when multiple sources share the key**:
 
 - **cursor advancement** — how the per-key merge advances across the sorted inputs and which source
   types feed the word-major path;
-- **0 bitsets for a key** → array/run-only path unchanged (word-major not invoked);
-- **1 bitset for a key** → seed path (clone-or-adopt the single bitset, then OR the array/run
-  remainder) — no multi-input word loop;
-- **≥2 bitsets** → word-major N-way OR across the bitset sources, then fold the array/run sources;
-- **fallback behavior** — when the key's composition does not qualify (e.g. all-array), fall back to
-  the baseline accumulation with no regression.
+- **total sources == 1 for a key** → **existing clone fast path unchanged** (copy the single source
+  into the result; word-major not invoked), regardless of its type;
+- **multiple sources, 0 bitsets** → array/run-only path unchanged (word-major not invoked);
+- **multiple sources, 1 bitset** → seed path: **copy/clone the bitset into independently owned
+  storage** (inputs are borrowed and immutable — **never adopt source words**), then OR the array/run
+  remainder;
+- **multiple sources, ≥2 bitsets** → word-major N-way OR across the bitset sources into an
+  independently owned accumulator, then fold the array/run sources;
+- **fallback behavior** — when the key's composition does not qualify, fall back to the baseline
+  accumulation with no regression.
 
 ## Scratch ownership (pin)
 
@@ -63,7 +78,10 @@ Pin the per-key bitset-pointer buffer used for word-major traversal — a **fres
 key could erase the gain**:
 
 - **allocation count** (ideally **one** reused buffer for the whole `orMany`, not per key),
-- **capacity** (sized once to the max bitsets-per-key over the corpus),
+- **capacity** — sized to **`bitmaps.len`** (the arbitrary input count is the only sound upper bound
+  on sources-per-key; **not** the canonical corpus's maximum, since `orMany` accepts arbitrary
+  inputs). If a tighter bound is wanted, define an explicit **production prepass** that computes the
+  actual max sources-per-key before sizing — but the default upper bound is `bitmaps.len`.
 - **lifetime and reuse** (reset, not reallocated, between keys),
 - **cleanup** (freed once at the end),
 - **OOM behavior** (buffer allocation failure → clean error, no partial result leaked).
@@ -119,7 +137,8 @@ attribution × the ceiling's per-share improvement, applied to the measured full
   production change).
 - **Phase 2 (if the ceiling justifies it):** the word-major shape closes orMany to **≤ 1.10x M4 SMP**
   (or a beneficial partial adopted by owner judgement, row stays open), Zen 4 within noise,
-  representation-identical output, board gate held.
+  the testable output invariants (same kind / cardinality / values + portable bytes where serialize
+  valid), board gate held.
 - `zig build test`; `zig build difftest`; `ReleaseSafe` / `ReleaseFast` green; canonical
   `run-compare-bench.sh` both hosts on adoption; `docs/parity-measurement.md` updated.
 
