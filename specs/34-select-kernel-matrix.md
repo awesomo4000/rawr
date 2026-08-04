@@ -71,7 +71,8 @@ is checked on non-Run and non-aligned shapes at a matched container count:
   dropped** → keys 0–6, count **7** (not divisible by 4) to exercise the unrolled scalar tail.
 - **Query stream (all controls):** 1M queries from **`std.Random.DefaultPrng.init(12345)`**, each
   **`uintLessThan(u64, cardinality)`** of that control's bitmap — one rule (no modulo/clamp
-  alternative).
+  alternative). **Re-seed `DefaultPrng.init(12345)` independently for each control** so every
+  candidate kernel run on a given control receives the **identical** query stream.
 - **Acceptable regression threshold: ≤ 5%** (board noise) on each control. A kernel that wins all-Run
   but exceeds 5% on any control is **not** architecture-neutral and does **not** ship.
 

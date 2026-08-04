@@ -160,6 +160,10 @@ decidable); production migrations **serialized** (Wave 2 — one change at a tim
   production change. Array GO/NO-GO.
 - **`32-01`** — **Run** compact-header prototype + measurement (real Run replicas), both hosts, assert
   gate; no production change. Run GO/NO-GO.
+- **Note:** `32-00` and `32-01` may run concurrently **only if they own separate diagnostic source
+  files** (e.g. `bench_compact_header_array.zig` / `bench_compact_header_run.zig`) — if both would
+  edit one shared `bench_compact_header.zig`, run them **serially** instead. (Specs 32/33/34 remain
+  safe as concurrent separate tracks.)
 - **`32-02`** — production migration of the **first** winning representation (conditional): invariants,
   failure injection, board gate.
 - **`32-03`** — production migration of the **second** winning representation (conditional): **only

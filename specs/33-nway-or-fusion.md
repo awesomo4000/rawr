@@ -23,7 +23,9 @@ The canonical row is `or-many` (`batch_count = 128`). The authoritative generato
 **private to that module** — so **`33-00` extracts the generator into a shared repository-only helper
 (e.g. `bench_corpus.zig`) imported by BOTH the parity harness and the E2 diagnostic.** Single source
 of truth, no reproduction, no drift (a shared-integration edit — implementer-owned per campaign
-hygiene, not a concurrent diagnostic-branch edit). Asserting type counts alone is **insufficient** —
+hygiene, not a concurrent diagnostic-branch edit). **The refactor itself must retain an asserted
+post-build fingerprint** (the pinned per-key type counts below, checked after the extraction) so the
+extraction **proves it did not change the parity row**. Asserting type counts alone is **insufficient** —
 it would miss changed low values with the same representation; sharing the one generator makes that
 impossible by construction. Expected fingerprint:
 
@@ -150,7 +152,7 @@ contradiction:
   `orMany` row** (pointer collection + folding + assembly + repair), both hosts; collection overhead
   counted; input-immutability + differential green. **The direct full-row measurement is the GO
   evidence**; the projection only gates whether that end-to-end candidate is built.
-- **Phase 2 (if the ceiling justifies it):** the word-major shape closes orMany to **≤ 1.10x M4 SMP**
+- **Phase 2 (if the direct end-to-end `33-00` measurement is GO):** the word-major shape closes orMany to **≤ 1.10x M4 SMP**
   (or a beneficial partial adopted by owner judgement, row stays open), Zen 4 within noise,
   the testable output invariants (same kind / cardinality / values + portable bytes where serialize
   valid), board gate held.
