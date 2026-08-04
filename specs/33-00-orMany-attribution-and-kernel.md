@@ -16,8 +16,9 @@ did not change the parity row**. (Shared-integration edit — implementer-owned.
 
 ## Attribution
 
-- **Split accumulation time by source type (array / bitset / run).** If the bitset share is small,
-  the kernel cannot close the gap — record and stop.
+- **Split accumulation time by source type (array / bitset / run).** The bitset share **feeds the
+  projection** below — it does **not** by itself stop the chunk. Cells 3–5 (kernel + ceiling)
+  **always run**; only the full end-to-end candidate is gated (by the projection).
 - **Pin the exact post-`runOptimize` per-key type counts** (32 inputs, 6 keys, `base = chunk<<16`);
   assert them (not "~8 bitsets").
 

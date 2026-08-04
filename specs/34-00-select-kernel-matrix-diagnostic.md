@@ -15,8 +15,8 @@ Bitmap under select: canonical dense `a = addRange(0, 499999)` → **8 Run conta
 
 ## Matrix (both hosts; cells 1–5)
 
-1. **Scalar walk** (baseline) — its **`noinline` full-`select` boundary** is the fixed boundary for
-   all cells.
+1. **Scalar walk** (baseline). The **`noinline` measurement boundary is the parity-harness wrapper**
+   (production `select` stays inlineable); that same wrapper is the fixed boundary for **all** cells.
 2. **2-container unrolled** — full-`select`, identical dispatch/cardinality behavior, scalar tail,
    same boundary. **Shippable candidate.**
 3. **4-container unrolled** — as (2), 4-container groups. **Shippable candidate.**

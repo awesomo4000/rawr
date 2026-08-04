@@ -65,13 +65,34 @@ and select.
 - **Payload unchanged** — asserted per case: same **requested length, alignment, and SMP-class
   bytes** as baseline (not assumed power-of-two).
 
+## Candidate execution mechanism (how full-row candidates run REAL code)
+
+A standalone compact container replica **cannot** execute the production `lazyOr` / `clone` /
+dense-AND / `select` paths — `TaggedPtr` and `Container` cast directly to the concrete production
+container layouts. **Duplicating bitmap operations in the diagnostic is forbidden** (it would measure
+code that differs from production). The two tiers therefore execute differently:
+
+- **Container-level replica cells** → **standalone replica structs** in the E1-owned diagnostic files
+  (no bitmap, no production edit) — these give header-cost attribution and run **concurrently**.
+- **Full-bitmap GO rows** → **compile-time layout selection**: a comptime flag switches
+  `ArrayContainer` / `RunContainer` to the compact header while the **default build stays unchanged**,
+  so the **real** `lazyOr` / `clone` / dense-AND / `select` code runs on the compact layout. Because
+  this edits the shared container files, each representation's full-row candidate is **built and
+  measured in an isolated diagnostic worktree** and compared against the committed baseline
+  executable; it is **not merged** until adoption (`32-02` / `32-03`).
+
+**Parallelism consequence:** the container microbenchmarks (`32-00`/`32-01` replica cells) run
+concurrently; the **full candidate builds need separate worktrees and cannot be merged
+concurrently** (Wave 2 serial adoption already enforces this).
+
 ## Phase 1 — diagnostic prototype (benchmark-only, both hosts)
 
 **Module: a new E1-owned diagnostic module** (e.g. `bench_compact_header.zig`). The existing
 `bench_single_alloc.zig` is **Array-only** and uses a **1 warmup / 9 timed** protocol — E1 does
 **not** edit it; it may reuse its harness patterns but adds a **separate module** covering **both**
 Array and Run at the **canonical 3 warmup / 21 timed, five-process-median** protocol. Repository-only
-diagnostic; no production default changed.
+diagnostic; no production default changed. **Full-row candidates use compile-time layout selection in
+an isolated worktree** (above), never duplicated bitmap code.
 
 **Pinned diagnostic corpora (assert before timing), tied to the authoritative canonical generators
 in `bench_croaring.zig`:**

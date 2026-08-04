@@ -11,7 +11,10 @@ found only a ceiling win, this chunk does **not** run — an index is a separate
 
 - Replace the scalar top-level cardinality walk in production `select` with the winning **unrolled
   walk** (2- or 4-container groups + scalar tail), **identical dispatch and cardinality behavior** to
-  the scalar walk, same `noinline` boundary. **No stored metadata / no index.**
+  the scalar walk. **No stored metadata / no index.**
+- **Production `select` remains inlineable exactly as before** — the change does **not** add a
+  `noinline` boundary to production. The `noinline` measurement boundary belongs only to the **parity
+  harness wrapper**, which wraps baseline and candidate identically.
 
 ## Constraints / gates
 

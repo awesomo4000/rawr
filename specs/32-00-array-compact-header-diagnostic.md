@@ -6,11 +6,16 @@ Toplevel: [32-compact-container-headers.md](32-compact-container-headers.md) (E1
 compact **`ArrayContainer`** header (24 B → 16 B, 32-byte → 16-byte SMP slot, payload untouched) and
 measure it. **Benchmark-only; no production default changed.** Produces the **Array GO/NO-GO**.
 
-## Prototype
+## Prototype (two tiers — see toplevel "Candidate execution mechanism")
 
-- **E1-owned diagnostic module** (own source file, e.g. `bench_compact_header_array.zig`, so this can
-  run concurrently with `32-01` — else serialize). Not an edit to `bench_single_alloc.zig`.
-- Compact `ArrayContainer` variant: `values` becomes `[*]align(32) u16` (8 B) + `cardinality: u16` +
+- **Container-level replica cells** → **standalone replica struct** in an E1-owned diagnostic file
+  (e.g. `bench_compact_header_array.zig`, so this runs concurrently with `32-01` — else serialize).
+  Not an edit to `bench_single_alloc.zig`. No bitmap, no production edit.
+- **Full-bitmap GO row** (`lazyOr(...,true)`) → **compile-time layout selection** switching
+  `ArrayContainer` to the compact header (default build unchanged), built and measured in an
+  **isolated diagnostic worktree** vs the committed baseline executable. **Do NOT duplicate bitmap
+  ops** in the diagnostic.
+- Compact `ArrayContainer`: `values` becomes `[*]align(32) u16` (8 B) + `cardinality: u16` +
   `capacity: u16` = 16 B. `cardinality` bounds reads; `capacity` controls growth/dealloc; use sites
   reconstruct a temporary slice (`ptr[0..cardinality]` / `ptr[0..capacity]`) so `ReleaseSafe` bounds
   checks hold.
@@ -46,5 +51,8 @@ population the sparse 2-way lazy-OR merge clones.
   cell; 16 B header + 16-byte class + unchanged payload asserted.
 - **Array GO requires movement in the full-bitmap `lazyOr(...,true)` row**, not the isolated clone
   cell alone. Record GO/NO-GO with both hosts' numbers.
-- Named, committed diagnostic artifact; **no production default changed**.
-- `zig build test` green; diagnostic section of `docs/parity-measurement.md` updated.
+- Named, committed diagnostic artifact; **no production default changed** (compile-time layout flag
+  defaults off; full-row candidate lives in a worktree, unmerged).
+- `zig build test` green; **both `ReleaseSafe` and `ReleaseFast` diagnostic runs green** — this chunk
+  depends specifically on the reconstructed-slice `ReleaseSafe` bounds behavior, so run both modes;
+  diagnostic section of `docs/parity-measurement.md` updated.

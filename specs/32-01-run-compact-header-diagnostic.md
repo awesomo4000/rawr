@@ -7,11 +7,15 @@ compact **`RunContainer`** header (24 B → 16 B, 32-byte → 16-byte SMP slot, 
 measure it. **Benchmark-only; no production default changed.** Produces the **Run GO/NO-GO**.
 Independent of `32-00` (separate GO/NO-GO); may run concurrently only with separate source files.
 
-## Prototype
+## Prototype (two tiers — see toplevel "Candidate execution mechanism")
 
-- **E1-owned diagnostic module** (own source file, e.g. `bench_compact_header_run.zig`). **Real
-  compact-header Run replicas** — never inferred from the Array prototype.
-- Compact `RunContainer` variant: `runs` becomes `[*]RunPair` (8 B) + `n_runs: u16` + `capacity: u16`
+- **Container-level replica cells** → **standalone Run replica struct** in an E1-owned diagnostic file
+  (e.g. `bench_compact_header_run.zig`). **Real compact-header Run replicas** — never inferred from
+  the Array prototype. No bitmap, no production edit.
+- **Full-bitmap GO rows** (clone / dense-AND / select) → **compile-time layout selection** switching
+  `RunContainer` to the compact header (default build unchanged), built and measured in an **isolated
+  diagnostic worktree** vs the committed baseline executable. **Do NOT duplicate bitmap ops.**
+- Compact `RunContainer`: `runs` becomes `[*]RunPair` (8 B) + `n_runs: u16` + `capacity: u16`
   + `cardinality: i32` = 16 B. `n_runs` bounds reads; `capacity` controls growth/dealloc; use sites
   reconstruct a temporary slice so `ReleaseSafe` bounds checks hold.
 
@@ -43,5 +47,8 @@ per-iteration draw).
   reported per cell; 16 B header + 16-byte class + unchanged payload asserted.
 - **Run GO requires movement in the canonical full-bitmap rows** (clone / dense-AND / select), not
   the replica microbenchmark alone. Record GO/NO-GO with both hosts' numbers.
-- Named, committed diagnostic artifact; **no production default changed**.
-- `zig build test` green; diagnostic section of `docs/parity-measurement.md` updated.
+- Named, committed diagnostic artifact; **no production default changed** (compile-time layout flag
+  defaults off; full-row candidate lives in a worktree, unmerged).
+- `zig build test` green; **both `ReleaseSafe` and `ReleaseFast` diagnostic runs green** — this chunk
+  depends specifically on the reconstructed-slice `ReleaseSafe` bounds behavior, so run both modes;
+  diagnostic section of `docs/parity-measurement.md` updated.
