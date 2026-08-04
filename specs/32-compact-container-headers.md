@@ -58,9 +58,10 @@ and select.
   **`ReleaseSafe` bounds checking is restored** at access — no raw unchecked indexing on hot paths.
 - **Tagged-pointer alignment stays valid** — the 2-bit tag still fits the container pointer's low
   bits (`@alignOf` of the header ≥ 4).
-- **Header `@sizeOf` / `@alignOf`** (24→16) are **compile-time asserted**. The **SMP slot class**
-  (32→16) is **allocator behavior, not a compile-time property** — **calculated and reported by the
-  benchmark's class accounting on each host**, not asserted from the type.
+- **Header `@sizeOf` makes the 24→16 transition** (compile-time asserted); **`@alignOf` is asserted
+  separately** (it must stay ≥ 4 for the tag, but it does not itself effect the size transition). The
+  **SMP slot class** (32→16) is **allocator behavior, not a compile-time property** — **calculated
+  and reported by the benchmark's class accounting on each host**, not asserted from the type.
 - **Payload unchanged** — asserted per case: same **requested length, alignment, and SMP-class
   bytes** as baseline (not assumed power-of-two).
 
@@ -83,22 +84,35 @@ in `bench_croaring.zig`:**
   from `std.Random.DefaultPrng.init(12345)` (`initTestData`), drawn as the **3rd** per-iteration
   value (after `int(u32)` then a `uintLessThan(500_000)`).
 - **Array corpus (build / growth / clone / deinit / membership / iteration Array cells AND the
-  targeted lazy-OR-construction array-clone cell):** the canonical **sparse** corpus —
+  targeted lazy-OR-construction cell):** the canonical **sparse** corpus —
   `std.Random.DefaultPrng.init(54321)`, `500_000` values `int(u32)` across full u32 space, sorted +
-  deduped (`initSparseValues`), split into halves — which populates the many small **array
-  containers** the sparse 2-way lazy-OR merge clones. The array-clone cell **clones that array-
-  container population** (the E1 Array lever's actual target).
+  deduped to `sparse_len` (`initSparseValues`), then (`initRawrSparseBitmaps`) **`a` =
+  `sparse_values[0..half]`, `b` = `sparse_values[half/2..]`** where `half = sparse_len/2` — an
+  **overlapping quarter-to-end slice, not a clean half-split**. This populates the many small
+  **array containers** the sparse 2-way lazy-OR merge clones.
 - **build mode:** `ReleaseFast` for the timing cells; `ReleaseSafe` for the correctness/bounds pass.
 - **artifact format:** committed columns per cell — ns, alloc calls, free calls, requested bytes,
   effective SMP-class bytes, teardown.
 
 ### Operation matrix, split by representation
 
-- **Run cells:** reserved build, growth, clone, deinit, membership, iteration, **dense run-AND**,
-  **select** — on **real compact-header Run replicas** (never inferred from the Array prototype).
-- **Array cells:** reserved build, growth, clone, deinit, membership, iteration, **and the targeted
-  lazy-OR-construction array-clone cell** (clone the sparse array-container population) — the Array
-  lever's actual target row.
+Each representation has **two tiers**, and **GO requires movement in the canonical full-bitmap row,
+not only the container-level replica microbenchmark** (a replica clone cell can overstate E1's
+end-to-end impact):
+
+- **Run cells:**
+  - *container-level replicas:* reserved build, growth, clone, deinit, membership, iteration — on
+    **real compact-header Run replicas** (never inferred from the Array prototype);
+  - *full-bitmap rows (the GO gate):* dense **clone**, **dense run-AND** (`a AND b`), **select** on
+    the canonical dense bitmap.
+- **Array cells:**
+  - *container-level replicas:* reserved build, growth, clone, deinit, membership, iteration on the
+    sparse array-container population;
+  - *isolated attribution cell:* clone the sparse array-container population (counts the header
+    cost) — **attribution only**;
+  - *full-bitmap row (the GO gate):* run the **actual canonical `lazyOr(a, b, /*bitset_conversion=*/
+    true)` construction path** and **report how many unmatched Array headers it clones** — the
+    end-to-end row E1's Array lever must move, not the isolated clone cell alone.
 
 - **Accounting per cell:** allocations, frees, requested bytes, **effective SMP-class bytes** (host
   class accounting), teardown — kept distinct (container instances ≠ allocator calls).
@@ -127,7 +141,9 @@ representation** (Array and/or Run) to the compact header in production:
 ## Acceptance
 
 - **Phase 1 GO/NO-GO recorded per representation** (Array, Run) with the full accounting, both hosts;
-  16 B header + 16-byte class + unchanged payload class asserted; no production default changed.
+  16 B header + 16-byte class + unchanged payload class asserted; **GO requires movement in the
+  canonical full-bitmap row** (Run: clone / dense-AND / select; Array: `lazyOr(...,true)`
+  construction) — **not** the container-level replica alone; no production default changed.
 - **Phase 2 (per representation, if GO):** the targeted rows improve on M4 SMP with Zen 4 within
   noise, the **output invariants** (same kind / cardinality / values + portable bytes where
   serialize valid) + differential + failure-injection green, board gate held.

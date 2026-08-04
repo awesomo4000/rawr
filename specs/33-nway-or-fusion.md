@@ -27,12 +27,13 @@ fingerprint:
 - Per bitmap `i`, per chunk, the pattern is `(i + chunk) % 4`: **0** → 128 scattered adds (array);
   **1** → 5000 adds (bitset, > 4096); **2** → `addRange(start, start+12000)` (run); **3** → 4 values
   (tiny array). Bitmaps with `i % 3 == 0` (11 of 32) get `runOptimize()`.
-- **Per output key: for fixed chunk, `i` ∈ 0..31 gives 8 of each pattern** → ~8 bitset sources
-  (pattern 1) per key — the multiplicity the word-major kernel exploits, after accounting for
-  `runOptimize` conversions.
+- **Per output key: for fixed chunk, `i` ∈ 0..31 gives 8 of each pattern** before `runOptimize`. The
+  post-`runOptimize` per-key type counts are the multiplicity the word-major kernel exploits.
 
-The diagnostic **asserts this fingerprint** (32 inputs, 6 keys, per-key source composition) so it
-**cannot drift** from the shipping row's workload.
+`33-00` **generates and pins the exact post-`runOptimize` per-key type counts** (array / bitset / run
+sources per key) — not an approximate "~8 bitsets" — and the diagnostic **asserts that pinned
+fingerprint** (32 inputs, 6 keys, exact per-key source composition) so it **cannot drift** from the
+shipping row's workload.
 
 ## Establish the bitset share first (gating)
 
@@ -92,11 +93,16 @@ silently excluded.
 ## Ceiling → full-ratio projection (pin)
 
 A fast **synthetic bitset-only ceiling does not by itself prove the end-to-end `orMany` row reaches
-≤ 1.10x** — the row also pays array/run folding, top-level assembly, and repair. The spec must define
-**how the ceiling projects into the complete mixed ratio**: the bitset-share fraction from
-attribution × the ceiling's per-share improvement, applied to the measured full-row time, gives the
-**projected mixed ratio**. Phase 1 proceeds to production only if that **projected full-row ratio**
-(not the synthetic ceiling alone) can reach the gate.
+≤ 1.10x** — the row also pays array/run folding, top-level assembly, and repair. Two-step:
+
+- **Projection = stop-gate (early):** the bitset-share fraction from attribution × the ceiling's
+  per-share improvement, applied to the measured full-row time, gives the **projected mixed ratio**.
+  If that projection **cannot** reach the gate, stop — do not build the kernel.
+- **Direct end-to-end measurement = GO evidence (decisive):** if the projection clears, `33-00`
+  builds a **benchmark-only implementation of the winning shape and times it on the complete
+  canonical `orMany` row** — including **pointer collection, Array/Run folding, top-level assembly,
+  and repair**. This **directly measured full-row ratio**, not the Amdahl projection, is the GO
+  evidence, since the candidate can be measured directly rather than extrapolated.
 
 ## Correctness
 
@@ -130,11 +136,13 @@ attribution × the ceiling's per-share improvement, applied to the measured full
 
 ## Acceptance
 
-- **Phase 1 GO:** corpus fingerprint asserted; bitset share and per-key multiplicity reported;
-  bitset-only ceiling **projected into the full mixed ratio** (not the synthetic ceiling alone); the
-  four accumulation cells timed both hosts; collection overhead counted; input-immutability +
-  differential green. If the **projected full-row ratio** cannot reach ≤ 1.10x, record and stop (no
-  production change).
+- **Phase 1 GO:** corpus fingerprint (exact post-`runOptimize` per-key type counts) asserted; bitset
+  share and per-key multiplicity reported; bitset-only ceiling **projected** as the early stop-gate;
+  the four accumulation cells timed both hosts; and — decisively — a **benchmark-only end-to-end
+  implementation of the winning shape timed directly on the full canonical `orMany` row** (pointer
+  collection + folding + assembly + repair), both hosts; collection overhead counted;
+  input-immutability + differential green. If the projection cannot reach ≤ 1.10x, stop before
+  building the kernel; **the direct full-row measurement is the GO evidence**, not the projection.
 - **Phase 2 (if the ceiling justifies it):** the word-major shape closes orMany to **≤ 1.10x M4 SMP**
   (or a beneficial partial adopted by owner judgement, row stays open), Zen 4 within noise,
   the testable output invariants (same kind / cardinality / values + portable bytes where serialize
@@ -144,9 +152,11 @@ attribution × the ceiling's per-share improvement, applied to the measured full
 
 ## Proposed chunk plan (confirm at review)
 
-- **`33-00`** — attribution (source-type split, per-key multiplicity) + the five cells including the
-  bitset-only ceiling, both hosts; collection overhead counted; no production change. Decides
-  whether the ceiling justifies proceeding.
+- **`33-00`** — attribution (source-type split, pinned post-`runOptimize` per-key type counts) + the
+  five cells including the bitset-only ceiling **and a benchmark-only end-to-end implementation of
+  the winning shape timed on the full canonical `orMany` row**, both hosts; collection overhead
+  counted; no production change. The direct full-row number (not the projection) decides whether to
+  proceed.
 - **`33-01`** — production word-major kernel (conditional on `33-00`): identity, input-immutability,
   board gate, ship the winning shape.
 

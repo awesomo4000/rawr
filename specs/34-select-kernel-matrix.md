@@ -31,12 +31,14 @@ The bitmap under `select` is the canonical dense `a = addRange(0, 499999)` → *
    boundary.
 3. **4-container unrolled walk** — **shippable candidate.** As cell 2 but **4-container groups** +
    scalar tail.
-4. **Homogeneous-run integrated loop** — **historical control only, defined as the exact previously
-   rejected integrated-run implementation** (`docs/parity-measurement.md`). Re-run **solely** to
-   confirm/deny that regression on this corpus; **not a shipping candidate** in this spec.
-5. **Precomputed prefix-cardinality lookup** — **ceiling experiment only** (fully defined below);
+4. **Precomputed prefix-cardinality lookup** — **ceiling experiment only** (fully defined below);
    bounds the maximum recoverable, not shippable as-is.
-6. **rawr vs CRoaring disassembly + branch counts** on the canonical corpus.
+5. **rawr vs CRoaring disassembly + branch counts** on the canonical corpus.
+
+**Homogeneous-run integrated loop is NOT a cell.** A prior integrated run loop already regressed
+(`docs/parity-measurement.md`), but its prose does not define enough code to recreate an exact
+historical control, and the real-repo commit is not referenced here — so it is **omitted**, not
+recreated. The documented regression stands on its own; do not re-derive it.
 
 ## Prefix-cardinality ceiling (fully defined)
 
@@ -53,20 +55,25 @@ The bitmap under `select` is the canonical dense `a = addRange(0, 499999)` → *
 
 ## Mixed-container performance controls (before shipping an all-Run winner)
 
-The canonical corpus is **all-Run**. Before adopting any unrolled kernel, run pinned control cells to
-ensure the winner does not regress non-Run or non-aligned shapes:
+The canonical corpus is **all-Run** (8 containers). Before adopting any unrolled kernel, run these
+**pinned, comparable-shape control corpora** (all 8 containers except the tail control) so the winner
+is checked on non-Run and non-aligned shapes at a matched container count:
 
-- **Array control** — a bitmap whose containers are **array** containers, built from
-  `std.Random.DefaultPrng.init(54321)` sparse values (`initSparseValues`); select the same 1M
-  `uintLessThan` queries clamped to its cardinality.
-- **Bitset control** — a bitmap of **bitset** containers (e.g. the canonical `bitset_range` corpus,
-  values `0..60000` step 3 per chunk → bitset), same query protocol.
-- **Mixed control** — array + bitset + run containers in one bitmap (the `orMany`-style mixed shape).
-- **Non-multiple-of-four container count** — a bitmap with a container count **not** divisible by 4
-  (e.g. **5** or **7** containers) to exercise the unrolled tail.
-- **Acceptable regression threshold: ≤ 5%** (board noise) on each control at the pinned seed. A
-  kernel that wins all-Run but exceeds 5% on any control is **not** architecture-neutral and does
-  **not** ship.
+- **8 Array containers** — keys 0–7, each an array container populated to a fixed cardinality (e.g.
+  2048 values per container) from `std.Random.DefaultPrng.init(54321)` (`addArrayContainersRawr`-
+  style), one container per key.
+- **8 Bitset containers** — keys 0–7, each a **bitset** container (cardinality > 4096 per key, e.g. a
+  fixed dense fill per chunk) — a **multi-container** bitset corpus, **not** the single-container
+  `bitset_range`.
+- **8 Mixed containers** — keys 0–7 alternating array / bitset / run (a fixed, pinned type-per-key
+  assignment, e.g. `[array, bitset, run, array, bitset, run, array, bitset]`).
+- **Tail control: 7 containers** — one shape (reuse the 8-Run build, drop key 7) so the container
+  count is **not** divisible by 4 and exercises the unrolled scalar tail.
+- **Query stream (all controls):** the same 1M-query protocol, but drawn with a **deterministic
+  `uintLessThan(cardinality)` stream** (or `query % cardinality`) at the pinned seed — **not**
+  "clamped to cardinality," which biases toward the last rank.
+- **Acceptable regression threshold: ≤ 5%** (board noise) on each control. A kernel that wins all-Run
+  but exceeds 5% on any control is **not** architecture-neutral and does **not** ship.
 
 ## Tooling
 
@@ -125,7 +132,7 @@ ensure the winner does not regress non-Run or non-aligned shapes:
 
 ## Proposed chunk plan (confirm at review)
 
-- **`34-00`** — corpus invariants + the kernel matrix (cells 1–6) both hosts, ceiling established
+- **`34-00`** — corpus invariants + the kernel matrix (cells 1–5) both hosts, ceiling established
   (build cost + footprint), mixed-container controls, disasm/branch evidence; no production change.
   Decides **storage-free GO/NO-GO** and **whether an index spec is justified** (not its
   architecture).
