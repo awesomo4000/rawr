@@ -78,8 +78,27 @@ code that differs from production). The two tiers therefore execute differently:
   `ArrayContainer` / `RunContainer` to the compact header while the **default build stays unchanged**,
   so the **real** `lazyOr` / `clone` / dense-AND / `select` code runs on the compact layout. Because
   this edits the shared container files, each representation's full-row candidate is **built and
-  measured in an isolated diagnostic worktree** and compared against the committed baseline
-  executable; it is **not merged** until adoption (`32-02` / `32-03`).
+  measured in an isolated diagnostic worktree**; it is **not merged** until adoption (`32-02` /
+  `32-03`).
+
+**Three-way comparison (isolate the layout effect from the refactor).** Comparing the compact
+candidate directly against the committed baseline **conflates two effects**: the actual 24→16-byte
+layout change *and* the source refactor that adds compile-time selection + reconstructed-slice
+accessors. Measure three builds:
+
+1. **Committed baseline** — current source.
+2. **Candidate source, compact flag OFF** — proves the selection/accessor **infrastructure is timing-
+   and instruction-neutral**.
+3. **Same candidate source, compact flag ON** — isolates the actual **header-layout** effect.
+
+**GO comparison is `(3) vs (2)`.** Also compare **`(2) vs (1)`** and require it **within noise with
+instruction-equivalent relevant kernels** — otherwise the infrastructure movement is separately
+accounted for before any layout conclusion.
+
+**Correctness before performance (both flag states).** These worktrees carry a near-complete
+representation migration, so **both flag OFF and flag ON** must pass **`zig build test`, `zig build
+difftest`, `ReleaseSafe`, and `ReleaseFast`** — validate correctness **before** accepting any
+performance number.
 
 **Parallelism consequence:** the container microbenchmarks (`32-00`/`32-01` replica cells) run
 concurrently; the **full candidate builds need separate worktrees and cannot be merged

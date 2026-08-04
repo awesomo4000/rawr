@@ -13,8 +13,12 @@ measure it. **Benchmark-only; no production default changed.** Produces the **Ar
   Not an edit to `bench_single_alloc.zig`. No bitmap, no production edit.
 - **Full-bitmap GO row** (`lazyOr(...,true)`) → **compile-time layout selection** switching
   `ArrayContainer` to the compact header (default build unchanged), built and measured in an
-  **isolated diagnostic worktree** vs the committed baseline executable. **Do NOT duplicate bitmap
-  ops** in the diagnostic.
+  **isolated diagnostic worktree**. **Do NOT duplicate bitmap ops** in the diagnostic.
+- **Three-way comparison (see toplevel):** (1) committed baseline; (2) candidate source, **flag OFF**;
+  (3) candidate source, **flag ON**. **GO = (3) vs (2)** (isolates the layout effect); **(2) vs (1)**
+  must be within noise with instruction-equivalent kernels, else the infrastructure movement is
+  separately accounted for. **Correctness before perf:** both flag states pass `zig build test`,
+  `zig build difftest`, `ReleaseSafe`, `ReleaseFast` before any number is accepted.
 - Compact `ArrayContainer`: `values` becomes `[*]align(32) u16` (8 B) + `cardinality: u16` +
   `capacity: u16` = 16 B. `cardinality` bounds reads; `capacity` controls growth/dealloc; use sites
   reconstruct a temporary slice (`ptr[0..cardinality]` / `ptr[0..capacity]`) so `ReleaseSafe` bounds
@@ -49,10 +53,13 @@ population the sparse 2-way lazy-OR merge clones.
 
 - Corpus fingerprint asserted; all cells run both hosts; the five accounting figures reported per
   cell; 16 B header + 16-byte class + unchanged payload asserted.
-- **Array GO requires movement in the full-bitmap `lazyOr(...,true)` row**, not the isolated clone
-  cell alone. Record GO/NO-GO with both hosts' numbers.
+- **Array GO requires movement in the full-bitmap `lazyOr(...,true)` row measured as `(3) vs (2)`**
+  (flag ON vs flag OFF, same candidate source), not the isolated clone cell alone and not vs the
+  committed baseline; **`(2) vs (1)` within noise** (or infrastructure movement separately
+  accounted). Record GO/NO-GO with both hosts' numbers.
 - Named, committed diagnostic artifact; **no production default changed** (compile-time layout flag
   defaults off; full-row candidate lives in a worktree, unmerged).
-- `zig build test` green; **both `ReleaseSafe` and `ReleaseFast` diagnostic runs green** — this chunk
-  depends specifically on the reconstructed-slice `ReleaseSafe` bounds behavior, so run both modes;
-  diagnostic section of `docs/parity-measurement.md` updated.
+- **Correctness before perf, both flag states:** flag OFF **and** flag ON each pass `zig build test`,
+  `zig build difftest`, `ReleaseSafe`, and `ReleaseFast` — this chunk depends specifically on the
+  reconstructed-slice `ReleaseSafe` bounds behavior — **before** any performance number is accepted.
+  Diagnostic section of `docs/parity-measurement.md` updated.
