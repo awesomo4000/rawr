@@ -19,9 +19,13 @@ the destination **once** — cutting destination memory traffic ~K-fold.
 ## Canonical corpus (authoritative generator + expected fingerprint)
 
 The canonical row is `or-many` (`batch_count = 128`). The authoritative generator is
-**`initRawrManyBitmaps` / `addManyPatternRawr`** in `bench_croaring.zig` — the diagnostic **calls the
-same generator** (or asserts an identical fingerprint), never a re-implementation. Expected
-fingerprint:
+**`initRawrManyBitmaps` / `addManyPatternRawr`** in `bench_croaring.zig`, but those functions are
+**private to that module** — so **`33-00` extracts the generator into a shared repository-only helper
+(e.g. `bench_corpus.zig`) imported by BOTH the parity harness and the E2 diagnostic.** Single source
+of truth, no reproduction, no drift (a shared-integration edit — implementer-owned per campaign
+hygiene, not a concurrent diagnostic-branch edit). Asserting type counts alone is **insufficient** —
+it would miss changed low values with the same representation; sharing the one generator makes that
+impossible by construction. Expected fingerprint:
 
 - **`N_MANY_BITMAPS = 32`** input bitmaps; **6 output keys** (chunks 0–5, `base = chunk << 16`).
 - Per bitmap `i`, per chunk, the pattern is `(i + chunk) % 4`: **0** → 128 scattered adds (array);
@@ -93,16 +97,19 @@ silently excluded.
 ## Ceiling → full-ratio projection (pin)
 
 A fast **synthetic bitset-only ceiling does not by itself prove the end-to-end `orMany` row reaches
-≤ 1.10x** — the row also pays array/run folding, top-level assembly, and repair. Two-step:
+≤ 1.10x** — the row also pays array/run folding, top-level assembly, and repair. Three steps, no
+contradiction:
 
-- **Projection = stop-gate (early):** the bitset-share fraction from attribution × the ceiling's
-  per-share improvement, applied to the measured full-row time, gives the **projected mixed ratio**.
-  If that projection **cannot** reach the gate, stop — do not build the kernel.
-- **Direct end-to-end measurement = GO evidence (decisive):** if the projection clears, `33-00`
-  builds a **benchmark-only implementation of the winning shape and times it on the complete
-  canonical `orMany` row** — including **pointer collection, Array/Run folding, top-level assembly,
-  and repair**. This **directly measured full-row ratio**, not the Amdahl projection, is the GO
-  evidence, since the candidate can be measured directly rather than extrapolated.
+1. **Always build the benchmark-only word-major kernel + ceiling cells** (cells 3–5). These are
+   needed to measure the kernel and bound the achievable gain regardless of projection.
+2. **Projection decides whether to build/run the complete end-to-end candidate.** The bitset-share
+   fraction × the ceiling's per-share improvement, applied to the measured full-row time, gives the
+   **projected mixed ratio**. If it cannot reach the gate, **do not build the full end-to-end
+   candidate** — record and stop (the kernel/ceiling cells from step 1 still ran).
+3. **Direct end-to-end timing decides whether production work proceeds.** If the projection clears,
+   `33-00` builds the **benchmark-only end-to-end candidate** (winning shape on the complete
+   canonical `orMany` row — pointer collection, Array/Run folding, assembly, repair) and times it
+   directly. This **directly measured full-row ratio**, not the projection, is the GO evidence.
 
 ## Correctness
 
@@ -137,12 +144,12 @@ A fast **synthetic bitset-only ceiling does not by itself prove the end-to-end `
 ## Acceptance
 
 - **Phase 1 GO:** corpus fingerprint (exact post-`runOptimize` per-key type counts) asserted; bitset
-  share and per-key multiplicity reported; bitset-only ceiling **projected** as the early stop-gate;
-  the four accumulation cells timed both hosts; and — decisively — a **benchmark-only end-to-end
-  implementation of the winning shape timed directly on the full canonical `orMany` row** (pointer
-  collection + folding + assembly + repair), both hosts; collection overhead counted;
-  input-immutability + differential green. If the projection cannot reach ≤ 1.10x, stop before
-  building the kernel; **the direct full-row measurement is the GO evidence**, not the projection.
+  share and per-key multiplicity reported; the **kernel + ceiling cells always built and timed** both
+  hosts; the **projection** computed as the go/no-go on building the full candidate; and — when the
+  projection clears — a **benchmark-only end-to-end candidate timed directly on the full canonical
+  `orMany` row** (pointer collection + folding + assembly + repair), both hosts; collection overhead
+  counted; input-immutability + differential green. **The direct full-row measurement is the GO
+  evidence**; the projection only gates whether that end-to-end candidate is built.
 - **Phase 2 (if the ceiling justifies it):** the word-major shape closes orMany to **≤ 1.10x M4 SMP**
   (or a beneficial partial adopted by owner judgement, row stays open), Zen 4 within noise,
   the testable output invariants (same kind / cardinality / values + portable bytes where serialize

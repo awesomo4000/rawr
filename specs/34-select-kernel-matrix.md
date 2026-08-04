@@ -59,19 +59,19 @@ The canonical corpus is **all-Run** (8 containers). Before adopting any unrolled
 **pinned, comparable-shape control corpora** (all 8 containers except the tail control) so the winner
 is checked on non-Run and non-aligned shapes at a matched container count:
 
-- **8 Array containers** — keys 0–7, each an array container populated to a fixed cardinality (e.g.
-  2048 values per container) from `std.Random.DefaultPrng.init(54321)` (`addArrayContainersRawr`-
-  style), one container per key.
-- **8 Bitset containers** — keys 0–7, each a **bitset** container (cardinality > 4096 per key, e.g. a
-  fixed dense fill per chunk) — a **multi-container** bitset corpus, **not** the single-container
-  `bitset_range`.
-- **8 Mixed containers** — keys 0–7 alternating array / bitset / run (a fixed, pinned type-per-key
-  assignment, e.g. `[array, bitset, run, array, bitset, run, array, bitset]`).
-- **Tail control: 7 containers** — one shape (reuse the 8-Run build, drop key 7) so the container
-  count is **not** divisible by 4 and exercises the unrolled scalar tail.
-- **Query stream (all controls):** the same 1M-query protocol, but drawn with a **deterministic
-  `uintLessThan(cardinality)` stream** (or `query % cardinality`) at the pinned seed — **not**
-  "clamped to cardinality," which biases toward the last rank.
+- **8 Array containers** — keys 0–7, each holding the **contiguous low values `0..2047`** (`base |
+  0` … `base | 2047`), **cardinality 2048** per container (< 4096 → array). No `runOptimize`.
+- **8 Bitset containers** — keys 0–7, each holding the **even low values `0, 2, 4, …, 11998`**
+  (`low = 2*j`, `j` ∈ 0..5999), **cardinality 6000** per container (> 4096 → bitset). A
+  **multi-container** bitset corpus, **not** the single-container `bitset_range`.
+- **8 Mixed containers** — keys 0–7 with the **exact type sequence
+  `[array, bitset, run, array, bitset, run, array, bitset]`**: array keys = `0..2047`; bitset keys =
+  even `0..11998`; run keys = `addRange(base|0, base|12000)` (one full run).
+- **Tail control: 7 Run containers** — the 8-Run build (`addRange(0, 499999)`) with **key 7
+  dropped** → keys 0–6, count **7** (not divisible by 4) to exercise the unrolled scalar tail.
+- **Query stream (all controls):** 1M queries from **`std.Random.DefaultPrng.init(12345)`**, each
+  **`uintLessThan(u64, cardinality)`** of that control's bitmap — one rule (no modulo/clamp
+  alternative).
 - **Acceptable regression threshold: ≤ 5%** (board noise) on each control. A kernel that wins all-Run
   but exceeds 5% on any control is **not** architecture-neutral and does **not** ship.
 
@@ -141,5 +141,5 @@ is checked on non-Run and non-aligned shapes at a matched container count:
 
 ## Estimate
 
-M for `34-00` (six-cell matrix + ceiling + disasm, two hosts). S for `34-01` (storage-free kernel +
+M for `34-00` (five-cell matrix + ceiling + disasm, two hosts). S for `34-01` (storage-free kernel +
 board gate) if applicable.
