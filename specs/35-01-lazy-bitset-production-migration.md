@@ -62,11 +62,31 @@ equality/subset), and:
   normal validation must **pass after `repairAfterLazy`**. That pairing machine-checks "no transient
   survives repair." Transient pointer/alignment checks live in an **internal helper** — **no
   repaired-state field is added to any bitmap.**
-- **eager set ops and the many-ops never PRODUCE transients, but their INPUT dispatch is updated**
-  per this consume/reject policy — `orMany`, `orManyHeap`, `xorMany`, `orManyOwned`, `xorManyOwned`
-  all take `[]const *const Self` and **can receive an unrepaired bitmap**. Each arm is a real
-  unknown-cardinality-bitset implementation or an explicit documented rejection; **pinned per op**.
 - **deinit** → frees the words; no header to free.
+
+### Consume-vs-reject policy — DECIDED (not "pinned per op" later)
+
+**Governing rule:** a transient is **bit-identical to a `BitsetContainer`'s words with cardinality
+`-1`**. So **read paths CONSUME** by reusing the existing bitset arm (near-zero new code), and
+everything that **mutates, combines, or converts REJECTS** with `error.UnrepairedLazyResult` (small,
+uniform, and keeps the transient from leaking into kernels). Callers repair first.
+
+| category | decision | rationale |
+|---|---|---|
+| Single-bitmap **read queries** — `contains`, `getCardinality`, `rank`, `select`, `minimum`/`maximum`, iteration, `toArray` | **CONSUME** | reuse the bitset arm on the words; cardinality computed, not cached |
+| **Equality / subset** (`compare.zig`) | **CONSUME** | pure reads; bitset arm applies to both sides |
+| **Eager set ops** by value — `bitwiseAnd`/`Or`/`Xor`/`Difference` | **REJECT** | would require transient arms in every `container_ops` kernel — large surface, no benefit |
+| **In-place mutations** — `add`, `remove`, `addRange`, `removeRange`, `bitwiseOrInPlace`, etc. | **REJECT** | mutating an unrepaired accumulator has no coherent cardinality semantics |
+| **Pairwise cardinality-only** — `andCardinality` and friends | **REJECT** | kernel-level pairing, same surface argument as eager set ops |
+| **Many-ops** — `orMany`, `orManyHeap`, `xorMany`, `orManyOwned`, `xorManyOwned` | **REJECT** (input dispatch) | take `[]const *const Self` and **can receive an unrepaired bitmap**; consuming would need transient arms in every many-kernel |
+| **Optimization** — `runOptimize`, `optimize` | **REJECT** | converting representation before repair is meaningless |
+| **Range ops** — `rangeCardinality` (read) | **CONSUME** | read-only; bitset arm applies |
+| **Range ops** — `flip`, `removeRangeCopy` and other range **mutations/constructions** | **REJECT** | mutation/conversion class |
+| **Serialization** — see above | **REJECT** | no transient type in the portable format |
+| **`validate`** — see above | **REJECT** (`UnrepairedLazyResult`) | pairs with post-repair pass to machine-check the invariant |
+
+Eager and many-ops still **never PRODUCE** a transient — only their **input dispatch** changes, per
+this table.
 
 ## 5. Dispatch inventory (compiler-driven)
 
@@ -77,18 +97,27 @@ optimization (`runOptimize` / `optimize`), range and set operations, `toArray`, 
 minimum/maximum, and clearing. **No default fall-through; no `unreachable` on any path a transient
 can actually reach.**
 
-## 6. Repair transactional strategy (pick ONE, pin it)
+## 6. Repair transactional strategy — SELECTED: per-container build-before-free + in-place partial commit
 
 `repairAfterLazy` mutates in place and **frees containers before committing `self.size`**; E3 adds a
-failure point (the **deferred survivor header** allocation). Choose:
+failure point (the **deferred survivor header** allocation). **Selected strategy (c)** — cheaper than
+the two alternatives and it **does not erase the repair gain**:
 
-- **(a) Two-phase replacement** — build repaired key/container arrays beside the originals, commit
-  only on full success; or
-- **(b) Explicit rollback bookkeeping** — an undo log sufficient to restore a consistently
-  deinit-able bitmap on failure at any point.
+- **Per container, build before free:** allocate the replacement first (demoted array, or the
+  survivor's 16 B header adopting the words); only once it exists, free/retire the old container and
+  write it at `write_idx`.
+- **On failure, commit the partial in place:** the successfully repaired **prefix** `[0, write_idx)`
+  is already correct. **Compact the untouched tail behind that prefix** (the not-yet-visited entries
+  keep their existing, still-valid containers), **update `self.size`** to prefix + tail,
+  **leave `cached_cardinality = -1`** (unknown), and **return the error**.
+- No parallel top-level arrays, no undo log — **both rejected** because allocating a second
+  key/container array (a) or maintaining an undo log (b) adds per-repair cost that could **cancel the
+  very saving E3 is chasing**.
 
 **Post-failure invariant (explicit):** the bitmap is **valid and deinit-able, no leak, no
-double-free**; contents are either fully repaired or the documented partial state — never dangling.
+double-free**, every entry in `[0, self.size)` is a live owned container, and cardinality is
+**unknown**; contents are either fully repaired or the documented partial state — never dangling. A
+failed repair **may be retried** (the remaining transients are still in the tail).
 
 ## 7. Failure injection (positional)
 
@@ -112,9 +141,10 @@ valid-or-cleanly-errored, **inputs untouched**, no leak.
 - **lazyOr construction AND lazyOr+repair reach ≤ 1.10x on M4 SMP**; dense survivor control within
   the one-sided gate on both hosts; Zen 4 within noise.
 - Tag renamed with the **compiler-enforced inventory complete**; the pinned clone / serialize /
-  `serializedSizeInBytes` / `validate` / eager+many-op dispatch behaviors implemented and tested;
-  activation-table coverage (incl. `lazyXor` / `lazyXorInPlace`) green; transactional repair with
-  positional failure injection green; board gate held.
+  `serializedSizeInBytes` / `validate` behaviors and the **decided consume-vs-reject table**
+  implemented and tested; activation-table coverage (incl. `lazyXor` / `lazyXorInPlace`) green;
+  **build-before-free + in-place partial commit** repair with positional failure injection green
+  (including the retry-after-failed-repair case); board gate held.
 - Partial adoption per spec-30 policy (owner judgement; row stays open above 1.10x).
 - `zig build test`; `zig build difftest`; `ReleaseSafe` / `ReleaseFast`; canonical
   `run-compare-bench.sh` both hosts; `docs/parity-measurement.md` updated.

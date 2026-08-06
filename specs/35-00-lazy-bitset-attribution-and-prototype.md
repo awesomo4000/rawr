@@ -45,6 +45,17 @@ Prototype allocating **only the aligned 8 KB words** (zeroed — required for OR
 the transient state tracked locally in the diagnostic. **No `ContainerType` / `Container` change in
 this chunk** — the rename and payload land in `35-01`.
 
+### Variable isolation (pinned — the A/B must differ in ONE thing)
+
+Baseline and candidate cells must use **identical**: zeroing (same `@memset` / same width), the
+**same accumulation kernels** (`setList` / `lazyUnionWith` / `setRange`, and the XOR equivalents),
+the **same popcount / cardinality computation**, the **same demotion path** (`bitsetToArray` or an
+identical copy of it), the **same top-level assembly**, and the **same timing and teardown
+boundaries**. **The ONLY difference is: baseline allocates a `BitsetContainer` header + words vs
+candidate using a stack/local words view with no header allocation.** Any other divergence
+(a re-tuned kernel, a different zero-fill, a shifted teardown boundary) would let a **prototype
+kernel difference masquerade as the header-elimination benefit** and invalidates the cell.
+
 ### Eliminated vs deferred accounting (report all five; gate is the COMBINED row)
 
 1. headers **permanently eliminated** (demotion),
@@ -66,10 +77,22 @@ The recorded **~32,726** transient calls are ~**one header + one words** call fo
 **~16,363** matched keys. **E3 removes ONLY the ~16,363 header calls (and matching frees); the
 ~16,363 words allocations REMAIN.** Project the gate on **~16,363**, **never ~32,726**.
 
+### DUAL bar — both hard target rows must project, not just the combined one
+
+`35-01` requires **construction AND combined** to close, so `35-00` must project **both**. A
+combined-only pass could authorize production work already guaranteed to fail construction.
+
+| row | baseline (M4) | CRoaring | must project to ≤ |
+|---|---:|---:|---:|
+| lazyOr **construction** | 5.746 ms | 3.456 ms | **3.802 ms** (= 3.456 × 1.10) |
+| lazyOr **+ repair (combined)** | 14.612 ms | 12.403 ms | **13.643 ms** (= 12.403 × 1.10) |
+
 Bar: **~16,363 eliminated header calls × measured per-call SMP cost + matching frees must project
-the combined construction+repair row to ≤ 1.10x** (or an equivalent measured focused-time
-improvement). If it cannot — e.g. the 8 KB zero-fill and repair scan dominate, not the 16 B
-create — **stop before `35-01`** and report what *does* dominate.
+BOTH rows to their thresholds above** (or an equivalent measured focused-time improvement).
+**Either row failing to project ⇒ stop before `35-01`** and report what *does* dominate — e.g. the
+8 KB zero-fill and repair scan rather than the 16 B create. Note construction must absorb **1.944 ms**
+while combined needs only **0.969 ms**, so **construction is the binding constraint**; state both
+margins explicitly.
 
 ## Measurement discipline
 
@@ -87,10 +110,12 @@ create — **stop before `35-01`** and report what *does* dominate.
 - Existing harness extended and **reconciled** to the recorded 130,994 / ~32,726 figures; corpus
   counts pinned (matched keys, transient bitsets, demote/survive split); three-way attribution
   reported; CRoaring materialization assertion green; fresh Zen 4 baselines captured.
-- Headerless prototype measured with the five-figure eliminated/deferred accounting, both hosts;
-  **dense survivor control** run under the one-sided gate; **stop-gate arithmetic explicit and
-  computed on ~16,363**.
+- Headerless prototype measured with the five-figure eliminated/deferred accounting, both hosts,
+  under the **pinned variable isolation** (only header-allocated vs headerless differs); **dense
+  survivor control** run under the one-sided gate; **stop-gate arithmetic explicit and computed on
+  ~16,363**.
 - **No production change; no container-union change.** Decision recorded: proceed to `35-01` only if
-  the stop-gate projects the **combined** row to ≤ 1.10x.
+  the stop-gate projects **BOTH** rows — construction ≤ **3.802 ms** and combined ≤ **13.643 ms** —
+  with both margins stated.
 - `zig build test`; `zig build difftest` green; diagnostic section of `docs/parity-measurement.md`
   updated.
