@@ -52,10 +52,9 @@ Baseline and candidate cells must use **identical**: zeroing (same `@memset` / s
 the **same popcount / cardinality computation**, the **same demotion path** (`bitsetToArray` or an
 identical copy of it), the **same top-level assembly**, and the **same timing and teardown
 boundaries**. **The ONLY difference is: baseline allocates a `BitsetContainer` header + words vs
-candidate allocating the words only and using a **local view over the same heap-allocated aligned
-words** with no header allocation.** (**Not** stack-allocating the 8 KB — the words remain
-heap-allocated and identically aligned in both arms; only the 16 B header allocation differs.) Any
-other divergence
+candidate allocating the words only and using a local view over the same heap-allocated aligned words,
+with no header allocation.** (**Not** stack-allocating the 8 KB — the words remain heap-allocated and
+identically aligned in both arms; only the 16 B header allocation differs.) Any other divergence
 (a re-tuned kernel, a different zero-fill, a shifted teardown boundary) would let a **prototype
 kernel difference masquerade as the header-elimination benefit** and invalidates the cell.
 
