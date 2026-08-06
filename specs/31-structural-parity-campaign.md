@@ -33,9 +33,15 @@
 > **Where the differential sits (arithmetic on those cells):** the whole construction gap is
 > **+0.539 ms**; the **fresh-buffer zeroing** gap alone is **+0.621 ms (115% of it)**, while
 > **dirty-buffer** zeroing is only **+0.218 ms (40%)** — so roughly **+0.403 ms exists only when the
-> buffer is fresh**, a **first-touch / page-fault signature** (SMP returning fresh pages to fault in
-> vs malloc recycling already-faulted ones). Clone traffic, merge/assembly, and accumulation all
-> **favor rawr** and cannot explain the gap.
+> buffer is fresh**. Clone traffic, merge/assembly, and accumulation all **favor rawr** and cannot
+> explain the gap.
+>
+> **This is a HYPOTHESIS, not a confirmed mechanism.** The fresh-vs-dirty delta strongly indicates
+> **allocator residency / page-touch behavior** — the leading candidate being **first-touch page
+> faults** (SMP returning fresh pages that must be faulted in, vs malloc recycling already-faulted
+> ones) — but **nothing here proves page faults.** Confirming it requires **fault counters** or a
+> **pre-touch experiment** (pre-fault the buffer, then re-time zeroing); until one of those runs, call
+> it the **first-touch / page-fault hypothesis** and do not build on it as established.
 >
 > **Plan of record (sequence; no new broad spec):**
 > 1. **Re-run the canonical lazy-OR rows** on the current tree under the fresh-process parity protocol.
@@ -46,8 +52,10 @@
 >    **harness/context difference**: code layout, worker dispatch, allocator state, corpus
 >    preparation, timing boundaries.
 > 5. **Only after reconciliation**, investigate the **production-order SMP allocate-and-first-touch/
->    zero path** for the 8 KB buffers. Any new diagnostic must be **narrowly aimed** at either the
->    context discrepancy or that allocate/first-touch/zero sequence.
+>    zero path** for the 8 KB buffers — and **test the hypothesis directly** (fault counters, or a
+>    pre-touch-then-re-time experiment) rather than inferring it from the fresh/dirty delta. Any new
+>    diagnostic must be **narrowly aimed** at either the context discrepancy or that
+>    allocate/first-touch/zero sequence.
 >
 > Levers already closed for this row: Array compact header (spec 32, made it *worse*), transient arena
 > (17), allocator swap (18), header elimination (35). Specs 29/32/33/34/35 + chunks in `specs/done/`.
@@ -55,9 +63,14 @@
 > materialization assertions, exact allocation accounting, two-host protocol, and the evidence that
 > prevents retrying header elimination.
 
-The map for closing the **remaining M4 SMP gaps above 1.10x** after spec 30:
+## HISTORICAL campaign baseline (post-spec-30, 2026-08-01) — superseded, kept for provenance
 
-| row | M4 gap | targeted by |
+> **These are NOT current numbers.** This is the gap table the campaign was *planned* against. Every
+> row below except lazy-OR construction has since closed (see the Wave outcomes above), and lazy-OR
+> construction's own baseline is **under reconciliation**. Read the outcome blocks above for current
+> state; this table exists only to show what each experiment was originally aimed at.
+
+| row | M4 gap (historical) | targeted by |
 |---|---:|---|
 | clone (dense) | 1.786x | E1, (E5 fallback) |
 | lazy OR construction | 1.708x | E1 (array clones), E3 (forced bitsets) |
@@ -211,7 +224,13 @@ diagnostic must report all five:
 5. **repair regression** from allocating surviving headers there.
 
 Without this split, E3 could greatly improve the **construction-only** row while doing nothing for —
-or **regressing** — the **combined** row. The gate is the **combined** row.
+or **regressing** — the **combined** row.
+
+**Gate (as finally specced): a DUAL gate — construction AND combined must BOTH pass** (M4:
+construction ≤ 3.802 ms, combined ≤ 13.643 ms). An earlier draft gated only the combined row; the
+dual form is **what actually stopped the migration** — spec 35 measured construction getting *slower*
+while combined improved 0.038 ms, so a combined-only gate would have authorized a ~98-site
+container-union change for no gain. **Always gate every hard target row, never just the aggregate.**
 
 **Numeric stop-gate:** prototype benchmark-only; **count exactly how many header allocations
 disappear** (permanently, per split above) and measure construction, repair, and full lifecycle
