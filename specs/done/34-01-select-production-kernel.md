@@ -2,6 +2,9 @@
 
 # Spec 34-01: select production kernel
 
+> **Outcome (2026-08-06) — DID NOT RUN.** `34-00` was storage-free NO-GO and select closed via the
+> compact Run header (spec 32); no unrolled kernel and no index shipped.
+
 Toplevel: [34-select-kernel-matrix.md](34-select-kernel-matrix.md) (E4). Ship the winning
 **storage-free** kernel (2- or 4-container unrolled) into production `select`. **Gated on `34-00`
 identifying a storage-free winner that does not regress the mixed-container controls.** If `34-00`

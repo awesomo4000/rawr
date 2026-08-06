@@ -2,6 +2,13 @@
 
 # Spec 34: `select` container-skip kernel matrix (E4)
 
+> **Outcome (2026-08-06) — KERNEL NO-GO; row closed by E1 instead.** Select-loop **unrolling did not
+> help** — the kernel matrix confirmed the gap was **not** instruction-level. `select` closed
+> (**M4 1.387x → 0.864x**) as a **side effect of the compact Run header (spec 32)** — representation
+> locality, not kernel tuning. So `34-01` (production unrolled kernel) **did not ship**; the matrix
+> earned its keep by ruling out the wrong lever. No index built (ceiling did not authorize one).
+> Records in `docs/parity-measurement.md`.
+
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md) (Wave 1). Close
 **select (dense) 1.486x** — a **compute/branch** gap with **no allocation** (`select` allocates
 nothing). The **top-level cardinality walk** (skip containers until the one holding the nth element)

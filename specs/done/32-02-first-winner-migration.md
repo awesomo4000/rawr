@@ -2,6 +2,9 @@
 
 # Spec 32-02: Production migration — first winning representation
 
+> **Outcome (2026-08-06) — DONE (Run shipped).** The Run compact header was the sole winner and was
+> migrated to production (`d7d357b`); board cascade recorded on the toplevel.
+
 Toplevel: [32-compact-container-headers.md](32-compact-container-headers.md) (E1). Migrate the
 **first** representation whose diagnostic was GO (Array from `32-00` or Run from `32-01`) to the
 compact header in production. Gated on that representation's GO.

@@ -2,6 +2,9 @@
 
 # Spec 33-01: orMany production word-major kernel
 
+> **Outcome (2026-08-06) — DONE (shipped).** Seeded word-major `foldManyKey` shipped (`d7d357b`);
+> accumulator loaded/stored once, sources ORed in — zero-fill + redundant first pass removed.
+
 Toplevel: [33-nway-or-fusion.md](33-nway-or-fusion.md) (E2). Ship the winning word-major shape into
 production `orMany`. **Gated on `33-00`'s direct end-to-end measurement being GO.**
 

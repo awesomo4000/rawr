@@ -2,6 +2,13 @@
 
 # Spec 33: Fused N-way bitset accumulation for `orMany` (E2)
 
+> **Outcome (2026-08-06) — GO (shipped).** Replaced source-major bitset passes with a **seeded,
+> word-major reduction**: each accumulator vector is loaded and stored **once** while all
+> corresponding source vectors are ORed into it — eliminating the zero-fill plus the redundant
+> first-source pass and substantially cutting memory traffic. Direct end-to-end measurement was the
+> GO evidence (projection cleared first). Shipped in `d7d357b`; records in
+> `docs/parity-measurement.md`.
+
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md) (Wave 1). Close
 **orMany (mixed) 1.248x** — a **compute/bandwidth** gap, not a top-level allocation gap.
 

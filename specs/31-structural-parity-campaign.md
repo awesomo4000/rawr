@@ -2,6 +2,17 @@
 
 # Spec 31: Structural parity campaign (umbrella)
 
+> **Wave 1 outcome (2026-08-06).** **E1 (spec 32) — Run header GO (major), Array header NO-GO.** The
+> compact `RunContainer` header (32→16-byte SMP class) closed a whole cluster on M4: clone
+> 1.788x→0.672x, dense-AND 1.587x→0.845x, dense-OR 1.138x→0.702x, select 1.387x→0.864x, removeRange
+> 0.803x→0.290x — all rawr-faster. Also closed **spec 29** (dense-AND) as a side effect. Array header
+> made lazy-OR worse → rejected. **E2 (spec 33) — orMany GO** (seeded word-major reduction, shipped).
+> **E4 (spec 34) — kernel NO-GO**; select closed via E1's Run-header locality, not unrolling.
+> **E5 is now MOOT** — clone/dense-AND closed by E1, so no allocation-ordering fallback needed.
+> **Remaining open: lazy-OR construction (~1.7x)** — Array header (the expected E1 lever there) was
+> NO-GO, so **E3 (headerless transient lazy bitsets) is the live remaining experiment** (Wave 3,
+> against a post-E1 rebaseline). Specs 32/33/34 + chunks in `specs/done/`; shipped `d7d357b`.
+
 The map for closing the **remaining M4 SMP gaps above 1.10x** after spec 30:
 
 | row | M4 gap | targeted by |

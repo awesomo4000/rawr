@@ -2,6 +2,9 @@
 
 # Spec 32-03: Production migration — second winning representation
 
+> **Outcome (2026-08-06) — NOT NEEDED.** Only one representation was GO (Run). Array was NO-GO
+> (`32-00`), so there is no second migration.
+
 Toplevel: [32-compact-container-headers.md](32-compact-container-headers.md) (E1). Migrate the
 **second** GO representation to the compact header — **only after `32-02` is adopted, rebased onto,
 and board-gated.** Never both representations in one board window (Wave 2 serial adoption).

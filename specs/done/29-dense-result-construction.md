@@ -13,6 +13,12 @@
 > yet regressed M4. Both ops remain faster than CRoaring on Zen 4. **Next AND lever must address
 > remaining M4 run-result construction/allocation cost WITHOUT changing the successful scratch
 > behavior** (full-run identity + scratch-bypass are ruled out). See chunk outcomes below.
+>
+> **Update (2026-08-06) — dense-AND row CLOSED by spec 32; this spec now closes.** The residual
+> dense-AND gap (1.479x, later 1.587x) was **not** a result-construction problem after all — it
+> closed to **0.845x on M4** via the **compact `RunContainer` header** (spec 32 / E1), which moved
+> the run-container header from the 32-byte to the 16-byte SMP class. dense-OR improved further
+> (→0.702x). No further dense-construction lever needed; spec 29 closes.
 
 Close the two biggest real M4 gaps: **bitwiseAnd dense 1.911x**, **bitwiseOr dense 1.167x**
 (rawr *ahead* on Zen 4 — 0.56x / 0.46x — so Zen 4 is a hard no-regress gate). **Parity is a hard

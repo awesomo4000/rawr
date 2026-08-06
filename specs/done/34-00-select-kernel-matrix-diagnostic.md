@@ -2,6 +2,10 @@
 
 # Spec 34-00: select kernel matrix diagnostic
 
+> **Outcome (2026-08-06) — storage-free NO-GO.** Unrolling/ceiling did not close the gap at the
+> instruction level; no index justified. Select closed via the compact Run header (spec 32), so
+> `34-01` did not run.
+
 Toplevel: [34-select-kernel-matrix.md](34-select-kernel-matrix.md) (E4). Run the `select` kernel
 matrix + ceiling + controls, both hosts. **No production change.** Decides **storage-free GO/NO-GO**
 and **whether a separate index spec is justified** — **not** index architecture.

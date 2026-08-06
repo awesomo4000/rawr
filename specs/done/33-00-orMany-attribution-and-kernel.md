@@ -2,6 +2,9 @@
 
 # Spec 33-00: orMany attribution, kernel + ceiling, direct end-to-end candidate
 
+> **Outcome (2026-08-06) — GO.** Projection cleared; the direct end-to-end word-major candidate beat
+> baseline on the full row → proceeded to `33-01`.
+
 Toplevel: [33-nway-or-fusion.md](33-nway-or-fusion.md) (E2). Attribute the `orMany` 1.248x gap, build
 the benchmark-only word-major kernel and ceiling, and — when the projection clears — time a
 benchmark-only end-to-end candidate directly. **No production change.**

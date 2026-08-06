@@ -2,6 +2,18 @@
 
 # Spec 32: Compact separate container headers (E1)
 
+> **Outcome (2026-08-06) — RUN GO (major win, shipped); ARRAY NO-GO.** The compact **`RunContainer`**
+> header (24 B → 16 B, 32-byte → 16-byte SMP class, payload untouched) was the campaign's biggest
+> structural win — run-heavy ops allocate less and traverse denser metadata (locality + allocator
+> overhead), closing a whole cluster at once. **M4 rawr/CRoaring:** clone **1.788x → 0.672x**, dense
+> AND **1.587x → 0.845x**, dense OR **1.138x → 0.702x**, select **1.387x → 0.864x**, removeRange
+> **0.803x → 0.290x** (rawr now faster on all). Zen 4 healthy (select 1.138x → 0.934x). The
+> three-way control did its job: the win is the layout, not the refactor. **Array header NO-GO** —
+> it made lazy-OR *worse* (rejected). Confirms the "three rows, one root cause" read: the shared
+> root was the container header's SMP size class, and structural compaction closed clone / dense-AND
+> / dense-OR / select / removeRange together. Records: `docs/parity-measurement.md`. Shipped in
+> `d7d357b`.
+
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md) (Wave 1). Shrink
 `ArrayContainer` and `RunContainer` headers from **24 B → 16 B** so they drop from the **32-byte SMP
 size class to the 16-byte class**, **leaving the payload in its own separate allocation with an

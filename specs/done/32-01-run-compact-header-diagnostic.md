@@ -2,6 +2,10 @@
 
 # Spec 32-01: Run compact-header diagnostic
 
+> **Outcome (2026-08-06) — GO (major).** Compact Run header cleared the three-way control and moved
+> the full-bitmap rows; adopted in `32-02`. Closed clone / dense-AND / dense-OR / select /
+> removeRange on M4.
+
 Toplevel: [32-compact-container-headers.md](32-compact-container-headers.md) (E1). Prototype the
 compact **`RunContainer`** header (24 B → 16 B, 32-byte → 16-byte SMP slot, payload untouched) and
 measure it. **Benchmark-only; no production default changed.** Produces the **Run GO/NO-GO**.

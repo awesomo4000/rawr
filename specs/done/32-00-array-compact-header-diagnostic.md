@@ -2,6 +2,9 @@
 
 # Spec 32-00: Array compact-header diagnostic
 
+> **Outcome (2026-08-06) — NO-GO.** Compact Array header made lazy-OR construction *worse*; not
+> adopted.
+
 Toplevel: [32-compact-container-headers.md](32-compact-container-headers.md) (E1). Prototype the
 compact **`ArrayContainer`** header (24 B → 16 B, 32-byte → 16-byte SMP slot, payload untouched) and
 measure it. **Benchmark-only; no production default changed.** Produces the **Array GO/NO-GO**.
