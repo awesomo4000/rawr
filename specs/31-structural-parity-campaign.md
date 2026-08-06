@@ -15,15 +15,45 @@
 > production code changed. **All five planned experiments are now resolved** — E1 Run GO / Array
 > NO-GO, E2 GO, E4 NO-GO (row closed by E1), E5 moot, **E3 NO-GO**.
 >
-> **Campaign status: BASELINE RECONCILIATION BLOCKS FURTHER WORK — not a missing lever.**
+> **RECONCILIATION COMPLETE (2026-08-06) — canonical is AUTHORITATIVE; the `1.155x` was a
+> warmed-context artifact. The row is 1.727x, i.e. WORSE than the old 1.663x, not better.**
 >
-> **The `1.663x` baseline is in doubt.** The canonical board recorded lazy-OR construction at
-> **5.746 ms rawr / 3.456 ms CRoaring = 1.663x**, but spec 35's focused harness measures the
-> **unchanged production implementations** at **~4.009 / 3.470 = ~1.155x**. That gap is too large for
-> ordinary noise, so **no optimization may be reasoned from `1.663x` until it is reconciled.**
+> Fresh canonical M4: lazy-OR **construction 5.762 / 3.336 = 1.727x**; **repair-only 8.616 / 8.058 =
+> 1.069x**; **construction+repair 14.336 / 12.051 = 1.190x**.
+>
+> **Cause of the discrepancy — spec 35's own harness conditioned the allocator before its production
+> reference.** The focused harness runs substantial validation plus **four prototype-accounting
+> passes** ahead of the production cell; those passes allocate, touch, and free the same large
+> population of 8 KB buffers, pre-conditioning `smp_allocator` state. Proven **inside the canonical
+> worker** by temporarily moving validation before timing: **rawr/SMP 5.762 → 4.243 ms** while
+> **CRoaring 3.336 → 3.357 ms (unchanged)** — nothing about the operation changed; ~1.52 ms came off
+> rawr purely from allocator preconditioning. (Worker restored and rebuilt; tree clean.) Historical
+> agreement: before spec 35 added the heavy pre-timing accounting, the focused harness reported
+> **5.89–6.16 ms**, matching canonical; the `4.009 ms` appeared only once those setup passes moved
+> ahead of the production cell.
+>
+> **SMP context sensitivity, measured** (same operation, different prior process activity):
+> target-only **4.139**, full-init-first **3.993**, **allocator prime 5.150**, cache/full-data prime
+> **3.890**, full historical benchmark sequence **7.158**, canonical validation-after-timing
+> **5.762 ms**. Allocator state moves it; cache priming does not — **the spec-20a finding, recurring.**
+>
+> **Consequences:**
+> 1. **The canonical harness is NOT the measurement defect.** The *focused* harness's production
+>    reference was being compared against canonical thresholds under materially different allocator
+>    conditioning.
+> 2. **The spec-35 NO-GO is STRENGTHENED, not weakened** — headerless was slower even in the
+>    *favorable* warmed context.
+> 3. **The phase-cell arithmetic below was collected in that warmed context**, so it must not be
+>    treated as a decomposition of the canonical 1.727x gap; it remains directional only.
+> 4. **New rule for focused diagnostics:** obtain production references **from the canonical worker**,
+>    or run **each** reference in an equivalent **fresh-process** context. **Warmed phase cells must be
+>    labeled context-conditioned and never substituted for canonical board values.**
 >
 > **A broad per-phase construction spec is NOT needed** — spec 35's extended attribution harness
-> already produced the phase split (M4, CRoaring vs rawr/SMP): full construction 3.470/4.009;
+> already produced the phase split. **⚠ CONTEXT-CONDITIONED (warmed):** these cells were measured in
+> the pre-conditioned allocator state described above (their production reference reads 4.009 ms, not
+> the canonical 5.762 ms), so they are **directional localization only** and **do NOT decompose the
+> canonical 1.727x gap**. (M4, CRoaring vs rawr/SMP): full construction 3.470/4.009;
 > shared-transient pipeline 2.864/3.554; unmatched cloning 0.878/0.689 (**rawr faster**);
 > merge/assembly 0.103/0.074 (**rawr faster**); words allocation 0.252/0.314; **fresh-buffer zeroing
 > 3.157/3.778**; **dirty-buffer zeroing 3.481/3.699**; first accumulation 0.609/0.534 (**rawr
@@ -43,19 +73,21 @@
 > **pre-touch experiment** (pre-fault the buffer, then re-time zeroing); until one of those runs, call
 > it the **first-touch / page-fault hypothesis** and do not build on it as established.
 >
-> **Plan of record (sequence; no new broad spec):**
-> 1. **Re-run the canonical lazy-OR rows** on the current tree under the fresh-process parity protocol.
-> 2. **Reconcile canonical worker vs focused harness** so their *unchanged production* cells agree.
-> 3. If canonical converges near **~1.15x**, **replace the stale 1.663x** and re-decide whether the
->    residual is still material at all.
-> 4. If canonical stays near **1.66x** while focused stays near **1.15x**, investigate the
->    **harness/context difference**: code layout, worker dispatch, allocator state, corpus
->    preparation, timing boundaries.
-> 5. **Only after reconciliation**, investigate the **production-order SMP allocate-and-first-touch/
->    zero path** for the 8 KB buffers — and **test the hypothesis directly** (fault counters, or a
->    pre-touch-then-re-time experiment) rather than inferring it from the fresh/dirty delta. Any new
->    diagnostic must be **narrowly aimed** at either the context discrepancy or that
->    allocate/first-touch/zero sequence.
+> **Plan of record — steps 1–4 DONE (reconciliation complete, above). Remaining:**
+> - **Step 5 (next):** investigate the **production-order SMP allocate-and-first-touch/zero path** for
+>   the 8 KB buffers, and **test the mechanism directly** — **fault counters**, or a
+>   **pre-touch-then-re-time** experiment — rather than inferring it from the fresh/dirty delta or the
+>   prime experiments. Any new diagnostic must be **narrowly aimed** at that
+>   allocate/first-touch/zero sequence, run in **canonical fresh-process conditions**.
+> - **Mechanism status:** allocator residency / page-touch is the leading mechanism with **stronger
+>   evidence now** (allocator prime moves it 4.139 → 5.150; cache prime does not), but **page faults
+>   are still unconfirmed** — direct measurement required before any lever is designed.
+> - **Lever-space note (not a proposal):** the fix must be allocator-residency-shaped, and the obvious
+>   neighbours are closed — allocator replacement (spec 18), and reducing the 8 KB buffer *count* is
+>   blocked because `bitset_conversion = true` forces one per matched key and **CRoaring materializes
+>   identically** (spec 35 assertion). Note a **fixed-size 8 KB recycling pool/free-list is NOT the
+>   same shape as spec 17's bump arena** (bump-allocate + bulk-free, which lost on teardown), so it is
+>   not automatically closed — but **do not design it until the mechanism is confirmed.**
 >
 > Levers already closed for this row: Array compact header (spec 32, made it *worse*), transient arena
 > (17), allocator swap (18), header elimination (35). Specs 29/32/33/34/35 + chunks in `specs/done/`.
