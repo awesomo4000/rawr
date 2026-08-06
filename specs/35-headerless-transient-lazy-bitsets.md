@@ -6,7 +6,10 @@ Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md) (
 finale). Close the **last material M4 gap**: **lazyOr construction 1.663x** (post-`d7d357b`
 canonical board). **lazyOr + repair 1.178x is downstream of the same phase** — repair-alone is
 **1.049x** (fine), so closing construction is expected to close the combined row too; both are
-gated here. Once these close, **the full M4 board is at or under parity.**
+gated here. Once these close, **every material M4 row is within the defined ≤ 1.10x gate** — note
+that several small rows (addMany sequential 1.073x, serialize 1.045x, add sequential 1.036x,
+toArrayAlloc 1.033x) remain **above 1.0x** while inside the gate; "within the gate" is the claim,
+not "at or under parity."
 
 **Parity is a hard requirement** — rows close at ≤ 1.10x; a partial is adopted by owner judgement
 (spec-30 policy) and the row stays open.
@@ -44,9 +47,14 @@ repair. On this corpus the eliminated-vs-deferred split (umbrella) collapses to 
 **headers (and words) are born-to-die**, E3's exact target. `35-00` must pin the actual counts:
 matched keys, transient bitsets created, demoted vs surviving, per-key cardinalities.
 
-## Attribution first — including a like-for-like check on CRoaring (iterate's lesson)
+## Attribution first — extend the EXISTING harness, do not build a second one
 
-Before building anything, `35-00` attributes the 1.663x across:
+`35-00` **extends `src/bench_lazy_or_attribution.zig` and `tools/croaring_lazy_attribution.h`** —
+the repository already has this attribution system (the earlier arena experiment measured **130,994
+allocations** with roughly **32,726 transient-container allocation calls**). Reconcile against those
+recorded numbers; **do not build a parallel attribution.**
+
+Attribute the 1.663x across:
 
 1. **Transient-bitset lifecycle** — header create, 8 KB words alloc, 8 KB zero-fill, accumulate,
    repair scan, demote copy, header free, words free — per matched key, summed.
@@ -54,18 +62,46 @@ Before building anything, `35-00` attributes the 1.663x across:
    as a target).
 3. **Top-level assembly** — `initCapacity(min(a.size+b.size, 65536))` etc.
 
-**Like-for-like verification (mandatory):** instrument/count what **CRoaring actually materializes
-per matched key** under `roaring_bitmap_lazy_or(..., bitsetconversion=true)` on this same corpus —
-per-key container types during its lazy construction. **If CRoaring thresholds tiny array/array
-pairs** (does *not* build an 8 KB bitset for a ~15-value pair even with `bitsetconversion=true`),
-then a large part of the 1.663x is a **semantics mismatch** — rawr doing strictly more work than the
-comparison — the same shape as the iterate pull-vs-push phantom. That finding would go to the owner
-as an explicit decision: is rawr's `bitset_conversion=true` = "always bitset" pinned **API
-contract**, or is the lazy accumulator strategy an **internal detail** free to threshold like
-CRoaring? **The spec does not pre-decide this**; it requires the count, and the owner decides on
-the numbers. (The umbrella's "must produce bitsets" pin was written assuming CRoaring behaves the
-same — if attribution falsifies that assumption, the pin is re-examined, not silently kept or
-dropped.)
+**Why this is not the failed arena (spec 17) again — state explicitly in the chunk:** spec 17
+redirected transient bitsets into a bump arena, which lost because **bulk-freeing one slab cost more
+than individual SMP frees** and the arena's lifetime failed the memory gate. E3 changes **neither**:
+the **8 KB words remain individually SMP-allocated and individually freed, with unchanged
+lifetime**. Only the **16 B header allocation and its matching free** disappear. Different
+mechanism, different failure mode.
+
+**CRoaring materialization count — an assertion, not an open question.** The vendored authoritative
+source settles the semantics: in `roaring_bitmap_lazy_or`, when `bitsetconversion` is true and
+neither matched container is already a bitset, CRoaring calls **`container_to_bitset`** and then
+`container_lazy_ior` (`vendor/roaring.c`, the `bitsetconversion &&` branch). **CRoaring does not
+threshold tiny pairs** — it materializes a bitset exactly as rawr does. So `35-00` keeps the
+per-key materialization count **as an assertion that both sides materialize the same way** (guarding
+against a future divergence or a mis-set flag), and there is **no semantics-mismatch fork and no
+owner contract decision** — the comparison is already like-for-like.
+
+## Activation scope (pinned — every path that takes the transient branch)
+
+The transient tag is used **exactly where `use_lazy_bitset` is true** in `lazyMergeTwo`:
+
+```
+use_lazy_bitset = (op == .xor) or bitset_conversion
+                  or isBitsetContainer(c_a) or isBitsetContainer(c_b)
+```
+
+So the affected public surface is **wider than lazyOr(…, true)** and must all be covered:
+
+| entry point | takes transient path when |
+|---|---|
+| `lazyOr(…, bitset_conversion = true)` | **always** (every matched key) — the target row |
+| `lazyOr(…, bitset_conversion = false)` | **when either matched side is already a bitset** |
+| `lazyOrInPlace(…, bitset_conversion)` | same as `lazyOr` (delegates to it) |
+| `lazyXor(…)` | **always** — it calls `lazyMergeTwo(.xor, …, true)` and `op == .xor` forces it |
+| `lazyXorInPlace(…)` | same as `lazyXor` |
+
+**Correction to an earlier draft:** `bitset_conversion = false` is **not** untouched, and the XOR
+path involved is **`lazyXor` / `lazyXorInPlace`** — **not** `xorMany`, which is a different code
+path and genuinely untouched. `35-01` must carry **`lazyXor` / `lazyXorInPlace` correctness
+coverage** (including the XOR-specific `lazyToggle` / `lazyXorWith` accumulation and the
+`card == 0` drop rule), and the false-flag bitset-input case, not just the sparse OR row.
 
 ## The lever (L1) — never allocate a header that is going to die
 
@@ -73,13 +109,34 @@ For the transient accumulator on the lazy path:
 
 - Allocate **only the aligned 8 KB words** (one allocator call instead of two; still zeroed —
   correctness requires a zeroed accumulator for OR).
-- Track the transient state via the **`reserved = 0b11` tag** as a **transient lazy-bitset tag** —
-  which is free in the enum but **NOT operationally free**: the `Container` union has no member for
-  it and generic paths return false/zero, skip deallocation, or treat it as unreachable. The
-  production chunk requires the **complete dispatch/lifecycle inventory** (umbrella): repeated lazy
-  ops on an unrepaired bitmap, clone/move of an unrepaired bitmap, repair failure, deinit-before-
-  repair, serialization attempts, and generic queries (contains / cardinality / rank / select /
-  iterate) — each with defined, tested behavior, no default fall-through.
+- Track the transient state via the **`reserved = 0b11` tag**.
+
+**Correction — the `reserved` member exists but is `void`.** `Container` **does** have a
+`.reserved` member; it is **`reserved: void`**, and `fromTagged` maps `.reserved => .{ .reserved =
+{} }`, **discarding the pointer**. So this is not "a union with no member" — it is a member that
+**throws away the payload**. Production therefore needs a **real words-pointer payload** (e.g.
+`reserved: *align(64) [1024]u64`, or equivalent accessors that recover the words pointer from the
+tagged pointer) — that representation change is part of `35-01`, not a free tag reuse.
+
+**Behavior contract (explicit, not "defined behavior"):** a transient container **behaves as an
+unknown-cardinality bitset** for:
+
+- **read-only queries** — `contains`, `getCardinality` (computes from words), `rank`, `select`,
+  `minimum`/`maximum`, iteration, `toArray`, equality/subset;
+- **clone** — clones to a normal owned bitset (or a transient with its own words), never aliases;
+- **repeated lazy operations** — a transient accumulator can be accumulated into again (the
+  `lazyOrInPlace`-then-`lazyOr` case) without materializing a header;
+- **repair** — the demote/survive path below;
+- **deinit** — frees the words; **no header to free**.
+
+**Mechanical inventory required (not a hand list):** `35-01` must `rg` **every** `.reserved` switch
+site and give each a defined arm — the mirror shows **~98 sites across 17 files**, of which the
+production ones are `bitmap.zig`, `container.zig`, `container_ops.zig`, `compare.zig`, `optimize.zig`,
+`serialize.zig`, `roaring64.zig`. Explicitly include `validate`, conversion/optimization
+(`runOptimize`/`optimize`), range and set operations, `toArray`, equality/subset, minimum/maximum,
+and clearing. **No arm may remain a default fall-through or a silent `unreachable` on a path a
+transient container can actually reach.**
+
 - **Repair:** compute cardinality directly from the words; **demote → free the words, no header was
   ever allocated** (the eliminated case); **survive → allocate the 16 B header and adopt the words**
   (deferred case — no copy, words are already a separate allocation).
@@ -95,8 +152,17 @@ The diagnostic reports all five, and **the gate is the COMBINED construction+rep
 5. **repair regression** from allocating surviving headers there.
 
 On the canonical sparse corpus, `35-00`'s pinned counts are expected to show ~all-eliminated /
-~zero-deferred — but the accounting must hold for bitset-heavy corpora too (a dense control where
-survivors dominate), so the deferred path's repair cost is measured, not assumed benign.
+~zero-deferred — but the accounting must hold for bitset-heavy corpora too, so the deferred path's
+repair cost is **gated, not merely measured**:
+
+### Dense survivor control — numeric gate (not just "measured")
+
+A survivor-heavy corpus (matched pairs whose union stays > 4096, so headers are **deferred** to
+repair rather than eliminated) is run as a control, and **all three of its rows — construction,
+repair-only, and combined — must stay within noise (≤ 5%) on BOTH hosts.** Rationale: without this
+gate the optimization could **move header cost from construction into repair**, passing the sparse
+construction gate while **regressing survivor-heavy workloads**. A dense-control regression beyond
+noise fails the chunk (owner-exception route per spec-30 policy remains, explicitly recorded).
 
 ## Numeric stop-gate (before touching the container union)
 
@@ -128,33 +194,62 @@ drives whatever follows (possibly the owner decision from the like-for-like chec
   as baseline lazyOr+repair, identical portable bytes where serialize is valid; CRoaring
   set-parity differential.
 - **The full transient-tag lifecycle inventory** (above) tested explicitly — including
-  deinit-before-repair (words freed, no header leak) and repair-failure mid-way (partially repaired
-  bitmap remains deinit-able, no leak).
-- **OOM / failure injection** on: words allocation, survivor header allocation at repair, demote
-  array allocation — valid-or-cleanly-errored, inputs untouched, no leak (build-then-commit).
-- `xorMany`/eager paths untouched; `bitset_conversion=false` path untouched.
+  deinit-before-repair (words freed, no header leak).
+
+### Repair failure — concrete transactional strategy required ("build-then-commit" is not enough)
+
+`repairAfterLazy` **mutates in place**: it compacts with a `write_idx` and **frees containers
+(demoted bitsets, empty containers) before committing `self.size`**. An allocation failure partway
+through (today: `bitsetToArray`; with E3 additionally: the **deferred survivor header allocation**)
+can therefore leave **stale entries** — freed containers still referenced beyond `write_idx`, or a
+half-converted array. E3 **adds a failure point**, so `35-01` must pin **one** of:
+
+- **(a) Two-phase replacement** — build the repaired key/container arrays **beside** the originals,
+  committing only on full success (originals freed after commit); or
+- **(b) Explicit rollback bookkeeping** — a recorded undo log sufficient to restore a
+  consistently-deinit-able bitmap on failure at any point.
+
+Either way the **post-failure invariant** is explicit: the bitmap is **valid and deinit-able with no
+leak and no double-free**, and its logical contents are either fully repaired or the documented
+partial state — never dangling.
+
+**Failure injection must hit, at minimum:** the **first**, a **middle**, and the **last** demotion
+position; the **first / middle / last survivor-header** allocation position; the words allocation
+during construction; and demote-array allocation — each verified valid-or-cleanly-errored, inputs
+untouched, no leak.
+- **Coverage follows the activation table** — `lazyOr(true)`, `lazyOr(false)` **with a bitset input**,
+  `lazyOrInPlace`, **`lazyXor`, `lazyXorInPlace`** all exercised. **`xorMany` and the eager set ops
+  are genuinely untouched** (different code path).
 
 ## Acceptance
 
 - **Phase 1 GO (35-00):** corpus counts pinned (matched keys, transient bitsets, demote/survive
-  split); the three-way attribution reported; **CRoaring like-for-like materialization counts
-  reported**; headerless prototype measured benchmark-only with the five-figure
-  eliminated/deferred accounting, both hosts; stop-gate arithmetic explicit. No production change.
+  split); the three-way attribution reported **through the extended
+  `bench_lazy_or_attribution` / `croaring_lazy_attribution.h`, reconciled against the recorded
+  130,994 allocations / ~32,726 transient-container calls**; **CRoaring materialization-count
+  assertion** (both sides materialize identically) green; headerless prototype measured
+  benchmark-only with the five-figure eliminated/deferred accounting, both hosts; stop-gate
+  arithmetic explicit. No production change.
 - **Phase 2 GO — hard (35-01):** **lazyOr construction AND lazyOr+repair reach ≤ 1.10x on M4 SMP**,
-  Zen 4 within noise, full lifecycle inventory + invariants + failure injection green, board gate
-  held. Partial adoption per spec-30 policy (owner judgement, row stays open). If the like-for-like
-  check reveals a semantics mismatch instead, the owner decision is recorded and this spec's scope
-  is re-cut accordingly — **not** silently absorbed.
+  **dense survivor control within noise (≤ 5%) on construction, repair-only, and combined, both
+  hosts**, Zen 4 within noise, the **mechanical `.reserved` inventory complete** (every site an
+  explicit arm), the **pinned repair transactional strategy** with first/middle/last demotion and
+  survivor-position failure injection green, activation-table coverage (incl. `lazyXor` /
+  `lazyXorInPlace`) green, invariants + board gate held. Partial adoption per spec-30 policy (owner
+  judgement, row stays open).
 - `zig build test`; `zig build difftest`; `ReleaseSafe`/`ReleaseFast`; canonical
   `run-compare-bench.sh` both hosts on adoption; `docs/parity-measurement.md` updated.
 
 ## Proposed chunk plan (confirm at review)
 
-- **`35-00`** — attribution (lifecycle / clone-share / assembly) + **CRoaring like-for-like
-  materialization count** + pinned corpus counts + benchmark-only headerless prototype with
-  eliminated/deferred accounting + stop-gate arithmetic, both hosts. No production change.
-- **`35-01`** — production transient-tag migration (conditional on `35-00` GO): complete dispatch/
-  lifecycle inventory, invariants, failure injection, board gate, ship on both-host numbers.
+- **`35-00`** — extend the **existing** attribution harness (lifecycle / clone-share / assembly,
+  reconciled to the recorded numbers) + **CRoaring materialization-count assertion** + pinned corpus
+  counts + benchmark-only headerless prototype with eliminated/deferred accounting + **dense survivor
+  control** + stop-gate arithmetic, both hosts. No production change.
+- **`35-01`** — production transient-tag migration (conditional on `35-00` GO): the **words-pointer
+  payload** representation, the **mechanical `.reserved` site inventory**, the pinned **repair
+  transactional strategy** (two-phase or rollback), activation-table coverage incl. `lazyXor` /
+  `lazyXorInPlace`, invariants, positional failure injection, board gate, ship on both-host numbers.
 
 ## Estimate
 
