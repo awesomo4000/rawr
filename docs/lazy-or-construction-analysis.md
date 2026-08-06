@@ -2,6 +2,11 @@
 
 # Lazy-OR construction attribution
 
+> This document records the original spec-20 attribution run. Spec 35-00 later extended the same
+> executable to the canonical 3-warmup/21-timed, five-process protocol and added the controlled
+> headerless prototype. The current decision and reproduction details are in
+> [`parity-measurement.md`](parity-measurement.md#headerless-transient-lazy-bitset-prototype-08062026).
+
 ## Conclusion
 
 The focused M4 benchmark does not find a CRoaring algorithm or loop-codegen advantage in

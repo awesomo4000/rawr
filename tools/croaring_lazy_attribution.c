@@ -165,6 +165,55 @@ rawr_cr_attr_counts rawr_cr_attr_get_counts(const rawr_cr_attr_context *context)
     return context->counts;
 }
 
+static void rawr_cr_attr_count_result_types(
+    const roaring_bitmap_t *bitmap,
+    size_t *arrays,
+    size_t *bitsets,
+    size_t *runs
+) {
+    const roaring_array_t *containers = &bitmap->high_low_container;
+    for (int32_t i = 0; i < containers->size; i++) {
+        switch (get_container_type(containers->containers[i], containers->typecodes[i])) {
+            case ARRAY_CONTAINER_TYPE:
+                (*arrays)++;
+                break;
+            case BITSET_CONTAINER_TYPE:
+                (*bitsets)++;
+                break;
+            case RUN_CONTAINER_TYPE:
+                (*runs)++;
+                break;
+            default:
+                assert(false);
+        }
+    }
+}
+
+bool rawr_cr_attr_get_materialization_counts(
+    const rawr_cr_attr_context *context,
+    rawr_cr_attr_materialization_counts *counts
+) {
+    memset(counts, 0, sizeof(*counts));
+    roaring_bitmap_t *result = roaring_bitmap_lazy_or(context->left, context->right, true);
+    if (result == NULL) return false;
+
+    rawr_cr_attr_count_result_types(
+        result,
+        &counts->before_array,
+        &counts->before_bitset,
+        &counts->before_run
+    );
+    roaring_bitmap_repair_after_lazy(result);
+    rawr_cr_attr_count_result_types(
+        result,
+        &counts->after_array,
+        &counts->after_bitset,
+        &counts->after_run
+    );
+    roaring_bitmap_free(result);
+    return true;
+}
+
 bool rawr_cr_attr_alloc_headers(rawr_cr_attr_context *context) {
     for (size_t i = 0; i < context->counts.shared_keys; i++) {
         context->bitsets[i] = roaring_malloc(sizeof(bitset_container_t));

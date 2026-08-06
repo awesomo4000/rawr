@@ -956,6 +956,83 @@ Recorded M4 artifacts include `misc/compact-headers-20260805-065447-summary.txt`
 `misc/parity-20260806-091351-summary.txt` on the Zen 4 reference host. The other corresponding
 Zen 4 artifacts are retained on that host.
 
+## Headerless transient lazy-bitset prototype (08/06/2026)
+
+Spec 35-00 tested whether lazy OR could avoid allocating the 16-byte `BitsetContainer` header for
+matched keys and allocate it only during repair when a bitset survives. The experiment extended the
+existing lazy-OR attribution executable; it did not change the production container union or any
+library behavior.
+
+The deterministic sparse corpus is now pinned mechanically: 499,964 unique values, 16,364 matched
+keys, 49,132 unmatched keys, and exactly one transient bitset per matched key. Per-key repaired
+cardinality is 1 through 21, totals 125,006, and has fingerprint `0xc2a9f91d23d63807`. All 16,364
+transients demote to arrays. An actual CRoaring lazy result contains 49,132 arrays plus 16,364
+bitsets before repair and 65,496 arrays afterward, confirming equal materialization semantics.
+
+The historical 130,994-allocation observation reconciles exactly:
+
+| Sparse construction term | Headered | Headerless | Reduction |
+| --- | ---: | ---: | ---: |
+| Allocator calls | 130,994 | 114,630 | 16,364 |
+| Requested bytes | 137,172,592 | 136,910,768 | 261,824 |
+| Effective SMP-class bytes | 138,118,944 | 137,857,120 | 261,824 |
+
+The earlier rough `~32,726` transient-call estimate resolves to exactly 32,728 calls: 16,364 headers
+plus 16,364 words allocations. The candidate removes only the header half.
+
+The reduction is one 16-byte header per matched key, but only 0.19% of requested construction
+bytes. The 16,364 aligned 8 KB words allocations, their zero-fill, unmatched-container clones, and
+repair scan remain. This is distinct from the rejected transient arena: words stay individually
+SMP-allocated and retain their original lifetime; only the header allocation is removed.
+
+The controlled prototype uses the same top-level allocation, merge, accumulation kernels, zeroing,
+repair conversion, and teardown boundaries in both variants. The only difference is header plus
+words versus words-only transient allocation.
+
+The retained three-way attribution remains consistent with that accounting:
+
+| Component | M4 rawr SMP | M4 CRoaring | Zen 4 rawr SMP | Zen 4 CRoaring |
+| --- | ---: | ---: | ---: | ---: |
+| Shared/transient pipeline | 3.554 ms | 2.864 ms | 22.778 ms | 34.775 ms |
+| Unmatched clones | 0.689 ms | 0.878 ms | 1.009 ms | 2.827 ms |
+| Merge/append | 0.074 ms | 0.103 ms | 0.148 ms | 0.155 ms |
+| Rawr top-level initialization | 0.001 ms | n/a | 0.002 ms | n/a |
+
+These component rows are attribution bounds rather than additive percentages; allocator and memory
+state differ between isolated phases. The exact headered/headerless full-phase A/B below is the gate.
+
+| Sparse phase | M4 headered | M4 headerless | Zen 4 headered | Zen 4 headerless |
+| --- | ---: | ---: | ---: | ---: |
+| Construction | 4.026 ms | 4.109 ms | 24.464 ms | 23.460 ms |
+| Repair | 8.375 ms | 8.115 ms | 15.111 ms | 14.239 ms |
+| Combined | 12.835 ms | 12.797 ms | 38.784 ms | 38.960 ms |
+
+Five fresh processes, each using 3 warmups and 21 timed samples, produced overlapping process ranges
+for every sparse A/B pair. On M4, construction regressed by 0.083 ms and combined improved by only
+0.038 ms. Applied to the pinned canonical baselines, the projections are 5.829 ms construction
+(required at most 3.802 ms) and 14.574 ms combined (required at most 13.643 ms). Both hard gates
+fail.
+
+The dense survivor control uses 1,024 matched bitset pairs whose unions each contain 8,193 values.
+Headerless construction defers exactly 1,024 headers to repair, so combined allocations are
+identical. M4 candidate/baseline ratios are 0.960x construction, 1.026x repair, and 0.974x combined.
+Zen 4 ratios are 0.990x, 1.061x, and 1.012x respectively; the Zen repair median narrowly exceeds
+the explicit 1.05 control even though process ranges overlap.
+
+Fresh production references from the same executable were M4 rawr/CRoaring 4.009/3.470 ms for
+construction, 8.161/8.347 ms for repair, and 12.913/13.077 ms combined. Zen 4 Windows references
+were 16.862/74.369 ms, 14.986/31.015 ms, and 39.218/70.268 ms respectively; the controlled
+headered/headerless A/B, rather than cross-runtime allocator differences in those absolute values,
+is the decision evidence.
+
+**Decision: NO-GO.** Do not proceed to the production `.lazy_bitset` migration in spec 35-01. The
+headerless representation is correct and safe in the prototype, but header allocation is too small
+a term to close either M4 target. A follow-up must attack a measured dominant term such as the 8 KB
+materialization/zeroing itself or the broader construction strategy, not merely the header.
+
+Recorded artifacts are `misc/lazy-or-attribution-20260806-182950-summary.txt` on M4 and
+`misc/lazy-or-attribution-20260806-183730-summary.txt` on the Zen 4 reference host.
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad

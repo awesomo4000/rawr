@@ -22,12 +22,25 @@ typedef struct rawr_cr_attr_counts {
     size_t bytes_cleared;
 } rawr_cr_attr_counts;
 
+typedef struct rawr_cr_attr_materialization_counts {
+    size_t before_array;
+    size_t before_bitset;
+    size_t before_run;
+    size_t after_array;
+    size_t after_bitset;
+    size_t after_run;
+} rawr_cr_attr_materialization_counts;
+
 rawr_cr_attr_context *rawr_cr_attr_context_create(
     const roaring_bitmap_t *left,
     const roaring_bitmap_t *right
 );
 void rawr_cr_attr_context_free(rawr_cr_attr_context *context);
 rawr_cr_attr_counts rawr_cr_attr_get_counts(const rawr_cr_attr_context *context);
+bool rawr_cr_attr_get_materialization_counts(
+    const rawr_cr_attr_context *context,
+    rawr_cr_attr_materialization_counts *counts
+);
 
 bool rawr_cr_attr_alloc_headers(rawr_cr_attr_context *context);
 void rawr_cr_attr_free_headers(rawr_cr_attr_context *context);
