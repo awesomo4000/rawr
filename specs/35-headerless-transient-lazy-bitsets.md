@@ -139,10 +139,12 @@ unknown-cardinality bitset** for:
   **stops the transient representation from propagating** into cloned bitmaps. Never aliases.
 - **repeated lazy operations** — a transient accumulator can be accumulated into again (the
   `lazyOrInPlace`-then-`lazyOr` case) without materializing a header;
-- **`serialize` — PINNED: ERROR on an unrepaired bitmap** (documented
-  `error.UnrepairedLazyResult`): the portable format has no transient type, cardinalities are
-  unknown, and silently repairing inside a const-ish serialize would surprise. Callers repair first.
-  (`serialize` already returns an error union, so this is additive.)
+- **Serialization — PINNED: ERROR on an unrepaired bitmap, at EVERY writing entry point**
+  (documented `error.UnrepairedLazyResult`): the portable format has no transient type,
+  cardinalities are unknown, and silently repairing inside a const-ish serialize would surprise.
+  Callers repair first. **Name them all so none is overlooked: `serialize`, `serializeToWriter`, and
+  `OwnedBitmap.serialize`** (plus any other writer that walks containers — the frozen/`roaring64`
+  writers are checked in the inventory). All already return error unions, so this is additive.
 - **`serializedSizeInBytes` — PINNED: keep the signature, compute the true size.** Its public
   signature is **`fn serializedSizeInBytes(self: *const Self) usize`** — **no error channel** — so it
   **cannot** return `error.UnrepairedLazyResult`. Chosen (least disruptive, no API break, no panic):
@@ -277,8 +279,11 @@ untouched, no leak.
   `lazyOrInPlace`, **`lazyXor`, `lazyXorInPlace`** all exercised.
 - **Eager set operations never PRODUCE a transient container, but their dispatch IS updated** per the
   pinned consume/reject policy above (each arm a real unknown-cardinality-bitset implementation or an
-  explicit documented rejection) — they are **not** "untouched". **`xorMany` is genuinely untouched**
-  (different code path, produces no transients and cannot receive one mid-operation).
+  explicit documented rejection) — they are **not** "untouched".
+- **The many-ops likewise: they produce no transients, but they can RECEIVE one.** `orMany`,
+  `orManyHeap`, `xorMany` (and `orManyOwned` / `xorManyOwned`) take **`[]const *const Self`** — a
+  caller can pass an **unrepaired lazy bitmap** in that slice. So their **input dispatch follows the
+  same eager consume/reject policy**; "cannot receive one" is false and must not be assumed.
 
 ## Acceptance
 
