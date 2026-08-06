@@ -108,34 +108,60 @@ coverage** (including the XOR-specific `lazyToggle` / `lazyXorWith` accumulation
 For the transient accumulator on the lazy path:
 
 - Allocate **only the aligned 8 KB words** (one allocator call instead of two; still zeroed —
-  correctness requires a zeroed accumulator for OR).
-- Track the transient state via the **`reserved = 0b11` tag**.
+  correctness requires a zeroed accumulator for **OR and XOR**).
+- Track the transient state in the `0b11` tag slot — **renamed, not reused as `.reserved`**.
 
-**Correction — the `reserved` member exists but is `void`.** `Container` **does** have a
-`.reserved` member; it is **`reserved: void`**, and `fromTagged` maps `.reserved => .{ .reserved =
-{} }`, **discarding the pointer**. So this is not "a union with no member" — it is a member that
-**throws away the payload**. Production therefore needs a **real words-pointer payload** (e.g.
-`reserved: *align(64) [1024]u64`, or equivalent accessors that recover the words pointer from the
-tagged pointer) — that representation change is part of `35-01`, not a free tag reuse.
+**RENAME the tag — do not keep `.reserved`.** `Container` **does** have a `.reserved` member today;
+it is **`reserved: void`**, and `fromTagged` maps `.reserved => .{ .reserved = {} }`, **discarding
+the pointer**. Keeping that name would let **dangerous existing arms keep compiling** — every
+`.reserved => {}`, `=> false`, `=> null` silently becomes a wrong answer for a real transient
+container. So `35-01` **renames the tag and gives it a payload**:
+
+```zig
+// ContainerType
+lazy_bitset = 0b11,          // was: reserved
+// Container union
+lazy_bitset: *align(64) [1024]u64,   // was: reserved: void
+```
+
+**The rename is the enforcement mechanism:** Zig then emits a **compile error at every unhandled
+switch arm**, converting the mechanical inventory below from a discipline into a
+compiler-checked invariant. A silent-fall-through arm becomes impossible rather than merely
+discouraged.
 
 **Behavior contract (explicit, not "defined behavior"):** a transient container **behaves as an
 unknown-cardinality bitset** for:
 
 - **read-only queries** — `contains`, `getCardinality` (computes from words), `rank`, `select`,
   `minimum`/`maximum`, iteration, `toArray`, equality/subset;
-- **clone** — clones to a normal owned bitset (or a transient with its own words), never aliases;
+- **clone — PINNED: clone to a NORMAL owned unknown-cardinality bitset** (allocate a real header,
+  copy the words, cardinality `-1`). Not "either/or": this is closest to current clone semantics and
+  **stops the transient representation from propagating** into cloned bitmaps. Never aliases.
 - **repeated lazy operations** — a transient accumulator can be accumulated into again (the
   `lazyOrInPlace`-then-`lazyOr` case) without materializing a header;
+- **serialization — PINNED: `serialize` on an unrepaired bitmap is an ERROR** (a documented
+  `error.UnrepairedLazyResult`, or equivalent), not a silent materialization: the portable format has
+  no transient type, cardinalities are unknown, and silently repairing inside a const-ish serialize
+  would surprise. Callers repair first. `serializedSizeInBytes` likewise.
+- **validate — PINNED:** a transient container is **valid only in an unrepaired bitmap**;
+  `validate` accepts it there (checking the words pointer/alignment) and **reports it as invalid in a
+  repaired bitmap** — so the invariant "no transient survives repair" is machine-checked.
 - **repair** — the demote/survive path below;
 - **deinit** — frees the words; **no header to free**.
 
-**Mechanical inventory required (not a hand list):** `35-01` must `rg` **every** `.reserved` switch
-site and give each a defined arm — the mirror shows **~98 sites across 17 files**, of which the
+**Eager set ops:** "untouched" means they **never produce** a transient container. Their **dispatch
+must still consume one correctly** if the contract admits an unrepaired bitmap as an input — so each
+eager-path arm is either a real implementation (treating it as an unknown-cardinality bitset) or an
+explicit documented rejection. Which one is chosen per op is pinned in `35-01`; silence is not an
+option.
+
+**Mechanical inventory (compiler-enforced by the rename):** `35-01` must `rg` **every** tag switch
+site and give each an explicit arm — the mirror shows **~98 sites across 17 files**, of which the
 production ones are `bitmap.zig`, `container.zig`, `container_ops.zig`, `compare.zig`, `optimize.zig`,
 `serialize.zig`, `roaring64.zig`. Explicitly include `validate`, conversion/optimization
 (`runOptimize`/`optimize`), range and set operations, `toArray`, equality/subset, minimum/maximum,
-and clearing. **No arm may remain a default fall-through or a silent `unreachable` on a path a
-transient container can actually reach.**
+and clearing. **No arm may remain a default fall-through, and no `unreachable` may sit on a path a
+transient container can actually reach** — the rename makes each one a compile error until addressed.
 
 - **Repair:** compute cardinality directly from the words; **demote → free the words, no header was
   ever allocated** (the eliminated case); **survive → allocate the 16 B header and adopt the words**
@@ -158,20 +184,38 @@ repair cost is **gated, not merely measured**:
 ### Dense survivor control — numeric gate (not just "measured")
 
 A survivor-heavy corpus (matched pairs whose union stays > 4096, so headers are **deferred** to
-repair rather than eliminated) is run as a control, and **all three of its rows — construction,
-repair-only, and combined — must stay within noise (≤ 5%) on BOTH hosts.** Rationale: without this
-gate the optimization could **move header cost from construction into repair**, passing the sparse
-construction gate while **regressing survivor-heavy workloads**. A dense-control regression beyond
-noise fails the chunk (owner-exception route per spec-30 policy remains, explicitly recorded).
+repair rather than eliminated) is run as a control on **all three rows — construction, repair-only,
+and combined — on BOTH hosts**, under a **one-sided no-regression gate**:
+
+```
+candidate / baseline ≤ 1.05      (per row, per host)
+```
+
+**One-sided on purpose:** dense **construction is expected to IMPROVE** (its header allocation moves
+out of construction into repair), so a two-sided "within noise" band would wrongly flag the very
+effect we want. **Improvements are always allowed**; only regression beyond 1.05 fails. Apply the
+same explicit one-sided rule to repair-only and combined, **plus process-range analysis** (repeated
+fresh-process medians with overlapping ranges) rather than a single-number comparison.
+
+Rationale: without this gate the optimization could **move header cost from construction into
+repair**, passing the sparse construction gate while **regressing survivor-heavy workloads**. A
+dense-control regression beyond 1.05 fails the chunk (owner-exception route per spec-30 policy
+remains, explicitly recorded).
 
 ## Numeric stop-gate (before touching the container union)
 
-Benchmark-only prototype first. Pin the bar: **permanently-eliminated header calls × measured
-per-call SMP cost, plus the removed header frees, must project the combined construction+repair row
-to ≤ 1.10x** — or show a required focused-time improvement that does. If the header-call arithmetic
-cannot get there (e.g. the 8 KB zero-fill + repair scan dominate, not the 16 B create), **stop
-before changing the container union** and report what *does* dominate — that attribution then
-drives whatever follows (possibly the owner decision from the like-for-like check above).
+**The removable half — do not double-count.** The recorded **~32,726** transient-container
+allocation calls are approximately **one header call + one words call for each of ~16,363 matched
+keys**. **E3 removes ONLY the ~16,363 header calls (and their matching frees); the ~16,363 words
+allocations REMAIN** — the accumulator still needs its 8 KB. The available benefit is therefore
+**about half** the transient-call figure, and the stop-gate projection **must be computed on the
+~16,363 header calls, never on the ~32,726 total.**
+
+Benchmark-only prototype first. Pin the bar: **~16,363 eliminated header calls × measured per-call
+SMP cost, plus the matching frees, must project the combined construction+repair row to ≤ 1.10x** —
+or show a required focused-time improvement that does. If that arithmetic cannot get there (e.g. the
+8 KB zero-fill + repair scan dominate, not the 16 B create), **stop before changing the container
+union** and report what *does* dominate; that attribution drives whatever follows.
 
 ## Measurement discipline
 
@@ -232,8 +276,10 @@ untouched, no leak.
   arithmetic explicit. No production change.
 - **Phase 2 GO — hard (35-01):** **lazyOr construction AND lazyOr+repair reach ≤ 1.10x on M4 SMP**,
   **dense survivor control within noise (≤ 5%) on construction, repair-only, and combined, both
-  hosts**, Zen 4 within noise, the **mechanical `.reserved` inventory complete** (every site an
-  explicit arm), the **pinned repair transactional strategy** with first/middle/last demotion and
+  hosts (one-sided ≤ 1.05 per row)**, Zen 4 within noise, the **tag renamed to `.lazy_bitset` with
+  the compiler-enforced inventory complete** (every site an explicit arm; no fall-through, no
+  reachable `unreachable`), the **pinned repair transactional strategy** with first/middle/last
+  demotion and
   survivor-position failure injection green, activation-table coverage (incl. `lazyXor` /
   `lazyXorInPlace`) green, invariants + board gate held. Partial adoption per spec-30 policy (owner
   judgement, row stays open).
@@ -246,8 +292,9 @@ untouched, no leak.
   reconciled to the recorded numbers) + **CRoaring materialization-count assertion** + pinned corpus
   counts + benchmark-only headerless prototype with eliminated/deferred accounting + **dense survivor
   control** + stop-gate arithmetic, both hosts. No production change.
-- **`35-01`** — production transient-tag migration (conditional on `35-00` GO): the **words-pointer
-  payload** representation, the **mechanical `.reserved` site inventory**, the pinned **repair
+- **`35-01`** — production transient-tag migration (conditional on `35-00` GO): the **tag rename
+  `.reserved` → `.lazy_bitset` with a words-pointer payload** (compile errors drive the site
+  inventory), the pinned **clone / serialize / validate / eager-dispatch behaviors**, the pinned **repair
   transactional strategy** (two-phase or rollback), activation-table coverage incl. `lazyXor` /
   `lazyXorInPlace`, invariants, positional failure injection, board gate, ship on both-host numbers.
 
