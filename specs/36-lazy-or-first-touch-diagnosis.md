@@ -4,139 +4,186 @@
 
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md). **Diagnosis only —
 no production change, no recycling-pool design.** Confirm or refute the **first-touch / page-residency
-hypothesis** for the last material M4 row.
+hypothesis** for the last material row.
 
-**Target gap (canonical, fresh-process, 2026-08-06):** lazy-OR construction **rawr/SMP 5.762 ms vs
-CRoaring 3.336 ms = 1.727x**, a **2.426 ms** absolute gap. (Repair-only 1.069x; combined 1.190x.)
+**Target (canonical, fresh-process, 2026-08-06) — M4:** lazy-OR construction **rawr/SMP 5.762 ms vs
+CRoaring 3.336 ms = 1.727x**, gap **2.426 ms**. (Repair-only 1.069x; combined 1.190x.)
 
-**Standing evidence:** rawr/SMP construction moves with **prior allocation activity** and not with
-cache warmth (allocator prime 5.150 vs cache prime 3.890 vs target-only 4.139); moving validation
-ahead of timing in the canonical worker took rawr **5.762 → 4.243 ms** while CRoaring stayed
-**3.336 → 3.357 ms**. The leading mechanism is **page residency / first touch on freshly SMP-allocated
-8 KB buffers** — **unconfirmed**; this spec tests it directly.
+**Standing evidence:** rawr/SMP construction moves with **prior allocation activity**, not cache
+warmth (allocator prime 5.150 / cache prime 3.890 / target-only 4.139); moving validation ahead of
+timing took rawr **5.762 → 4.243 ms** while CRoaring stayed **3.336 → 3.357**. Leading mechanism:
+**page residency / first touch on freshly SMP-allocated 8 KB buffers** — **unconfirmed.**
 
-## Non-negotiable: canonical conditions
+## Canonical conditions (corrected)
 
-Everything is measured **in / as the canonical worker** — same corpus, same timing boundaries,
-**validation-after-timing**, **five fresh processes**, canonical warmup/timed protocol. **M4 is the
-subject; Zen 4 is the architecture control.** Per the spec-35 lesson, **no cell may take its
-production reference from a warmed harness**, and each cell's reference is produced in its own fresh
-process.
+- **One process per `(row, implementation, allocator)` tuple**, exactly as the canonical worker does.
+  **Each process initializes ONLY its selected implementation** using that implementation's normal
+  setup — **never both rawr and CRoaring in one process**, and never `initAllBenchmarkData`.
+- Canonical corpus, timing boundaries, **validation-after-timing**, **five fresh processes**,
+  canonical **3 warmup / 21 timed**.
+- Per the spec-35 lesson: **no cell takes its production reference from a warmed harness.**
+- **C0 anchor check:** with cells disabled, the canonical worker must still reproduce
+  **5.762 / 3.336** on M4 — C0 is validated against that untouched anchor before any contrast is
+  believed.
 
-## The measurement problem this spec must solve
+## The measurement problem
 
-The 8 KB `BitsetContainer.words` allocations happen **inside** the timed construction, so they cannot
-literally be "pre-touched outside timing" without changing the operation. Instead we **precondition
-the allocator's page state before timing** and hold everything else fixed — and we must separate
-**allocator bookkeeping** (free lists, size-class structures) from **page residency** (whether the
-pages handed back are already faulted).
+The 8 KB `words` allocations occur **inside** the timed construction, so they cannot literally be
+pre-touched outside timing. Instead we **precondition allocator page state immediately before each
+timed operation**, holding everything else fixed, and separate **allocator bookkeeping** from **page
+residency**.
 
 Existing modes cannot do this: **`allocator_prime` and `cache_prime` both also run
-`initAllBenchmarkData()`**, so they conflate priming with a different allocation history.
-**`primeCachesOnly` is therefore not an isolated cache experiment.** Spec 36's cells must be
-**orthogonal**.
+`initAllBenchmarkData()`**, so both are conflated and **`primeCachesOnly` is not reusable**.
 
-## Cell matrix (orthogonal; identical init in every cell)
+## Cell matrix
 
-**Fixed in all cells:** the canonical target-only initialization (`initSparseValues` +
-`initRawrSparseBitmaps` + `initCRoaringSparseBitmaps`) — **never `initAllBenchmarkData`**; identical
-allocation order, zeroing, accumulation, teardown, and output; the **cache-eviction buffer is
-allocated in every cell** (even where unused) so allocator state does not differ by cell.
+**Pre-pass timing (corrected — critical):** the pre-pass (and C3's eviction) runs **outside the timer
+but immediately before EVERY invocation — each of the 3 warmups and each of the 21 timed runs.** A
+single pre-pass before the batch would be overwritten by the warmups, which are exactly the
+allocation activity under test.
 
-| cell | pre-pass before timing | isolates |
+| cell | pre-pass before *every* invocation | isolates |
 |---|---|---|
-| **C0 baseline** | none (production order) | reference |
-| **C1 bookkeeping-only** | `N × 8 KB` **alloc + free, payload NEVER touched** | free-list / size-class state, pages left unfaulted |
-| **C2 residency** | `N × 8 KB` **alloc + touch every page + free** | bookkeeping **+ faulted pages** (cache also warm) |
-| **C3 residency, cold cache** | C2's pre-pass, **then evict caches** | bookkeeping + faulted pages, **cache cold** |
+| **C0** | none (production order) | reference / anchor |
+| **C1** | `N ×` (header + words) **alloc + free, payload NEVER written** | bookkeeping / free-list state |
+| **C2** | `N ×` (header + words) **alloc + touch every page + free** | bookkeeping **+ faulted pages** (cache warm) |
+| **C3** | C2's pre-pass, **then evict caches** | bookkeeping + faulted pages, **cache cold** |
 
-**`N = 16_384`** — matches the corpus demand (~16.4 k matched keys ⇒ ~134 MB of 8 KB buffers) and the
-existing `primeAllocatorOnly` block count, so C1 is directly comparable to prior data.
+**Allocation shape must match production exactly (corrected).** Production is
+`BitsetContainer.init`: **`allocator.create(Self)` (16 B header)** then
+**`allocator.alignedAlloc(u64, .@"64", 1024)` (8 KB words)**; teardown is `deinit`:
+**`free(words)` FIRST, then `destroy(header)`**. C1/C2 must replicate **that pair, that alignment,
+and that free order** — **plain `alloc(u8, 8192)` is NOT acceptable** (it may take a different
+allocator path and a different size class).
 
-**Contrasts (this is the whole point):**
+**`N = 16_384`** — matches corpus demand (~16.4 k matched keys) and the existing `primeAllocatorOnly`
+block count.
 
-- **C1 − C0** = allocator **bookkeeping** effect (no page-state change).
-- **C2 − C1** = **page-residency / first-touch** effect, cache-warm.
-- **C3 − C2** = **cache-warmth** contribution.
-- **C3 − C1** = **residency effect isolated from cache** — the primary number.
+**Contrasts (sign convention: `less-conditioned − more-conditioned`, so positive = improvement):**
 
-**Cache eviction must be pure:** walk a **pre-allocated** buffer larger than LLC; it **allocates
-nothing and initializes nothing** at eviction time (that buffer is allocated once, up front, in
-**every** cell). Do **not** reuse `primeCachesOnly` (it depends on full benchmark data).
+- **C0 − C1** = allocator **bookkeeping** effect
+- **C1 − C2** = **first-touch** effect, cache-warm
+- **C3 − C2** = **cache-warmth** contribution
+- **C1 − C3** = **residency isolated from cache** ← **primary number** (positive when residency
+  helps; the earlier draft's `C3 − C1` had the sign inverted)
 
-## Fault counters (best-effort per host, mandatory where available)
+## C1 is an assumption to be measured, not asserted (corrected)
 
-- `getrusage(RUSAGE_SELF)` **`ru_minflt` / `ru_majflt`** sampled **immediately before and after the
-  timed region** (outside the timed span), per process, per cell.
-- **Darwin caveat:** `getrusage` fault fields on macOS are known to be less reliable than on Linux; if
-  they prove unusable, fall back to a **mach `task_info` / `task_vm_info`** sample and **say which
-  source was used**. Zen 4 (Linux) is the reliable-counter host — that is part of why it is the
-  control. **A missing M4 counter does not block the spec**, but then confirmation rests on the
-  timing contrasts plus the Zen 4 fault evidence, and that limitation must be stated.
+**C1 cannot be assumed to leave pages unfaulted** — `free` may write allocator metadata **into the
+payload**, faulting the very pages C1 is supposed to leave cold. Therefore:
 
-## Both implementations, every cell
+- **Measure faults during each pre-pass itself** (separately from the timed operation) and **report
+  them per cell.** If C1's pre-pass faults ≈ C2's, C1 is not a bookkeeping-only control and the
+  bookkeeping/residency separation collapses — say so rather than reporting a false contrast.
+- **Page-reuse proof (untimed):** an explicit **pointer / page-overlap check** demonstrating that the
+  production run actually **reuses the pages conditioned by C1/C2** (compare pre-pass buffer page
+  addresses against the words buffers production receives; report overlap fraction). **Without
+  demonstrated reuse the entire experiment is void** — we would be conditioning pages production
+  never gets.
 
-Run **rawr/SMP and CRoaring through every cell.** The hypothesis predicts an **asymmetry** — the
-pre-pass conditions `smp_allocator` and should move **rawr** while leaving **CRoaring (libc)**
-unchanged, exactly as the validation-order experiment showed. **If a pre-pass moves CRoaring too, the
-cell is not isolating what we think it is** and the result is void.
+## Fault counters
 
-## Reporting
+- **Boundaries (pinned):** sample **immediately before the operation's internal clock starts** and
+  **immediately after it stops, before result teardown** — the samples sit outside the timed span.
+- **Per-invocation deltas** for **each of the 21 timed runs**; **warmups discarded.**
+- **Aggregation (pinned):** report the **median** per-invocation delta as the headline, plus **min/max
+  and the sum across the 21**; then the **five-process median of those medians**, matching the timing
+  protocol.
+- **Linux (Zen 4/WSL2):** `getrusage(RUSAGE_SELF)` **`ru_minflt` / `ru_majflt`**.
+- **Darwin (M4) — corrected flavor:** `TASK_VM_INFO` reports **residency, not fault counts**. Use
+  **`TASK_EVENTS_INFO`** → **`task_events_info`** with **`faults`, `pageins`, `cow_faults`**.
+  (`getrusage` may be tried first, but it is not trusted on Darwin.)
+- **If NO working M4 fault source is found, the M4 mechanism verdict is INCONCLUSIVE.** **Zen 4/WSL2
+  counters cannot prove M4 behavior** — they are a different OS *and* architecture.
 
-Per cell, per implementation, per host: **minor faults, major faults, elapsed (five-process median +
-full range), allocation counts**, and the **recovered share of the 2.426 ms canonical construction
-gap**. State the four contrasts above explicitly with their recovered shares.
+## Cache eviction must be fully controlled
+
+- The eviction buffer is **allocated and FULLY PREFAULTED identically in every cell** (C0/C1/C2 too,
+  even though only C3 walks it) so no cell differs in allocator or memory state because of it.
+- It is allocated **outside the target SMP allocator** (page allocator / direct mapping) so it does
+  not perturb the state under test.
+- **Size pinned relative to reported LLC** (state the host LLC and the multiple used).
+- Prefaulting matters: otherwise **C3 would add both faults and memory pressure**, contaminating the
+  cell it is meant to isolate.
+- **Do not reuse `primeCachesOnly`** (depends on full benchmark data).
+
+## Allocation counts — do NOT wrap the timed allocator (corrected)
+
+Wrapping the allocator inside the timed region **changes dispatch and codegen** and would corrupt the
+timing being measured. Obtain counts from **either** an **untimed duplicate/accounting pass** **or**
+**mechanically asserted corpus counts** (matched keys × the known per-key allocation pair). State
+which source was used.
+
+## Pre-registered numeric decisions
+
+Fixed **before** data collection; adjust only with an explicit note, never after seeing results.
+
+- **"Materially reduces time"** (residency effect): **`C1 − C3 ≥ 0.5 ms`** (≥ ~20% of M4's 2.426 ms
+  gap) **AND** the **five-process ranges of C1 and C3 do not overlap.**
+- **"Materially reduces faults"**: rawr **minor-fault median delta falls ≥ 50%** from C1 to C3.
+  (A residency effect should be dramatic in fault counts, not marginal.)
+- **"CRoaring unmoved"**: CRoaring's median moves **≤ 2%** across all cells **AND** its five-process
+  ranges **overlap**. If a pre-pass moves CRoaring beyond that, the cell is not isolating what we
+  think and **that cell's result is void.**
+
+## Host-local recovery accounting (corrected)
+
+- The **2.426 ms denominator is M4-only.** **Zen 4 computes recovered share against its OWN C0 gap.**
+- **Zen 4/WSL2 is an OS-plus-architecture control**, not a pure architecture control — differences may
+  be Linux-vs-Darwin, not Zen-vs-M4. Do not attribute Zen 4 behavior to architecture alone.
 
 ## Confirmation criterion (pre-registered)
 
-**The mechanism is CONFIRMED only if, under canonical conditions, the residency pre-pass materially
-reduces BOTH (a) rawr/SMP minor faults AND (b) rawr/SMP construction time** — with the cache
-contribution separated out (**C3 − C1** carrying the effect, not C2 − C3), and **CRoaring unmoved**.
+**CONFIRMED only if, on M4 under canonical conditions:** the residency pre-pass materially reduces
+**BOTH** rawr/SMP **minor faults** and rawr/SMP **construction time** per the thresholds above, with
+the effect carried by **`C1 − C3`** (residency) rather than **`C3 − C2`** (cache), **CRoaring
+unmoved**, and **page reuse demonstrated**.
 
-Anything else is a refutation or an inconclusive result, and must be reported as such — **a timing
-win with unchanged fault counts does not confirm first touch**, it points elsewhere (allocator
-bookkeeping, size-class behavior, or zeroing codegen).
+- **A timing win with unchanged fault counts does NOT confirm first touch** — it points at allocator
+  bookkeeping, size-class behavior, or zeroing codegen.
+- **No working M4 fault source ⇒ INCONCLUSIVE on M4**, regardless of timing.
 
-## Outcome branches (decided in advance, no lever design here)
+## Outcome branches (no lever design here)
 
-- **CONFIRMED** → a **separate** spec designs a recycling strategy, and it must carry explicit
-  **memory-retention**, **allocator-ownership**, and **thread-safety** gates. (Note a fixed-size 8 KB
-  **recycling pool** is a different shape from spec 17's **bump arena + bulk free**, which lost on
-  teardown — but nothing is designed until this spec confirms.)
-- **REFUTED / INCONCLUSIVE** → move to **cold-page zeroing / codegen diagnosis** (is rawr's 8 KB
-  `@memset` itself worse than CRoaring's `memset` on cold pages — width, alignment, non-temporal
-  hints, disassembly).
+- **CONFIRMED** → a **separate** spec designs a recycling strategy with explicit **memory-retention**,
+  **allocator-ownership**, and **thread-safety** gates. (A fixed-size 8 KB **recycling pool** is a
+  different shape from spec 17's **bump arena + bulk free**, which lost on teardown — but nothing is
+  designed until confirmation.)
+- **REFUTED / INCONCLUSIVE** → **cold-page zeroing / codegen diagnosis**: is rawr's 8 KB `@memset`
+  itself worse than CRoaring's on cold pages (width, alignment, non-temporal hints, disassembly)?
 
 ## Constraints
 
-- **No production library code changes.** Diagnostic cells are gated/benchmark-local; the shipping
-  path is untouched.
-- **No recycling-pool implementation or design** in this spec.
-- Correctness unaffected (no behavior change), but the diagnostic build still passes `zig build`,
-  `zig build test`, and `zig build difftest`.
-- **Board gate not applicable** (no production change), but the diagnostic must not perturb the
-  canonical rows it reuses — verify the canonical worker still reproduces **5.762 / 3.336** with the
-  cells disabled.
+- **No production library code changes**; cells are gated/benchmark-local.
+- **No recycling-pool implementation or design.**
+- Diagnostic build passes `zig build`, `zig build test`, `zig build difftest`.
+- Board gate not applicable (no production change), but the **C0 anchor check** must show the
+  canonical rows are unperturbed.
 
 ## Acceptance
 
-- All four cells run on **M4 (subject)** and **Zen 4 (control)**, five fresh processes each, canonical
-  boundaries and validation-after-timing, identical init and eviction-buffer allocation across cells.
-- Fault counters reported (or the fallback/limitation stated), for **both** implementations in every
-  cell; **CRoaring shown unmoved** by the pre-passes.
-- The four contrasts reported with recovered shares of **2.426 ms**.
-- A clear **CONFIRMED / REFUTED / INCONCLUSIVE** verdict against the pre-registered criterion, and the
-  corresponding outcome branch named.
-- Canonical worker verified to still reproduce the baseline row with cells disabled; no production
-  change; `docs/parity-measurement.md` updated with the cells and the verdict.
+- All four cells, **rawr/SMP and CRoaring as separate per-tuple processes with implementation-specific
+  init**, five fresh processes each, on **M4 (subject)** and **Zen 4/WSL2 (OS+arch control)**.
+- Pre-pass (and C3 eviction) confirmed to run **before every warmup and every timed invocation**.
+- Pre-pass allocation shape verified to match production (header `create` + 64-byte-aligned 1024-word
+  `alignedAlloc`; free words-then-header).
+- **Pre-pass faults reported per cell**; **page-reuse overlap demonstrated** (else void).
+- Fault counters at the pinned boundaries with per-invocation deltas and the pinned aggregation;
+  Darwin via `TASK_EVENTS_INFO`, or **M4 INCONCLUSIVE** stated.
+- Eviction buffer allocated + prefaulted in **all** cells, outside SMP, size pinned to reported LLC.
+- Allocation counts from an **untimed** source (stated), not a wrapped timed allocator.
+- Four contrasts reported with **host-local** recovered shares and the pre-registered thresholds
+  applied; **C0 anchor** verified.
+- A clear **CONFIRMED / REFUTED / INCONCLUSIVE** verdict (per host) and the named outcome branch.
+- No production change; `docs/parity-measurement.md` updated with cells and verdict.
 
-## Proposed chunk plan (confirm at review)
+## Chunk plan
 
-Single chunk — this is one orthogonal experiment with one verdict. If review prefers a split, the
-natural seam is **`36-00`** (cells + fault instrumentation on M4) and **`36-01`** (Zen 4 control +
-verdict), but the cells are cheap and the verdict needs both hosts, so **one chunk is proposed.**
+**Single chunk: `36-00`** — one orthogonal experiment, one verdict.
 
 ## Estimate
 
-S–M — four cells × two implementations × two hosts, reusing the canonical worker; the work is
-instrumentation and orthogonality discipline, not new algorithms.
+M — four cells × two implementations × two hosts, reusing the canonical worker. The work is
+instrumentation and orthogonality discipline (per-invocation pre-passes, Mach fault plumbing,
+page-reuse proof), not new algorithms.
