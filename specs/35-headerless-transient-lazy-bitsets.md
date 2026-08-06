@@ -241,8 +241,8 @@ union** and report what *does* dominate; that attribution drives whatever follow
   `build.zig`/runner/docs edits are implementer-owned).
 - **Accounting per cell:** allocations, frees, requested bytes, effective SMP-class bytes,
   teardown — container instances ≠ allocator calls.
-- **Construction and repair measured separately AND combined** (the gate is combined; the split is
-  the attribution).
+- **Construction and repair measured separately AND combined** — **hard gates are construction and
+  combined; repair-only is attribution.**
 - **Both-flag correctness before performance** (spec-32 discipline): the transient-tag build passes
   `zig build test`, `zig build difftest`, `ReleaseSafe`, `ReleaseFast` before numbers are accepted.
 - **Zen 4 policy (spec 30):** within-noise passes (repeated focused timing + range overlap); a real
