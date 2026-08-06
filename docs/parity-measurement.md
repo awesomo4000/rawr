@@ -844,6 +844,118 @@ Recorded runs:
 - `misc/parity-20260731-184458-summary.txt` (Zen 4 pre-change production board, retained on the host)
 - `misc/parity-20260731-194353-summary.txt` (Zen 4 final production board, retained on the host)
 
+## Structural parity Wave 1 (08/05/2026)
+
+Specs 32-34 tested compact Array/Run container headers, a word-major n-way OR kernel, and
+storage-free `select` kernels. Diagnostics used the canonical 3-warmup/21-timed protocol and five
+fresh processes on Apple M4 and Windows x86-64 / Zen 4. Production adoption remained serial.
+
+### Compact container headers
+
+Standalone 24-byte-versus-16-byte replica cells established allocation-class accounting but were
+not used as the GO gate. Full bitmap candidates were compiled three ways: committed baseline,
+candidate source with the layout flag off, and the same source with the flag on. The flag-off M4
+text disassembly was instruction-identical to the committed baseline after compiler-generated
+symbol normalization.
+
+| Host | Representation | Full-row candidate / flag-off | Decision |
+| --- | --- | ---: | --- |
+| M4 | Array | lazy-OR construction `5.462 / 4.571 ms` (`1.195x`) | NO-GO |
+| Zen 4 | Array | lazy-OR construction `18.065 / 16.784 ms` (`1.076x`) | NO-GO |
+| M4 | Run | clone `1.071 / 1.904 ms` (`0.563x`) | material win |
+| M4 | Run | dense AND `1.156 / 2.084 ms` (`0.555x`) | material win |
+| M4 | Run | select `8.417 / 13.790 ms` (`0.610x`) | material win |
+| Zen 4 | Run | clone `1.481 / 1.494 ms` (`0.991x`) | neutral |
+| Zen 4 | Run | dense AND `1.627 / 1.645 ms` (`0.989x`) | neutral |
+| Zen 4 | Run | select `10.330 / 9.847 ms` (`1.049x`) | stable 4.9% regression |
+
+The compact Array header is rejected. The compact Run diagnostic closed major M4 gaps, but its
+Zen 4 select ranges did not overlap (`10.303-10.391 ms` versus `9.815-9.878 ms`). The owner
+explicitly accepted that cross-host exception because the candidate still beat CRoaring on Zen 4.
+Production therefore replaced the 16-byte `runs` slice with an 8-byte many-pointer while retaining
+`n_runs` as the logical bound and `capacity` as the allocation bound.
+
+Final whole-board ratios show the production result. Values are rawr SMP (or rawr default for
+non-allocating rows) divided by CRoaring; lower is better.
+
+| Row | M4 before | M4 after | Zen 4 before | Zen 4 after |
+| --- | ---: | ---: | ---: | ---: |
+| clone | `1.788x` | `0.672x` | `0.360x` | `0.338x` |
+| dense AND | `1.587x` | `0.845x` | `0.714x` | `0.647x` |
+| dense OR | `1.138x` | `0.702x` | `0.438x` | `0.402x` |
+| flip | `0.968x` | `0.616x` | `0.464x` | `0.462x` |
+| remove range | `0.803x` | `0.290x` | `0.182x` | `0.162x` |
+| select | `1.387x` | `0.864x` | `1.138x` | `0.934x` |
+
+The old header occupied 24 bytes (`runs.ptr`, `runs.len`, and metadata), which rounded to the
+32-byte SMP allocator class. The new 16-byte header fits the 16-byte class. It removes a redundant
+length, halves header-class storage and allocator traffic, and packs twice as many headers into the
+same cache footprint. The canonical dense corpus consists of eight run containers, so clone and
+dense operations allocate or traverse these headers repeatedly; select repeatedly follows the same
+container metadata. The resulting improvements are therefore consistent with both the allocation
+counts and the affected rows rather than a new set-operation algorithm.
+
+### N-way OR fusion
+
+The shared 32-bitmap corpus is pinned at 16 array, 8 bitset, and 8 run sources for each of six keys,
+with portable fingerprint `0x4826470feff53a55`. Attribution identified bitset accumulation as the
+dominant share. A seeded word-major accumulator passed the direct benchmark-only end-to-end gate on
+both hosts, so the same shape was migrated to production `orMany`: one scratch pointer allocation
+for the whole operation, independent cloning of the first bitset, word-major OR of remaining
+bitsets, unchanged array/run folding, and final cardinality repair. `xorMany` is unchanged.
+
+Contemporaneous committed-source and production boards measured:
+
+| Host | rawr SMP before | rawr SMP after | after / before | CRoaring after | rawr / CRoaring |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| M4 | 14.086 us/op | 11.531 us/op | `0.819x` | 11.484 us/op | `1.004x` |
+| Zen 4 | 21.038 us/op | 15.188 us/op | `0.722x` | 23.294 us/op | `0.652x` |
+
+`orManyHeap`, which aliases rawr's `orMany`, improved by 20% on M4 and 28% on Zen 4. The old
+source-major loop traversed and rewrote the 8 KiB destination bitset once per source. The new
+word-major loop seeds the result from the first owned clone, loads each destination vector once,
+ORs the corresponding vectors from all remaining bitsets, and stores once. This removes the
+zero-fill/first-source pass and reduces accumulator memory traffic while preserving source
+ownership. Unit tests
+cover empty/single inputs, duplicate pointers, mixed container types, source immutability, known
+cardinality/representation, and exhaustive allocation failures. ReleaseSafe, ReleaseFast, and
+CRoaring differential suites pass. Whole-board movements outside the OR rows were checked against
+contemporaneous committed-source boards; M4 movements above 5% had overlapping process ranges.
+Zen 4 also showed linked-worker layout movement in untouched rawr and CRoaring-only rows, while the
+focused OR row remained stable and the shipped library change is confined to `orMany`. The final
+production boards measured `0.957x` CRoaring on M4 and `0.644x` on Zen 4.
+
+### Select kernel matrix
+
+On M4, scalar select measured `13.871 ns/query` (`1.389x` CRoaring); unroll-2 and unroll-4 were
+slower, while a stored-prefix ceiling reached `7.163 ns/query`. On Zen 4, scalar measured
+`12.753 ns/query` (`1.163x`), unrolling was neutral, and the prefix ceiling remained
+`1.148x` CRoaring. Array-only controls also regressed by more than 5% on Zen 4. The storage-free
+production chunk is therefore NO-GO. The ceiling does not justify choosing or shipping an index;
+that remains a separate feature/design spec if pursued.
+
+Diagnostic commands:
+
+```sh
+./scripts/run-bench-compact-headers.sh
+./scripts/run-bench-or-many-fusion.sh
+./scripts/run-bench-select-kernel-matrix.sh
+```
+
+The two rejected experiments were still useful controls. Expanding the Array header made lazy-OR
+construction slower on both hosts, and storage-free select unrolling did not improve either host.
+The successful select improvement came from representation locality rather than instruction-level
+loop tuning. This is the main Wave 1 result: exact full-row candidates exposed a structural win
+that standalone replicas and micro-kernel changes did not predict reliably.
+
+Recorded M4 artifacts include `misc/compact-headers-20260805-065447-summary.txt`,
+`misc/or-many-fusion-20260805-065321-summary.txt`,
+`misc/select-kernel-matrix-20260805-065344-summary.txt`, and
+`misc/parity-20260805-231619-summary.txt`. Final production boards are
+`misc/parity-20260806-090559-summary.txt` on M4 and
+`misc/parity-20260806-091351-summary.txt` on the Zen 4 reference host. The other corresponding
+Zen 4 artifacts are retained on that host.
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad

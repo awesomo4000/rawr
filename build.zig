@@ -314,6 +314,121 @@ pub fn build(b: *std.Build) void {
     );
     bench_select_diag_step.dependOn(&b.addInstallArtifact(bench_select_diag_exe, .{}).step);
 
+    // Compact ArrayContainer header replica diagnostic.
+    const bench_compact_array_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_compact_header_array.zig"),
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    addBenchmarkPlatformShim(b, bench_compact_array_mod, target);
+    const bench_compact_array_exe = b.addExecutable(.{
+        .name = "bench_compact_header_array",
+        .root_module = bench_compact_array_mod,
+    });
+    const bench_compact_array_step = b.step(
+        "bench-compact-header-array",
+        "Build the compact ArrayContainer header diagnostic",
+    );
+    bench_compact_array_step.dependOn(
+        &b.addInstallArtifact(bench_compact_array_exe, .{}).step,
+    );
+
+    // Compact RunContainer header replica diagnostic.
+    const bench_compact_run_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_compact_header_run.zig"),
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    addBenchmarkPlatformShim(b, bench_compact_run_mod, target);
+    const bench_compact_run_exe = b.addExecutable(.{
+        .name = "bench_compact_header_run",
+        .root_module = bench_compact_run_mod,
+    });
+    const bench_compact_run_step = b.step(
+        "bench-compact-header-run",
+        "Build the compact RunContainer header diagnostic",
+    );
+    bench_compact_run_step.dependOn(
+        &b.addInstallArtifact(bench_compact_run_exe, .{}).step,
+    );
+
+    // Rawr-only canonical full rows for compact-header three-way candidates.
+    const bench_compact_full_rows_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_compact_header_full_rows.zig"),
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    bench_compact_full_rows_mod.addImport("rawr", select_diag_lib_mod);
+    addBenchmarkPlatformShim(b, bench_compact_full_rows_mod, target);
+    const bench_compact_full_rows_exe = b.addExecutable(.{
+        .name = "bench_compact_header_full_rows",
+        .root_module = bench_compact_full_rows_mod,
+    });
+    const bench_compact_full_rows_step = b.step(
+        "bench-compact-header-full-rows",
+        "Build compact-header canonical full-row diagnostic",
+    );
+    bench_compact_full_rows_step.dependOn(
+        &b.addInstallArtifact(bench_compact_full_rows_exe, .{}).step,
+    );
+
+    // orMany source-attribution and word-major fusion diagnostic.
+    const bench_or_many_fusion_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_or_many_fusion.zig"),
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    bench_or_many_fusion_mod.addImport("rawr", select_diag_lib_mod);
+    addBenchmarkPlatformShim(b, bench_or_many_fusion_mod, target);
+    addTranslatedCImport(b, bench_or_many_fusion_mod, .{
+        .header = "tools/croaring_wrapper.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    const bench_or_many_fusion_exe = b.addExecutable(.{
+        .name = "bench_or_many_fusion",
+        .root_module = bench_or_many_fusion_mod,
+    });
+    const bench_or_many_fusion_step = b.step(
+        "bench-or-many-fusion",
+        "Build the orMany fusion diagnostic",
+    );
+    bench_or_many_fusion_step.dependOn(
+        &b.addInstallArtifact(bench_or_many_fusion_exe, .{}).step,
+    );
+
+    // select container-walk kernel matrix and prefix ceiling.
+    const bench_select_kernel_matrix_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_select_kernel_matrix.zig"),
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    bench_select_kernel_matrix_mod.addImport("rawr", select_diag_lib_mod);
+    addBenchmarkPlatformShim(b, bench_select_kernel_matrix_mod, target);
+    addTranslatedCImport(b, bench_select_kernel_matrix_mod, .{
+        .header = "tools/croaring_select_diag.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{"tools/croaring_select_diag.c"},
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = select_diag_optimize,
+    });
+    const bench_select_kernel_matrix_exe = b.addExecutable(.{
+        .name = "bench_select_kernel_matrix",
+        .root_module = bench_select_kernel_matrix_mod,
+    });
+    const bench_select_kernel_matrix_step = b.step(
+        "bench-select-kernel-matrix",
+        "Build the select kernel matrix diagnostic",
+    );
+    bench_select_kernel_matrix_step.dependOn(
+        &b.addInstallArtifact(bench_select_kernel_matrix_exe, .{}).step,
+    );
+
     // Fresh-process fixed-buffer serialization diagnosis harness.
     const serialize_diag_optimize = if (optimize == .Debug) .ReleaseFast else optimize;
     const serialize_diag_lib_mod = b.createModule(.{

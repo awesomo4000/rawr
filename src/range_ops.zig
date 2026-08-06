@@ -205,7 +205,7 @@ fn containerDifferenceRange(
 ) !Container {
     var range_pair = RunContainer.RunPair{ .start = low, .length = high - low };
     var range_view = RunContainer{
-        .runs = @as(*[1]RunContainer.RunPair, &range_pair)[0..],
+        .runs = RunContainer.runsStorage(@as(*[1]RunContainer.RunPair, &range_pair)[0..]),
         .n_runs = 1,
         .capacity = 1,
         .cardinality = @intCast(@as(u32, high) - low + 1),
@@ -372,7 +372,7 @@ fn xorRangeContainer(
 ) !Container {
     var range_pair = RunContainer.RunPair{ .start = low, .length = high - low };
     var range_view = RunContainer{
-        .runs = @as(*[1]RunContainer.RunPair, &range_pair)[0..],
+        .runs = RunContainer.runsStorage(@as(*[1]RunContainer.RunPair, &range_pair)[0..]),
         .n_runs = 1,
         .capacity = 1,
         .cardinality = @intCast(@as(u32, high) - low + 1),

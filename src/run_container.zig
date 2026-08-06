@@ -24,7 +24,7 @@ pub const RunContainer = struct {
     };
 
     /// Sorted array of non-overlapping, non-adjacent runs.
-    runs: []RunPair,
+    runs: [*]RunPair,
 
     /// Number of runs.
     n_runs: u16,
@@ -46,7 +46,7 @@ pub const RunContainer = struct {
         const runs = try allocator.alloc(RunPair, cap);
 
         self.* = .{
-            .runs = runs,
+            .runs = runsStorage(runs),
             .n_runs = 0,
             .capacity = cap,
             .cardinality = 0,
@@ -68,7 +68,7 @@ pub const RunContainer = struct {
         @memcpy(runs[0..self.n_runs], self.runs[0..self.n_runs]);
 
         copy.* = .{
-            .runs = runs,
+            .runs = runsStorage(runs),
             .n_runs = self.n_runs,
             .capacity = self.capacity,
             .cardinality = self.cardinality,
@@ -112,7 +112,7 @@ pub const RunContainer = struct {
         const new_runs = try allocator.alloc(RunPair, new_cap);
         @memcpy(new_runs[0..self.n_runs], self.runs[0..self.n_runs]);
         allocator.free(self.runs[0..self.capacity]);
-        self.runs = new_runs;
+        self.runs = runsStorage(new_runs);
         self.capacity = new_cap;
     }
 
@@ -124,8 +124,12 @@ pub const RunContainer = struct {
         const new_runs = try allocator.alloc(RunPair, new_cap);
         @memcpy(new_runs[0..self.n_runs], self.runs[0..self.n_runs]);
         allocator.free(self.runs[0..self.capacity]);
-        self.runs = new_runs;
+        self.runs = runsStorage(new_runs);
         self.capacity = new_cap;
+    }
+
+    pub fn runsStorage(runs: []RunPair) [*]RunPair {
+        return runs.ptr;
     }
 
     /// Add a value. Returns true if value was new.
@@ -366,6 +370,64 @@ test "init and deinit" {
 
     try std.testing.expectEqual(@as(u16, 0), rc.n_runs);
     try std.testing.expectEqual(@as(u32, 0), rc.getCardinality());
+}
+
+test "compact header layout" {
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(RunContainer));
+    try std.testing.expect(@alignOf(RunContainer) >= 4);
+}
+
+test "clone preserves source across all allocation failures" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        cloneAllocationFailureCase,
+        .{},
+    );
+}
+
+fn cloneAllocationFailureCase(allocator: std.mem.Allocator) !void {
+    const source = try RunContainer.init(std.testing.allocator, 8);
+    defer source.deinit(std.testing.allocator);
+    _ = try source.addRange(std.testing.allocator, 10, 20);
+    _ = try source.addRange(std.testing.allocator, 100, 120);
+
+    const before = try std.testing.allocator.dupe(RunContainer.RunPair, source.runs[0..source.n_runs]);
+    defer std.testing.allocator.free(before);
+    const before_cardinality = source.getCardinality();
+
+    const copy = source.clone(allocator) catch |err| {
+        try expectRunState(source, before, before_cardinality);
+        return err;
+    };
+    defer copy.deinit(allocator);
+    try expectRunState(source, before, before_cardinality);
+    try expectRunState(copy, before, before_cardinality);
+}
+
+test "growth allocation failure leaves run storage unchanged" {
+    const allocator = std.testing.allocator;
+    const rc = try RunContainer.init(allocator, 4);
+    defer rc.deinit(allocator);
+    for (&[_]u16{ 10, 20, 30, 40 }) |value| _ = try rc.add(allocator, value);
+
+    const before = try allocator.dupe(RunContainer.RunPair, rc.runs[0..rc.n_runs]);
+    defer allocator.free(before);
+    const before_cardinality = rc.getCardinality();
+    const before_capacity = rc.capacity;
+
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, rc.add(failing.allocator(), 50));
+    try expectRunState(rc, before, before_cardinality);
+    try std.testing.expectEqual(before_capacity, rc.capacity);
+}
+
+fn expectRunState(rc: *RunContainer, expected: []const RunContainer.RunPair, cardinality: u32) !void {
+    try std.testing.expectEqual(@as(u16, @intCast(expected.len)), rc.n_runs);
+    try std.testing.expectEqual(cardinality, rc.getCardinality());
+    for (rc.runs[0..rc.n_runs], expected) |actual, wanted| {
+        try std.testing.expectEqual(wanted.start, actual.start);
+        try std.testing.expectEqual(wanted.length, actual.length);
+    }
 }
 
 test "add single values" {

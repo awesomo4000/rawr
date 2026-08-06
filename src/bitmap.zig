@@ -1110,7 +1110,7 @@ pub const RoaringBitmap = struct {
 
     /// Return a new bitmap that is the union (OR) of all inputs.
     pub fn orMany(allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self {
-        return manyMerge(.bor, allocator, bitmaps);
+        return manyOrMerge(allocator, bitmaps);
     }
 
     /// Return a new bitmap that is the union (OR) of all inputs.
@@ -2017,6 +2017,111 @@ pub const RoaringBitmap = struct {
     }
 
     const ManyOp = enum { bor, xor };
+
+    fn manyOrMerge(allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self {
+        if (bitmaps.len == 1) return bitmaps[0].clone(allocator);
+
+        var capacity: usize = 0;
+        for (bitmaps) |bitmap| capacity = @min(capacity +| bitmap.size, 1 << 16);
+        var result = try Self.initCapacity(allocator, @intCast(capacity));
+        errdefer result.deinit();
+        if (bitmaps.len == 0) return result;
+
+        const cursors = try allocator.alloc(usize, bitmaps.len);
+        defer allocator.free(cursors);
+        @memset(cursors, 0);
+
+        const bitset_pointers = try allocator.alloc(*const BitsetContainer, bitmaps.len);
+        defer allocator.free(bitset_pointers);
+
+        while (nextManyKey(bitmaps, cursors)) |key| {
+            const tp = try foldManyOrKey(
+                allocator,
+                bitmaps,
+                cursors,
+                key,
+                bitset_pointers,
+            );
+            result.appendContainer(key, tp) catch |err| {
+                Container.fromTagged(tp).deinit(allocator);
+                return err;
+            };
+        }
+
+        result.cached_cardinality = -1;
+        try result.repairAfterLazy();
+        return result;
+    }
+
+    fn foldManyOrKey(
+        allocator: std.mem.Allocator,
+        bitmaps: []const *const Self,
+        cursors: []usize,
+        key: u16,
+        bitset_pointers: []*const BitsetContainer,
+    ) !TaggedPtr {
+        var source_count: usize = 0;
+        for (bitmaps, cursors) |bitmap, cursor| {
+            if (cursor < bitmap.size and bitmap.keys[cursor] == key) source_count += 1;
+        }
+
+        if (source_count == 1) {
+            for (bitmaps, cursors) |bitmap, *cursor| {
+                if (cursor.* >= bitmap.size or bitmap.keys[cursor.*] != key) continue;
+                const cloned = try cloneContainer(allocator, bitmap.containers[cursor.*]);
+                cursor.* += 1;
+                return cloned;
+            }
+            unreachable;
+        }
+
+        var bitset_count: usize = 0;
+        for (bitmaps, cursors) |bitmap, cursor| {
+            if (cursor >= bitmap.size or bitmap.keys[cursor] != key) continue;
+            switch (Container.fromTagged(bitmap.containers[cursor])) {
+                .bitset => |bitset| {
+                    bitset_pointers[bitset_count] = bitset;
+                    bitset_count += 1;
+                },
+                .array, .run => {},
+                .reserved => unreachable,
+            }
+        }
+
+        const accumulator = if (bitset_count == 0)
+            try BitsetContainer.init(allocator)
+        else
+            try bitset_pointers[0].clone(allocator);
+        errdefer accumulator.deinit(allocator);
+
+        if (bitset_count > 1) {
+            wordMajorOr(accumulator, bitset_pointers[1..bitset_count]);
+        }
+        for (bitmaps, cursors) |bitmap, *cursor| {
+            if (cursor.* >= bitmap.size or bitmap.keys[cursor.*] != key) continue;
+            const container = Container.fromTagged(bitmap.containers[cursor.*]);
+            if (!isBitsetContainer(container)) {
+                lazyAccumulateIntoBitset(.bor, accumulator, container);
+            }
+            cursor.* += 1;
+        }
+        accumulator.cardinality = -1;
+        return TaggedPtr.initBitset(accumulator);
+    }
+
+    fn wordMajorOr(destination: *BitsetContainer, sources: []const *const BitsetContainer) void {
+        const vector_width = 8;
+        var word_index: usize = 0;
+        while (word_index < BitsetContainer.NUM_WORDS) : (word_index += vector_width) {
+            var accumulated: @Vector(vector_width, u64) = destination.words[word_index..][0..vector_width].*;
+            for (sources) |source| {
+                const words: @Vector(vector_width, u64) = source.words[word_index..][0..vector_width].*;
+                accumulated |= words;
+            }
+            destination.words[word_index..][0..vector_width].* = accumulated;
+        }
+        destination.cardinality = -1;
+    }
 
     fn manyMerge(comptime op: ManyOp, allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self {
         if (bitmaps.len == 1) {

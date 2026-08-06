@@ -493,6 +493,148 @@ fn denseSetOperationAllocationFailureCase(result_allocator: std.mem.Allocator) !
     try std.testing.expectEqual(@as(u64, 500_000), right.cardinality());
 }
 
+test "orMany fused bitset path preserves values representations and inputs" {
+    const allocator = std.testing.allocator;
+
+    var array = try RoaringBitmap.init(allocator);
+    defer array.deinit();
+    for (0..128) |index| _ = try array.add(@intCast(index * 31));
+
+    var bitset_a = try RoaringBitmap.init(allocator);
+    defer bitset_a.deinit();
+    var bitset_b = try RoaringBitmap.init(allocator);
+    defer bitset_b.deinit();
+    for (0..5000) |index| {
+        _ = try bitset_a.add(@intCast(index * 2));
+        _ = try bitset_b.add(@intCast(index * 2 + 1));
+    }
+
+    var run = try RoaringBitmap.init(allocator);
+    defer run.deinit();
+    _ = try run.addRange(1000, 20_000);
+
+    const inputs = [_]*const RoaringBitmap{ &array, &bitset_a, &bitset_b, &run, &bitset_a };
+    var expected = try array.bitwiseOr(allocator, &bitset_a);
+    defer expected.deinit();
+    try expected.bitwiseOrInPlace(&bitset_b);
+    try expected.bitwiseOrInPlace(&run);
+
+    const before = [_][]u8{
+        try array.serialize(allocator),
+        try bitset_a.serialize(allocator),
+        try bitset_b.serialize(allocator),
+        try run.serialize(allocator),
+    };
+    defer for (before) |bytes| allocator.free(bytes);
+
+    var result = try RoaringBitmap.orMany(allocator, &inputs);
+    defer result.deinit();
+    try std.testing.expect(expected.equals(&result));
+    try std.testing.expectEqual(expected.cardinality(), result.cardinality());
+    try std.testing.expectEqual(@as(u32, 1), result.size);
+    try std.testing.expectEqual(TaggedPtr.ContainerType.bitset, result.containers[0].getType());
+    try result.validate();
+
+    const sources = [_]*const RoaringBitmap{ &array, &bitset_a, &bitset_b, &run };
+    for (sources, before) |source, bytes| {
+        const after = try source.serialize(allocator);
+        defer allocator.free(after);
+        try std.testing.expectEqualSlices(u8, bytes, after);
+    }
+
+    var one_bitset = try RoaringBitmap.orMany(allocator, &.{ &bitset_a, &array });
+    defer one_bitset.deinit();
+    var one_bitset_expected = try bitset_a.bitwiseOr(allocator, &array);
+    defer one_bitset_expected.deinit();
+    try expectPortableClone(&one_bitset_expected, &one_bitset);
+    _ = try one_bitset.add(std.math.maxInt(u32));
+    try std.testing.expect(!bitset_a.contains(std.math.maxInt(u32)));
+}
+
+test "orMany fused path preserves the array to bitset boundary" {
+    const allocator = std.testing.allocator;
+    var even = try RoaringBitmap.init(allocator);
+    defer even.deinit();
+    var odd = try RoaringBitmap.init(allocator);
+    defer odd.deinit();
+    for (0..2048) |index| {
+        _ = try even.add(@intCast(index * 2));
+        _ = try odd.add(@intCast(index * 2 + 1));
+    }
+
+    var at_boundary = try RoaringBitmap.orMany(allocator, &.{ &even, &odd });
+    defer at_boundary.deinit();
+    try std.testing.expectEqual(@as(u64, 4096), at_boundary.cardinality());
+    try std.testing.expectEqual(TaggedPtr.ContainerType.array, at_boundary.containers[0].getType());
+
+    _ = try even.add(4096);
+    var above_boundary = try RoaringBitmap.orMany(allocator, &.{ &even, &odd });
+    defer above_boundary.deinit();
+    try std.testing.expectEqual(@as(u64, 4097), above_boundary.cardinality());
+    try std.testing.expectEqual(TaggedPtr.ContainerType.bitset, above_boundary.containers[0].getType());
+    try above_boundary.validate();
+}
+
+test "orMany fused path handles empty single and allocation failures" {
+    const allocator = std.testing.allocator;
+
+    var empty = try RoaringBitmap.orMany(allocator, &.{});
+    defer empty.deinit();
+    try std.testing.expect(empty.isEmpty());
+
+    var source = try makeOrManyFailureInput(0);
+    defer source.deinit();
+    var single = try RoaringBitmap.orMany(allocator, &.{&source});
+    defer single.deinit();
+    try expectPortableClone(&source, &single);
+    _ = try single.add(std.math.maxInt(u32));
+    try std.testing.expect(!source.contains(std.math.maxInt(u32)));
+
+    try std.testing.checkAllAllocationFailures(
+        allocator,
+        orManyAllocationFailureCase,
+        .{},
+    );
+}
+
+fn orManyAllocationFailureCase(result_allocator: std.mem.Allocator) !void {
+    var a = try makeOrManyFailureInput(0);
+    defer a.deinit();
+    var b = try makeOrManyFailureInput(1);
+    defer b.deinit();
+    const inputs = [_]*const RoaringBitmap{ &a, &b };
+
+    const before_a = try a.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(before_a);
+    const before_b = try b.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(before_b);
+
+    var result = RoaringBitmap.orMany(result_allocator, &inputs) catch |err| {
+        try expectBitmapBytes(&a, before_a);
+        try expectBitmapBytes(&b, before_b);
+        return err;
+    };
+    defer result.deinit();
+    try expectBitmapBytes(&a, before_a);
+    try expectBitmapBytes(&b, before_b);
+}
+
+fn makeOrManyFailureInput(offset: u32) !RoaringBitmap {
+    var bitmap = try RoaringBitmap.init(std.testing.allocator);
+    errdefer bitmap.deinit();
+    for (0..5000) |index| _ = try bitmap.add(@intCast(index + offset));
+    for (0..128) |index| {
+        _ = try bitmap.add((@as(u32, 1) << 16) | @as(u32, @intCast(index * 31 + offset)));
+    }
+    return bitmap;
+}
+
+fn expectBitmapBytes(bitmap: *const RoaringBitmap, expected: []const u8) !void {
+    const actual = try bitmap.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+}
+
 test "bitwiseDifference" {
     const allocator = std.testing.allocator;
 

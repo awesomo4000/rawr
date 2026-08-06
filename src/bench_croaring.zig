@@ -6,6 +6,7 @@ const rawr = @import("rawr");
 const RoaringBitmap = rawr.RoaringBitmap;
 const c = @import("c");
 const bench_time = @import("bench_time.zig");
+const bench_corpus = @import("bench_corpus.zig");
 
 const allocator = if (builtin.os.tag == .openbsd) bench_time.openbsd_c_allocator else std.heap.smp_allocator;
 const libc_allocator = bench_time.cAllocator();
@@ -397,47 +398,11 @@ fn addArrayContainersRawr(bm: *RoaringBitmap, first_key: usize, first_low: usize
 }
 
 fn initRawrManyBitmaps() void {
-    if (rawr_many_bms[0] != null) return;
-
-    for (0..N_MANY_BITMAPS) |i| {
-        var bm = RoaringBitmap.init(allocator) catch unreachable;
-        addManyPatternRawr(&bm, i) catch unreachable;
-        if (i % 3 == 0) {
-            _ = bm.runOptimize() catch unreachable;
-        }
-        rawr_many_bms[i] = bm;
-        rawr_many_inputs[i] = &rawr_many_bms[i].?;
-    }
-}
-
-fn addManyPatternRawr(bm: *RoaringBitmap, bitmap_idx: usize) !void {
-    for (0..6) |chunk| {
-        const base: u32 = @as(u32, @intCast(chunk)) << 16;
-        switch ((bitmap_idx + chunk) % 4) {
-            0 => {
-                for (0..128) |j| {
-                    const low: u32 = @intCast((j * 521 + bitmap_idx * 17) & 0xffff);
-                    _ = try bm.add(base | low);
-                }
-            },
-            1 => {
-                for (0..5000) |j| {
-                    const low: u32 = @intCast((j * 13 + bitmap_idx * 29) & 0xffff);
-                    _ = try bm.add(base | low);
-                }
-            },
-            2 => {
-                const start: u32 = @intCast((bitmap_idx * 97) % 20_000);
-                _ = try bm.addRange(base | start, base | (start + 12_000));
-            },
-            else => {
-                _ = try bm.add(base);
-                _ = try bm.add(base | 1);
-                _ = try bm.add(base | 65_534);
-                _ = try bm.add(base | 65_535);
-            },
-        }
-    }
+    bench_corpus.initRawrManyBitmaps(
+        allocator,
+        &rawr_many_bms,
+        &rawr_many_inputs,
+    ) catch unreachable;
 }
 
 fn benchRawrAndSparse() void {
