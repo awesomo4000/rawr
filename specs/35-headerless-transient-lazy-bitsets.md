@@ -139,13 +139,25 @@ unknown-cardinality bitset** for:
   **stops the transient representation from propagating** into cloned bitmaps. Never aliases.
 - **repeated lazy operations** — a transient accumulator can be accumulated into again (the
   `lazyOrInPlace`-then-`lazyOr` case) without materializing a header;
-- **serialization — PINNED: `serialize` on an unrepaired bitmap is an ERROR** (a documented
-  `error.UnrepairedLazyResult`, or equivalent), not a silent materialization: the portable format has
-  no transient type, cardinalities are unknown, and silently repairing inside a const-ish serialize
-  would surprise. Callers repair first. `serializedSizeInBytes` likewise.
-- **validate — PINNED:** a transient container is **valid only in an unrepaired bitmap**;
-  `validate` accepts it there (checking the words pointer/alignment) and **reports it as invalid in a
-  repaired bitmap** — so the invariant "no transient survives repair" is machine-checked.
+- **`serialize` — PINNED: ERROR on an unrepaired bitmap** (documented
+  `error.UnrepairedLazyResult`): the portable format has no transient type, cardinalities are
+  unknown, and silently repairing inside a const-ish serialize would surprise. Callers repair first.
+  (`serialize` already returns an error union, so this is additive.)
+- **`serializedSizeInBytes` — PINNED: keep the signature, compute the true size.** Its public
+  signature is **`fn serializedSizeInBytes(self: *const Self) usize`** — **no error channel** — so it
+  **cannot** return `error.UnrepairedLazyResult`. Chosen (least disruptive, no API break, no panic):
+  **keep `usize` and compute the correct size for a transient container by scanning its words**
+  (derive the cardinality, then the size the container *would* serialize as). **Rejected
+  alternatives, recorded:** an unconditional panic on unrepaired input (hostile for a pure size
+  query), and a breaking change to `!usize` (API break for an internal optimization).
+- **`validate` — PINNED: return `UnrepairedLazyResult` on ANY `.lazy_bitset`.** There is **no
+  bitmap-level repaired-state flag** — the tag itself is the only state indicator — so `validate`
+  **cannot** distinguish "valid because unrepaired" from "invalid because it survived repair".
+  Therefore: `validate` **adds `UnrepairedLazyResult` to `ValidateError` and returns it whenever it
+  encounters a transient container**; **normal validation must then pass after `repairAfterLazy`**
+  (that pairing is what machine-checks "no transient survives repair"). Pointer/alignment checks for
+  the transient itself live in an **internal transient-state test/helper**, not in public `validate`
+  — **no state field is added to every bitmap.**
 - **repair** — the demote/survive path below;
 - **deinit** — frees the words; **no header to free**.
 
@@ -262,8 +274,11 @@ position; the **first / middle / last survivor-header** allocation position; the
 during construction; and demote-array allocation — each verified valid-or-cleanly-errored, inputs
 untouched, no leak.
 - **Coverage follows the activation table** — `lazyOr(true)`, `lazyOr(false)` **with a bitset input**,
-  `lazyOrInPlace`, **`lazyXor`, `lazyXorInPlace`** all exercised. **`xorMany` and the eager set ops
-  are genuinely untouched** (different code path).
+  `lazyOrInPlace`, **`lazyXor`, `lazyXorInPlace`** all exercised.
+- **Eager set operations never PRODUCE a transient container, but their dispatch IS updated** per the
+  pinned consume/reject policy above (each arm a real unknown-cardinality-bitset implementation or an
+  explicit documented rejection) — they are **not** "untouched". **`xorMany` is genuinely untouched**
+  (different code path, produces no transients and cannot receive one mid-operation).
 
 ## Acceptance
 

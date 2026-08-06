@@ -146,12 +146,16 @@ represent internally as a **transient lazy-bitset tag**; repair computes cardina
 it demotes, free the words with no header ever allocated**; if it survives, allocate the normal
 16-byte header and adopt the words.
 
-**The `reserved = 0b11` tag is free in the enum but NOT operationally free.** The `Container` union
-has no member for it, and existing generic paths **return false/zero, skip deallocation, or treat
-reserved as unreachable**. The child spec must supply a **complete dispatch/lifecycle inventory** for
-the transient representation covering: repeated lazy operations, **clone/move**, **repair failure**,
-**deinit-before-repair**, **serialization attempts**, and **generic queries** (contains, cardinality,
-rank/select, iteration) — each must have defined, tested behavior, not fall through a default.
+**The `0b11` tag slot is NOT operationally free — and the child spec RENAMES it.** `Container` *does*
+have a `.reserved` member, but it is **`reserved: void`** and `fromTagged` **discards the pointer**;
+existing generic paths **return false/zero, skip deallocation, or treat it as unreachable**. Keeping
+that name would let those dangerous arms keep compiling, so spec 35 **renames the tag to
+`.lazy_bitset = 0b11` with a real payload** (`lazy_bitset: *align(64) [1024]u64`) — the rename makes
+every unhandled switch arm a **compile error**, turning the required dispatch/lifecycle inventory
+into a compiler-checked invariant. That inventory covers: repeated lazy operations, **clone**,
+**repair failure**, **deinit-before-repair**, **serialization**, **validate**, **eager-op dispatch**,
+and **generic queries** (contains, cardinality, rank/select, iteration) — each with pinned, tested
+behavior, no default fall-through. See [35-headerless-transient-lazy-bitsets.md](35-headerless-transient-lazy-bitsets.md).
 
 **Eliminated vs deferred headers (the load-bearing distinction).** A **surviving** lazy bitset still
 needs its normal header **at repair** — its allocation is merely **moved from construction to
