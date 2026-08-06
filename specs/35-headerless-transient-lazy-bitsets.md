@@ -183,7 +183,9 @@ transient container can actually reach** — the rename makes each one a compile
 
 ## Eliminated vs deferred (the load-bearing accounting — umbrella, verbatim obligation)
 
-The diagnostic reports all five, and **the gate is the COMBINED construction+repair row**:
+The diagnostic reports all five, and **BOTH the construction row AND the combined construction+repair
+row are hard gates** (construction ≤ 3.802 ms, combined ≤ 13.643 ms on M4 — construction is the
+binding constraint):
 
 1. headers **permanently eliminated** (demotion),
 2. headers **deferred** to repair (survivors),
@@ -226,7 +228,8 @@ allocations REMAIN** — the accumulator still needs its 8 KB. The available ben
 ~16,363 header calls, never on the ~32,726 total.**
 
 Benchmark-only prototype first. Pin the bar: **~16,363 eliminated header calls × measured per-call
-SMP cost, plus the matching frees, must project the combined construction+repair row to ≤ 1.10x** —
+SMP cost, plus the matching frees, must project **BOTH** hard rows — **construction to ≤ 3.802 ms
+AND combined construction+repair to ≤ 13.643 ms** (M4; either failing stops the work) —
 or show a required focused-time improvement that does. If that arithmetic cannot get there (e.g. the
 8 KB zero-fill + repair scan dominate, not the 16 B create), **stop before changing the container
 union** and report what *does* dominate; that attribution drives whatever follows.
@@ -260,16 +263,25 @@ union** and report what *does* dominate; that attribution drives whatever follow
 (demoted bitsets, empty containers) before committing `self.size`**. An allocation failure partway
 through (today: `bitsetToArray`; with E3 additionally: the **deferred survivor header allocation**)
 can therefore leave **stale entries** — freed containers still referenced beyond `write_idx`, or a
-half-converted array. E3 **adds a failure point**, so `35-01` must pin **one** of:
+half-converted array. E3 **adds a failure point**, so a strategy must be pinned. Three are
+permitted; **`35-01` SELECTS (c)**:
 
 - **(a) Two-phase replacement** — build the repaired key/container arrays **beside** the originals,
-  committing only on full success (originals freed after commit); or
+  committing only on full success (originals freed after commit). **Rejected:** a second top-level
+  array allocation per repair can cancel the saving E3 is chasing.
 - **(b) Explicit rollback bookkeeping** — a recorded undo log sufficient to restore a
-  consistently-deinit-able bitmap on failure at any point.
+  consistently-deinit-able bitmap on failure at any point. **Rejected:** same cost objection.
+- **(c) SELECTED — per-container build-before-free with in-place partial commit.** Allocate each
+  replacement (demoted array, or the survivor header adopting the words) **before** retiring the old
+  container. On failure: the repaired **prefix** `[0, write_idx)` stands, the **untouched tail is
+  compacted behind it** (those entries keep their existing valid containers), `self.size` is updated,
+  **`cached_cardinality` stays `-2`** (transients remain in the tail, so the reject-preflight sentinel
+  must not be cleared), and the error is returned. **No parallel arrays, no undo log** — so the
+  repair gain survives. A failed repair **may be retried.**
 
-Either way the **post-failure invariant** is explicit: the bitmap is **valid and deinit-able with no
-leak and no double-free**, and its logical contents are either fully repaired or the documented
-partial state — never dangling.
+The **post-failure invariant** is explicit: the bitmap is **valid and deinit-able with no leak and no
+double-free**, every entry in `[0, self.size)` is a live owned container, and its logical contents are
+either fully repaired or the documented partial state — never dangling.
 
 **Failure injection must hit, at minimum:** the **first**, a **middle**, and the **last** demotion
 position; the **first / middle / last survivor-header** allocation position; the words allocation
@@ -315,7 +327,8 @@ untouched, no leak.
 - **`35-01`** — production transient-tag migration (conditional on `35-00` GO): the **tag rename
   `.reserved` → `.lazy_bitset` with a words-pointer payload** (compile errors drive the site
   inventory), the pinned **clone / serialize / validate / eager-dispatch behaviors**, the pinned **repair
-  transactional strategy** (two-phase or rollback), activation-table coverage incl. `lazyXor` /
+  transactional strategy** (**(c)** per-container build-before-free with in-place partial commit),
+  activation-table coverage incl. `lazyXor` /
   `lazyXorInPlace`, invariants, positional failure injection, board gate, ship on both-host numbers.
 
 ## Estimate

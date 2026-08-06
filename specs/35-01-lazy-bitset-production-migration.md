@@ -72,12 +72,18 @@ equality/subset), and:
 everything that **mutates, combines, or converts REJECTS** with `error.UnrepairedLazyResult` (small,
 uniform, and keeps the transient from leaking into kernels). Callers repair first.
 
+**Hard constraint driving the table:** an operation **can only REJECT if it already returns an error
+union.** Every no-error signature (`void` / `bool` / `u64` / `f64` / `?u64`) **must CONSUME** —
+rejecting would require an API break or a panic.
+
 | category | decision | rationale |
 |---|---|---|
 | Single-bitmap **read queries** — `contains`, `getCardinality`, `rank`, `select`, `minimum`/`maximum`, iteration, `toArray` | **CONSUME** | reuse the bitset arm on the words; cardinality computed, not cached |
 | **Equality / subset** (`compare.zig`) | **CONSUME** | pure reads; bitset arm applies to both sides |
+| **No-error reads (complete inventory)** — `differenceCardinality` (`u64`), `jaccardIndex` (`f64`), `containsRange` (`bool`), `rankMany` (`void`), `getIndex` (`?u64`), `isEmpty` (`bool`) | **CONSUME** | **no error channel** — cannot reject without an API break or panic; all pure reads |
+| **`clearRetainingCapacity`** (`void`) | **CONSUME / cleanup** | cannot reject (`void`). **Frees transient words** like any container, clears the bitmap, and sets **`cached_cardinality = 0`** (empty, known) — clearing an unrepaired bitmap is well-defined |
 | **Eager set ops** by value — `bitwiseAnd`/`Or`/`Xor`/`Difference` | **REJECT** | would require transient arms in every `container_ops` kernel — large surface, no benefit |
-| **In-place mutations** — `add`, `remove`, `addRange`, `removeRange`, `bitwiseOrInPlace`, etc. | **REJECT** | mutating an unrepaired accumulator has no coherent cardinality semantics |
+| **In-place mutations** — `add`, `remove`, `addRange`, `removeRange`, `bitwiseOrInPlace`, etc. (all return error unions) | **REJECT** | mutating an unrepaired accumulator has no coherent cardinality semantics; O(1) preflight below rejects **before** any mutation |
 | **Pairwise cardinality-only** — `andCardinality`, `orCardinality`, `xorCardinality`, `intersects`, `intersectsRange` | **CONSUME** | **they CANNOT reject**: signatures are plain `u64` / `bool` with **no error channel**, so rejecting would force an API break or a panic. They are **pure reads**, so they consume the transient words as an unknown-cardinality bitset — same class as equality/subset |
 | **Many-ops** — `orMany`, `orManyHeap`, `xorMany`, `orManyOwned`, `xorManyOwned` | **REJECT** (input dispatch) | take `[]const *const Self` and **can receive an unrepaired bitmap**; consuming would need transient arms in every many-kernel |
 | **Optimization** — `runOptimize`, `optimize` | **REJECT** | converting representation before repair is meaningless |
@@ -141,7 +147,8 @@ the two alternatives and it **does not erase the repair gain**:
 - **On failure, commit the partial in place:** the successfully repaired **prefix** `[0, write_idx)`
   is already correct. **Compact the untouched tail behind that prefix** (the not-yet-visited entries
   keep their existing, still-valid containers), **update `self.size`** to prefix + tail,
-  **leave `cached_cardinality = -1`** (unknown), and **return the error**.
+  **set `cached_cardinality = -2`** (**not `-1`** — transients remain in the tail, so the sentinel
+  must stay `-2` or rejecting APIs would happily operate on them), and **return the error**.
 - No parallel top-level arrays, no undo log — **both rejected** because allocating a second
   key/container array (a) or maintaining an undo log (b) adds per-repair cost that could **cancel the
   very saving E3 is chasing**.
