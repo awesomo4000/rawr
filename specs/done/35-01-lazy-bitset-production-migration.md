@@ -2,6 +2,13 @@
 
 # Spec 35-01: `.lazy_bitset` production migration
 
+> **Outcome (2026-08-06) — NEVER STARTED.** `35-00`'s dual stop-gate failed (construction got
+> *slower*; combined improved 0.038 ms; both projections missed their thresholds), so this chunk was
+> correctly not begun and **no production code changed**. Retained as the record of what the
+> migration *would* have required — the `.lazy_bitset` rename across ~98 sites, the consume/reject
+> table, the `-2` sentinel preflight, and strategy (c) repair — which is precisely the risk the
+> stop-gate avoided for a 0.038 ms gain.
+
 Toplevel: [35-headerless-transient-lazy-bitsets.md](35-headerless-transient-lazy-bitsets.md) (E3).
 Ship the headerless transient accumulator in production. **Gated on `35-00`'s dual stop-gate
 projecting BOTH hard rows: lazyOr construction ≤ 3.802 ms AND lazyOr+repair (combined) ≤ 13.643 ms

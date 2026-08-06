@@ -2,6 +2,27 @@
 
 # Spec 35: Headerless transient lazy bitsets (E3)
 
+> **Outcome (2026-08-06) — NO-GO. Stopped at `35-00`; `35-01` never started, no production code
+> changed.** The headerless prototype removes **exactly 16,364 allocations** but only **261,824
+> bytes out of ~137 MB (~0.19%)** — the **8 KB words allocation, the zero-fill, the unmatched clones,
+> and the repair scan dominate**, not the 16 B header. Measured (M4): construction **4.026 → 4.109 ms
+> (SLOWER)**; combined **12.835 → 12.797 ms** (0.038 ms faster). Projected against the gates:
+> **5.829 ms vs the required 3.802**, **14.574 ms vs the required 13.643** — both fail. Zen 4
+> combined **38.784 → 38.960 ms** (slower); dense controls passed on M4 but **Zen repair was 1.061x,
+> exceeding the one-sided 1.05x** gate. Verified: `zig build`, `zig build test`, `zig build difftest
+> -Doptimize=ReleaseFast`, five-process runs both hosts, `git diff --check`. Diagnostic, controller,
+> CRoaring materialization checks, and `docs/parity-measurement.md` updated.
+>
+> **The dual stop-gate is what prevented harm.** Construction — the binding constraint — got *worse*,
+> while combined improved trivially; a combined-only gate would have authorized the container-union
+> migration (`.lazy_bitset` rename across ~98 sites, new repair transaction, sentinel plumbing) to buy
+> 0.038 ms. The numeric bar and the "project BOTH rows" requirement did exactly their job.
+>
+> **Standing conclusion:** header elimination on the lazy path is **closed** — do not re-propose it.
+> Any future lazy-OR work must attack the **dominant costs** (8 KB words allocation, zero-fill,
+> unmatched clone traffic, repair scan), and must first establish **where the gap versus CRoaring
+> actually lives**, not merely what dominates rawr's absolute time.
+
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md) (Wave 3 — the
 finale). Close the **last material M4 gap**: **lazyOr construction 1.663x** (post-`d7d357b`
 canonical board). **lazyOr + repair 1.178x is downstream of the same phase** — repair-alone is

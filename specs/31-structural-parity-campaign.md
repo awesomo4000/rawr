@@ -9,9 +9,19 @@
 > made lazy-OR worse → rejected. **E2 (spec 33) — orMany GO** (seeded word-major reduction, shipped).
 > **E4 (spec 34) — kernel NO-GO**; select closed via E1's Run-header locality, not unrolling.
 > **E5 is now MOOT** — clone/dense-AND closed by E1, so no allocation-ordering fallback needed.
-> **Remaining open: lazy-OR construction (~1.7x)** — Array header (the expected E1 lever there) was
-> NO-GO, so **E3 (headerless transient lazy bitsets) is the live remaining experiment** (Wave 3,
-> against a post-E1 rebaseline). Specs 32/33/34 + chunks in `specs/done/`; shipped `d7d357b`.
+> **Wave 3 outcome (2026-08-06) — E3 (spec 35) NO-GO.** Headerless transient lazy bitsets removed
+> 16,364 allocations but only **~0.19% of bytes**; M4 construction got **slower** (4.026 → 4.109 ms),
+> combined gained 0.038 ms, and both gate projections missed. Stopped at the diagnostic; no
+> production code changed. **All five planned experiments are now resolved** — E1 Run GO / Array
+> NO-GO, E2 GO, E4 NO-GO (row closed by E1), E5 moot, **E3 NO-GO**.
+>
+> **Campaign status: one material row remains open with no planned lever left.** lazy-OR construction
+> (~1.66x M4) survived every experiment aimed at it: Array compact header (spec 32) made it *worse*,
+> transient-arena (17) and allocator-swap (18) were closed earlier, and header elimination (35) is now
+> closed. E3's attribution says the dominant costs are the **8 KB words allocation, zero-fill,
+> unmatched clone traffic, and repair scan**. **Any next step must first diagnose where the gap versus
+> CRoaring actually lives in construction** — what dominates rawr's absolute time is not the same
+> question — before a lever is proposed. Specs 29/32/33/34/35 + chunks in `specs/done/`.
 
 The map for closing the **remaining M4 SMP gaps above 1.10x** after spec 30:
 

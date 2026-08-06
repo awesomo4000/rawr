@@ -2,6 +2,13 @@
 
 # Spec 35-00: Lazy-OR attribution + headerless prototype
 
+> **Outcome (2026-08-06) — DONE; verdict NO-GO (dual stop-gate failed).** Prototype removes 16,364
+> allocations = **261,824 of ~137 MB (~0.19%)**. M4 construction **4.026 → 4.109 ms (slower)**;
+> combined **12.835 → 12.797 ms**. Projections **5.829 vs 3.802** and **14.574 vs 13.643** — both
+> miss. Zen 4 combined slower; Zen dense repair control **1.061x > 1.05x**. Dominant costs are the
+> **8 KB words, zero-fill, unmatched clones, repair scan** — not the header. `35-01` correctly **not
+> started**; no production library code changed.
+
 Toplevel: [35-headerless-transient-lazy-bitsets.md](35-headerless-transient-lazy-bitsets.md) (E3).
 Attribute the **lazyOr construction 1.663x** gap, prototype the headerless transient accumulator
 benchmark-only, and decide the stop-gate. **No production change; no container-union change.**
