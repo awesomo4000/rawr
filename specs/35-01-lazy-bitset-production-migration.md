@@ -3,8 +3,9 @@
 # Spec 35-01: `.lazy_bitset` production migration
 
 Toplevel: [35-headerless-transient-lazy-bitsets.md](35-headerless-transient-lazy-bitsets.md) (E3).
-Ship the headerless transient accumulator in production. **Gated on `35-00`'s stop-gate projecting
-the combined construction+repair row to ≤ 1.10x.** This is the risky chunk: it changes the core
+Ship the headerless transient accumulator in production. **Gated on `35-00`'s dual stop-gate
+projecting BOTH hard rows: lazyOr construction ≤ 3.802 ms AND lazyOr+repair (combined) ≤ 13.643 ms
+on M4** (construction is the binding constraint). This is the risky chunk: it changes the core
 container discrimination.
 
 ## 1. Tag rename + payload (the enforcement mechanism)
@@ -77,7 +78,7 @@ uniform, and keeps the transient from leaking into kernels). Callers repair firs
 | **Equality / subset** (`compare.zig`) | **CONSUME** | pure reads; bitset arm applies to both sides |
 | **Eager set ops** by value — `bitwiseAnd`/`Or`/`Xor`/`Difference` | **REJECT** | would require transient arms in every `container_ops` kernel — large surface, no benefit |
 | **In-place mutations** — `add`, `remove`, `addRange`, `removeRange`, `bitwiseOrInPlace`, etc. | **REJECT** | mutating an unrepaired accumulator has no coherent cardinality semantics |
-| **Pairwise cardinality-only** — `andCardinality` and friends | **REJECT** | kernel-level pairing, same surface argument as eager set ops |
+| **Pairwise cardinality-only** — `andCardinality`, `orCardinality`, `xorCardinality`, `intersects`, `intersectsRange` | **CONSUME** | **they CANNOT reject**: signatures are plain `u64` / `bool` with **no error channel**, so rejecting would force an API break or a panic. They are **pure reads**, so they consume the transient words as an unknown-cardinality bitset — same class as equality/subset |
 | **Many-ops** — `orMany`, `orManyHeap`, `xorMany`, `orManyOwned`, `xorManyOwned` | **REJECT** (input dispatch) | take `[]const *const Self` and **can receive an unrepaired bitmap**; consuming would need transient arms in every many-kernel |
 | **Optimization** — `runOptimize`, `optimize` | **REJECT** | converting representation before repair is meaningless |
 | **Range ops** — `rangeCardinality` (read) | **CONSUME** | read-only; bitset arm applies |
@@ -87,6 +88,37 @@ uniform, and keeps the transient from leaking into kernels). Callers repair firs
 
 Eager and many-ops still **never PRODUCE** a transient — only their **input dispatch** changes, per
 this table.
+
+### How rejecting APIs detect an unrepaired bitmap — O(1) preflight via a `cached_cardinality` sentinel
+
+A rejecting **in-place** method must **reject before mutating any container**, and a **full tag scan
+on every normal eager operation would be an O(n) regression** on the overwhelmingly common repaired
+case. Pinned mechanism — **reuse the existing `cached_cardinality: i64` field** (no new bitmap field,
+no extra memory):
+
+```
+cached_cardinality >= 0  → known cardinality (repaired)
+                   -1    → unknown, no transients        (existing meaning, unchanged)
+                   -2    → NEW: contains transient lazy containers
+```
+
+State transitions (pin all of them):
+
+- **lazy construction** sets **`-2` only when it actually emits a transient** — a lazy merge that
+  emits none keeps `-1` (so `bitset_conversion = false` with no bitset inputs is unaffected);
+- **read queries (CONSUME)** may compute their result but **preserve `-2`** — they must not
+  "upgrade" the state by caching a cardinality over it;
+- **clone** materializes transients into normal bitsets → the clone gets **`-1`** (never `-2`);
+- **failed repair** (partial commit) **retains `-2`** — transients remain in the tail, and retry is
+  valid;
+- **successful repair** stores the **real cardinality** (`>= 0`);
+- **rejecting APIs** do an **O(1) preflight**: `if (cached_cardinality == -2) return
+  error.UnrepairedLazyResult;` **before any mutation**.
+
+This gives **no partial mutation**, **no per-operation container scan on the normal path**, and adds
+**no field**. Test the sentinel's transitions explicitly, including: lazy-with-no-transient stays
+`-1`, a consume-class read leaves `-2` intact, clone yields `-1`, failed repair still `-2` and a
+retry succeeds, successful repair yields `>= 0`.
 
 ## 5. Dispatch inventory (compiler-driven)
 

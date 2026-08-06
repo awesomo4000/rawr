@@ -56,7 +56,7 @@ candidate using a stack/local words view with no header allocation.** Any other 
 (a re-tuned kernel, a different zero-fill, a shifted teardown boundary) would let a **prototype
 kernel difference masquerade as the header-elimination benefit** and invalidates the cell.
 
-### Eliminated vs deferred accounting (report all five; gate is the COMBINED row)
+### Eliminated vs deferred accounting (report all five; hard gates = construction AND combined)
 
 1. headers **permanently eliminated** (demotion),
 2. headers **deferred** to repair (survivors),
@@ -101,7 +101,8 @@ margins explicitly.
   docs edits are implementer-owned.
 - **Accounting per cell:** allocations, frees, requested bytes, effective SMP-class bytes, teardown —
   container instances ≠ allocator calls.
-- **Construction and repair measured separately AND combined** (gate = combined; split = attribution).
+- **Construction and repair measured separately AND combined** (**hard gates = construction AND
+  combined**, per the dual bar above; repair-alone is attribution).
 - Explain in the writeup **why this is not the spec-17 arena**: words stay **individually
   SMP-allocated with unchanged lifetime**; only the 16 B header alloc/free disappears.
 
