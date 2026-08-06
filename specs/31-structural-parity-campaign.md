@@ -15,13 +15,45 @@
 > production code changed. **All five planned experiments are now resolved** — E1 Run GO / Array
 > NO-GO, E2 GO, E4 NO-GO (row closed by E1), E5 moot, **E3 NO-GO**.
 >
-> **Campaign status: one material row remains open with no planned lever left.** lazy-OR construction
-> (~1.66x M4) survived every experiment aimed at it: Array compact header (spec 32) made it *worse*,
-> transient-arena (17) and allocator-swap (18) were closed earlier, and header elimination (35) is now
-> closed. E3's attribution says the dominant costs are the **8 KB words allocation, zero-fill,
-> unmatched clone traffic, and repair scan**. **Any next step must first diagnose where the gap versus
-> CRoaring actually lives in construction** — what dominates rawr's absolute time is not the same
-> question — before a lever is proposed. Specs 29/32/33/34/35 + chunks in `specs/done/`.
+> **Campaign status: BASELINE RECONCILIATION BLOCKS FURTHER WORK — not a missing lever.**
+>
+> **The `1.663x` baseline is in doubt.** The canonical board recorded lazy-OR construction at
+> **5.746 ms rawr / 3.456 ms CRoaring = 1.663x**, but spec 35's focused harness measures the
+> **unchanged production implementations** at **~4.009 / 3.470 = ~1.155x**. That gap is too large for
+> ordinary noise, so **no optimization may be reasoned from `1.663x` until it is reconciled.**
+>
+> **A broad per-phase construction spec is NOT needed** — spec 35's extended attribution harness
+> already produced the phase split (M4, CRoaring vs rawr/SMP): full construction 3.470/4.009;
+> shared-transient pipeline 2.864/3.554; unmatched cloning 0.878/0.689 (**rawr faster**);
+> merge/assembly 0.103/0.074 (**rawr faster**); words allocation 0.252/0.314; **fresh-buffer zeroing
+> 3.157/3.778**; **dirty-buffer zeroing 3.481/3.699**; first accumulation 0.609/0.534 (**rawr
+> faster**); second accumulation 0.192/0.212. Cells are independently timed and **not strictly
+> additive**, but they already localize the differential.
+>
+> **Where the differential sits (arithmetic on those cells):** the whole construction gap is
+> **+0.539 ms**; the **fresh-buffer zeroing** gap alone is **+0.621 ms (115% of it)**, while
+> **dirty-buffer** zeroing is only **+0.218 ms (40%)** — so roughly **+0.403 ms exists only when the
+> buffer is fresh**, a **first-touch / page-fault signature** (SMP returning fresh pages to fault in
+> vs malloc recycling already-faulted ones). Clone traffic, merge/assembly, and accumulation all
+> **favor rawr** and cannot explain the gap.
+>
+> **Plan of record (sequence; no new broad spec):**
+> 1. **Re-run the canonical lazy-OR rows** on the current tree under the fresh-process parity protocol.
+> 2. **Reconcile canonical worker vs focused harness** so their *unchanged production* cells agree.
+> 3. If canonical converges near **~1.15x**, **replace the stale 1.663x** and re-decide whether the
+>    residual is still material at all.
+> 4. If canonical stays near **1.66x** while focused stays near **1.15x**, investigate the
+>    **harness/context difference**: code layout, worker dispatch, allocator state, corpus
+>    preparation, timing boundaries.
+> 5. **Only after reconciliation**, investigate the **production-order SMP allocate-and-first-touch/
+>    zero path** for the 8 KB buffers. Any new diagnostic must be **narrowly aimed** at either the
+>    context discrepancy or that allocate/first-touch/zero sequence.
+>
+> Levers already closed for this row: Array compact header (spec 32, made it *worse*), transient arena
+> (17), allocator swap (18), header elimination (35). Specs 29/32/33/34/35 + chunks in `specs/done/`.
+> **Spec 35's diagnostic + docs are worth committing despite the NO-GO** — they carry the
+> materialization assertions, exact allocation accounting, two-host protocol, and the evidence that
+> prevents retrying header elimination.
 
 The map for closing the **remaining M4 SMP gaps above 1.10x** after spec 30:
 
