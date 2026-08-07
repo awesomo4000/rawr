@@ -98,8 +98,12 @@ i.e. the same population and shape the teardown just released.
 can mask a poisoned traversal order, or a faster traversal can mask a slower refill:
 
 1. **refill/allocation time** (the allocation burst alone),
-2. **unsorted payload traversal time** — the traversal **MUST be unsorted**; sorting it would mask the
-   very thing being tested (what order the allocator handed back),
+2. **unsorted payload traversal time.** **Operation pinned: `@memset` all 1,024 words of each payload to
+   zero** — i.e. the production-equivalent of `BitsetContainer.init`'s zero-fill, which is the operation
+   the pathology was demonstrated on. **Different traversals could yield different locality results**, so
+   this must not be substituted (no cardinality popcount, no partial touch, no read-only scan). The
+   traversal **MUST be unsorted** — sorting it would mask the very thing being tested (what order the
+   allocator handed back),
 3. **combined refill + traversal**.
 
 **Stage 3 — allocator-noise control. MANDATORY for any positive teardown verdict.** Insert defined
@@ -128,10 +132,18 @@ class specifically.**
 | retained live | the other **50% stays live across the refill**, so the freelist is *not* simply restored to its pre-noise state |
 | ordering | allocation and free order both follow the seeded sequence — **not** address order (this is noise, not another intervention) |
 
+**Mechanical definition of the seeded ordering (implement exactly this):** build **16,384 allocation
+descriptors** (8,192 primary 8 KB @ 64-byte alignment + 8,192 secondary round-robin over
+64 B / 512 B / 4096 B), **shuffle the descriptor array once with `std.Random.shuffle` driven by the
+pinned PRNG**, then **allocate in that permuted order**, and **free every other entry of the same
+permutation** (indices 0, 2, 4, …), retaining the odd indices live. The permutation is therefore the
+single source of both allocation and free order, and neither is address-ordered.
+
 Report the noise workload's own cost separately so it is never confused with teardown or refill time.
 
-**Retained-allocation cleanup rule (required).** The retained 50% is **tens of megabytes per
-iteration** (~8,192 × 8 KB ≈ 67 MB plus secondaries). Without an explicit rule it accumulates across 21
+**Retained-allocation cleanup rule (required).** The retained 50% is **~4,096 × 8 KB ≈ 32 MB** of
+primary blocks per iteration, **plus the retained secondary allocations** (half of 8,192 blocks across
+the 64 B / 512 B / 4096 B classes). Without an explicit rule it accumulates across 21
 samples and both memory and allocator state drift. Pinned:
 
 - **Release the retained set AFTER the refill measurement completes, OUTSIDE any timed region.**

@@ -84,9 +84,10 @@ freeing."
 1. **Immediate teardown** — unsorted, **ascending-payload**, and **descending-payload** free order.
 2. **Then refill the same allocator and measure the next construction/traversal** for each of the three
    free orders — this is where the poisoning (or benefit) appears.
-3. **Ideally insert an allocator-noise control between teardown and refill** (unrelated
-   allocation/free traffic), to test whether any downstream effect survives a realistically shared
-   allocator rather than only in a rawr-only process.
+3. **Insert the pinned allocator-noise control between teardown and refill — MANDATORY for any
+   positive teardown verdict**, to test whether a downstream effect survives a realistically shared
+   allocator rather than existing only in a rawr-only process. **Without it, teardown's verdict ceiling
+   is INCONCLUSIVE and it does not advance to `38-01`.**
 
 **A teardown improvement measured without stage 2 does not count.** Repair has no such obligation:
 sorting the cardinality traversal does not reorder frees, and key-ordered compaction is unchanged.
@@ -200,7 +201,9 @@ demands a more conservative value than opt-in.
   operation is *address-ordered cardinality pass + key-ordered conversion/compaction*. **A
   cardinality-only speedup cannot gate adoption if total `repairAfterLazy` is neutral or slower** —
   report the cardinality sub-phase as attribution, and gate on the total.
-- **Determine the size-gate threshold**: sweep container counts to find where sorted stops paying.
+- **Sweep container counts to produce size-gate CANDIDATES and CROSSOVERS** (per allocator, per host,
+  monotonicity checked) — **do not select a shipping threshold**; that is deferred until the scope and
+  control-mechanism decisions. Rule in [38-00](38-00-address-sort-measurement.md).
 - **Report raw deltas and ratios plus absolute-throughput findings only.** Do **not** classify any
   result as a parity closure — that classification is not available until the owner makes the scope
   decision. (`38-00` supplies the numbers; the scope decision supplies their meaning.)
@@ -241,7 +244,8 @@ public control mechanism are resolved.**
   separation applied; **repair timed as the complete operation**, cardinality sub-phase as attribution
   only; **mass-bitset teardown corpus** plus the 8-container clone corpus as size-gate control;
   **cold** scratch accounting for teardown and **BOTH cold and reusable-scratch for repair**; per-phase
-  size-gate thresholds derived by the pinned rule.
+  size-gate **candidates and crossovers** reported with monotonicity checked — **no shipping threshold
+  selected here**.
 - **Teardown THREE-stage requirement:** immediate teardown measured **unsorted / ascending-payload /
   descending-payload**; then **the same allocator refilled and the next construction/traversal
   measured** for each order (**refill, unsorted traversal, and combined reported separately**); then
@@ -261,8 +265,9 @@ public control mechanism are resolved.**
 
 - **`38-00`** — Phase 1 measurement: both phases, both allocators, both hosts, CRoaring references,
   payload-vs-header key comparison, mass-bitset teardown corpus + clone control, honest scratch
-  accounting (repair cold **and** reused), the **teardown two-stage refill experiment**, per-phase
-  size-gate sweep. **No production change.** Ready to implement — see
+  accounting (repair cold **and** reused), the **teardown THREE-stage experiment** (three free orders →
+  refill + next-cycle → mandatory pinned noise control) with **first-cycle and steady-state lifecycles
+  both reported**, per-phase size-gate candidate/crossover sweep. **No production change.** Ready to implement — see
   [38-00](38-00-address-sort-measurement.md).
 - **`38-01`** — Phase 2 implementation. **NOT ready** — blocked on (i) the scope decision
   (throughput-only vs parity lever) and (ii) the public control mechanism (per-op option vs explicit
@@ -270,6 +275,7 @@ public control mechanism are resolved.**
 
 ## Estimate
 
-S–M for `38-00` (reuses the retained probe's discipline and the canonical worker). M for `38-01` — the
+M–L for `38-00` (see the chunk — the teardown three-stage experiment, pinned noise harness, dual
+lifecycle protocol, and monotonic sweep across two allocators × two hosts dominate). M for `38-01` — the
 work is the flag plumbing, propagation rule, scratch reuse, graceful degradation, and the repair split,
 not the sort itself.
