@@ -60,7 +60,7 @@ Both can be true at once:
 
 In our case a dedicated experiment (spec 36) measured **40 operation faults** across a construction
 touching ~134 MB, with **100% page reuse** proven and no gain from pre-conditioning residency — a
-clean refutation of first touch. The address-order effect was nonetheless ~1.66 ms. **A refuted
+clean refutation of first touch. The address-order effect was nonetheless 1.681–2.737 ms. **A refuted
 page-fault hypothesis does not clear the allocator.** Check order separately.
 
 ## Why the ordering arises — ALLOCATOR IMPLEMENTATION (not intent)
@@ -75,9 +75,18 @@ scalability machinery:
 - **rotating thread-metadata slots** keyed by thread id.
 
 Each is sensible for multi-threaded throughput; together they produce an allocation stream whose
-order is unrelated to address order. **Measured:** for a sequential single-threaded caller requesting
-many 8 KB buffers, the returned stream had a **median 64 KB stride**, versus roughly **8 KB**
-(essentially sequential) from libc `malloc`.
+order is unrelated to address order. **Measured, and the two cases differ — do not conflate them:**
+
+- **Header-interleaved** (16 B headers requested between the 8 KB buffers): **median 64 KB stride.**
+- **Words-only** (8 KB buffers only): **8 KB absolute stride but DESCENDING order** — consistent with
+  a LIFO freelist handing back most-recently-freed first.
+
+libc's stream was roughly **8 KB and ascending** (essentially sequential) in both cases.
+
+**Note what this implies:** in the words-only case the problem is **direction, not stride magnitude** —
+an 8 KB *descending* walk was materially slower than the same 8 KB walk ascending. Any mechanism story
+must account for that, and it is a further reason the stride-magnitude/TLB-reach account below is
+hypothesis rather than explanation.
 
 ### Hardware mechanism — HYPOTHESIS, NOT PROVEN
 
@@ -150,7 +159,7 @@ a recovery figure measured with the sort excluded overstates the achievable win.
 | `SmpAllocator` | No — built for multi-threading; process-wide singleton, per-thread freelists, 64 KB slabs | current default; the pathology's source |
 | `BrkAllocator` | **Yes, explicitly** (`@compileError` unless `builtin.single_threaded`) | **No — Linux/WASM only** (needs an sbrk-like primitive); unavailable on Darwin, and requires a single-threaded *build* |
 | `ArenaAllocator` | n/a | tested and rejected (spec 17): bulk free cost exceeded individual frees on M4; lifetime failed the memory gate |
-| `MemoryPool` | n/a | single-size pool — a natural shape for uniform 8 KB buffers and arena-backed (ascending addresses), but inherits arena lifetime/peak-memory characteristics |
+| `MemoryPool` | n/a | single-size pool — a natural *shape* for uniform 8 KB buffers, but **does NOT guarantee ascending addresses** (arena-backed with a **LIFO** preheated freelist; arenas may grow non-contiguously) and inherits arena lifetime/peak-memory characteristics |
 | `FixedBufferAllocator` | n/a | no growth; already used for bounded scratch |
 | `PageAllocator` | n/a | mmap per allocation — page granularity and syscall per call |
 | `debug_allocator` | n/a | safety/debug tooling, not a performance option |
