@@ -111,22 +111,29 @@
 > visible at rawr's site: `str x20,[x22]` / `str wzr,[x22,#8]` = `init` inlined, then a separate
 > `mov w2,#0x2000` → `bl _memcpy` for the 8 KB `clone`.)
 >
-> **Both zeroing hypotheses are therefore closed without a spec.** With **volume**, **routine**, and
-> **residency** all matched, the 2.426 ms is **not in the zeroing**.
+> **CLAIM NARROWED (correction).** Identical `bzero` code does **NOT** prove the elapsed gap is outside
+> `bzero`. The **same instructions on differently-located memory can take different time** — SMP may
+> return memory with different locality, slab ordering, TLB behaviour, or cache state. **What is
+> actually closed: no difference in zeroing VOLUME, INSTRUCTIONS, or PAGE FAULTS.** Time spent *inside*
+> `bzero` remains a live possibility, as an **allocator-induced memory-layout** effect rather than a
+> codegen one.
 >
-> **What actually survives:**
-> 1. **Allocation path / alignment** — the one remaining named difference: rawr requests **64-byte**
->    alignment from **SMP**; CRoaring requests **32-byte** from **libc** (`align_size = 32`; the 64-byte
->    branch is inside `#if CROARING_IS_X64`, so ARM keeps 32) — ~16,364 × 2 allocations per
->    construction. This is an **allocator** question, not a zeroing one.
-> 2. **Or the gap is elsewhere entirely** — allocation work, the accumulate kernels
->    (`setList`/`lazyUnionWith` vs CRoaring's `bitset_container_set` loop / `container_lazy_ior`), or
->    top-level/clone traffic. **The warmed phase cells cannot apportion this** (they put rawr *ahead*
->    on cloning and accumulation, but under conditioned allocator state).
+> **ALIGNMENT IS NOT PRIMARY — settled by the allocator A/B (same canonical run):**
 >
-> **Do NOT spec a zeroing/codegen investigation** — it would measure something already shown identical.
-> The next diagnostic must re-apportion construction **under canonical conditions**, with allocation
-> path/alignment as the leading named suspect.
+> | variant | construction | note |
+> |---|---:|---|
+> | rawr/**SMP** | **5.746 ms** | 64-byte alignment |
+> | rawr/**libc** | **3.805 ms** | **also 64-byte alignment** |
+> | CRoaring | **3.456 ms** | 32-byte alignment |
+>
+> rawr/libc requests the **same 64-byte alignment** yet recovers **1.941 ms — ~85% of that run's
+> 2.290 ms gap** — leaving rawr/libc at **1.101x**. Alignment is held constant across the recovery, so
+> **alignment is not the cause; the allocator is.** (CRoaring has read 3.336–3.456 across runs, so the
+> recovered share is ~80–85% depending on the run's denominator — re-derive it **within a single run**.)
+>
+> **So ~85% is already allocator-localized. Do NOT build another broad phase decomposition** — the
+> canonical allocator A/B has done that work. **The open question is narrower: is it allocator-CALL
+> time, or allocator-induced MEMORY-LAYOUT cost?** → **spec 37.**
 >
 > **Plan of record — steps 1–5 ALL DONE (reconciliation complete; step 5 refuted first touch).**
 > - **Mechanism status:** **page faults / first touch REFUTED** (spec 36 — only 40 operation faults,
