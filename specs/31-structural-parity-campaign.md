@@ -135,6 +135,48 @@
 > canonical allocator A/B has done that work. **The open question is narrower: is it allocator-CALL
 > time, or allocator-induced MEMORY-LAYOUT cost?** → **spec 37.**
 >
+> ## ROOT CAUSE FOUND (2026-08-07) — allocator-induced ADDRESS ORDER / LOCALITY
+>
+> **Spec 37 answered by a standalone reproducer using NO rawr and NO CRoaring code** — only Zig's
+> `smp_allocator` vs `c_allocator`, aligned 8 KB allocations, and `@memset`. So this is a property of
+> the allocator, not of rawr's container model.
+>
+> | M4 operation | SMP | libc |
+> |---|---:|---:|
+> | Allocate 8 KB blocks | 0.207 | 0.232 |
+> | Allocate headers + blocks | **0.132** | 0.305 |
+> | Zero blocks in **allocation order** | **4.482** | 2.753 |
+> | Zero header-interleaved, allocation order | **5.686** | 2.721 |
+> | Zero **same** blocks **sorted by address** | **2.819** | 2.680 |
+> | Sort header-interleaved, then zero | **2.927** | 2.710 |
+>
+> **Decisive control:** address-sorting SMP's *identical* buffers before zeroing recovers **1.663 ms**
+> (words-only) / **2.759 ms** (header-interleaved) — **same allocator, same bytes, same alignment, same
+> zeroing function; only traversal ORDER changed.**
+>
+> **The asymmetry is the result:** libc is order-**insensitive** (0.011–0.073 ms); SMP is
+> order-**sensitive** (1.663–2.759 ms). Interleaving the 16 B headers costs **SMP +1.204 ms** and **libc
+> nothing**. After sorting, **SMP ≈ libc** (+0.139 / +0.217 ms residual). And **SMP's allocation calls
+> are FASTER** (−0.025 / −0.173 ms) — the per-call hypothesis is refuted outright.
+>
+> **Mechanism, partially explained:** Zig 0.16 `SmpAllocator` uses **64 KB slabs + per-size-class
+> freelists**; the measured allocation stream has a **median 64 KB stride** vs libc's **8 KB**. SMP
+> allocates *faster* but returns 8 KB blocks in a **poor spatial traversal order** on M4; interleaving
+> the tiny header allocations worsens it.
+>
+> **Now ruled out across the whole campaign for this row:** allocation *count* (spec 35), first-touch
+> page faults (spec 36), `bzero` volume and instructions (source + disassembly), alignment (rawr/libc
+> A/B), struct packing, and per-call allocator overhead (this reproducer).
+>
+> **REMAINING UNKNOWN — the only open question:** *which hardware effect* makes that address order
+> expensive — **hardware prefetching, TLB / page-table locality, cache behaviour, or a combination.**
+> **No lever until that is established.** (Note for whenever a lever is eventually discussed: the
+> address-sort result and the header-interleaving penalty are *diagnostic observations*, not proposals.)
+>
+> **Evidence hygiene:** the reproducer lives at `/tmp/smp_layout_probe.zig` and is **not in the
+> repository** — it is now load-bearing evidence for the campaign's central finding and should be
+> preserved in-tree.
+>
 > **Plan of record — steps 1–5 ALL DONE (reconciliation complete; step 5 refuted first touch).**
 > - **Mechanism status:** **page faults / first touch REFUTED** (spec 36 — only 40 operation faults,
 >   100% page reuse, no material improvement from conditioning). **Allocator-residency-as-faults is

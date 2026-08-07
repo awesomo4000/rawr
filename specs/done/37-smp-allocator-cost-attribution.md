@@ -2,6 +2,52 @@
 
 # Spec 37: SMP allocator cost attribution — call time vs induced memory layout
 
+> **Outcome (2026-08-07) — ANSWERED BY A STANDALONE REPRODUCER; not implemented as written.
+> Verdict: ALLOCATOR-INDUCED MEMORY LAYOUT, decisively — NOT per-call overhead.**
+>
+> Reproduced with **no rawr and no CRoaring code at all** — only Zig's `smp_allocator` vs
+> `c_allocator`, aligned 8 KB allocations, and `@memset`. That makes it a property of the allocator,
+> not of rawr's container model.
+>
+> | M4 operation | SMP | libc |
+> |---|---:|---:|
+> | Allocate 8 KB blocks | 0.207 ms | 0.232 ms |
+> | Allocate headers + blocks | **0.132 ms** | 0.305 ms |
+> | Zero blocks in **allocation order** | **4.482 ms** | 2.753 ms |
+> | Zero header-interleaved blocks in allocation order | **5.686 ms** | 2.721 ms |
+> | Zero the **same** blocks after **sorting by address** | **2.819 ms** | 2.680 ms |
+> | Sort header-interleaved blocks, then zero | **2.927 ms** | 2.710 ms |
+>
+> **The decisive control:** sorting SMP's *identical* buffers by address before zeroing recovers
+> **1.663 ms** (words-only) and **2.759 ms** (header-interleaved) — with **no change to the allocator,
+> byte volume, alignment, or zeroing function.** Only traversal **order** changed.
+>
+> **The asymmetry is the finding:**
+> - **libc is order-INSENSITIVE** — sorting changes it by **0.011–0.073 ms.**
+> - **SMP is order-SENSITIVE** — sorting changes it by **1.663–2.759 ms.**
+> - **Interleaving the 16 B header allocations costs SMP +1.204 ms and libc nothing (−0.032 ms).**
+> - **After sorting, SMP ≈ libc** (residual **+0.139 / +0.217 ms**).
+> - **SMP's allocation calls are FASTER** (−0.025 ms blocks; **−0.173 ms** headers+blocks) — so the
+>   per-call branch of this spec's question is refuted outright.
+>
+> **Mechanism, partially explained:** Zig 0.16's `SmpAllocator` uses **64 KB slabs with per-size-class
+> freelists**; the measured SMP allocation stream has a **median 64 KB stride**, versus libc's **8 KB**.
+> So SMP allocates faster but hands back 8 KB blocks in a **poor spatial traversal order** on M4, and
+> interleaving the tiny header allocations makes that order worse.
+>
+> **Ruled out by this result:** per-call allocation overhead, struct packing, first-touch faults
+> (spec 36), and any `bzero` implementation difference (both call the same stub).
+>
+> **REMAINING UNKNOWN (next question, not addressed here):** *which hardware effect* makes that order
+> expensive — hardware prefetching, TLB / page-table locality, cache behaviour, or a combination. **No
+> lever is proposed until that is established.**
+>
+> **Bookkeeping:** the Phase 1 profiling apparatus and Phase 2 probe specced below were **not needed** —
+> a targeted standalone reproducer answered the question more cleanly and more strongly (it removes
+> rawr entirely). Retained as the record of the plan, and as the fallback design if the *hardware-effect*
+> question needs profiling. **Reproducer currently at `/tmp/smp_layout_probe.zig`, NOT yet in the
+> repository — it is now load-bearing evidence and should be preserved.**
+
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md). **Diagnosis only —
 no production change, no lever design.** Answer one narrow question:
 
