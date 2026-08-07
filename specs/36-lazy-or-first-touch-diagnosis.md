@@ -98,6 +98,24 @@ order; they differ **only** in whether the payload is touched), which is exactly
 residency contrast clean. Do not "fix" this to match production's interleave — doing so would
 reintroduce the confound the factorial exists to remove.
 
+### Which allocator the pre-pass conditions (pinned): ALWAYS SMP
+
+**In every cell and in BOTH implementations' processes, the pre-pass conditions
+`std.heap.smp_allocator`** — never libc, never "each implementation's own allocator."
+
+- The hypothesis is about **SMP page residency**, so SMP is what must be conditioned.
+- In the **CRoaring** processes this makes the pre-pass an **environmental negative control**: the
+  same allocate/touch/free work and the same wall-clock cost occur in the process, but on an
+  allocator CRoaring **does not use**. CRoaring should therefore be **unmoved** — and that is exactly
+  what makes the ≤ 2% "CRoaring unmoved" gate meaningful. It rules out the pre-pass simply perturbing
+  the machine (thermal, scheduler, memory pressure, page-cache pressure) rather than acting through
+  SMP.
+- **If CRoaring moves beyond the gate, the pre-pass is a general environmental disturbance**, not an
+  SMP-residency intervention, and that cell's result is void (as already specified).
+- **Consequence:** the rawr allocation-shape requirements above (header `create` + 64-byte-aligned
+  1024-word `alignedAlloc`, freed words-then-header) apply to **the SMP pre-pass in both process
+  kinds**. **No separate libc pre-pass shape is defined, because no libc pre-pass is performed.**
+
 ### Pre-pass lifecycle (pinned — must not degenerate into recycling one block)
 
 A naive "allocate a pair, free it, repeat `N` times" would **recycle a single block** and condition
@@ -206,7 +224,9 @@ Fixed **before** data collection; adjust only with an explicit note, never after
 ## Confirmation criterion (pre-registered)
 
 **CONFIRMED only if, on M4 under canonical conditions:** the residency pre-pass materially reduces
-**BOTH** rawr/SMP **minor faults** and rawr/SMP **construction time** per the thresholds above, with
+**BOTH** rawr/SMP's **host-primary fault-counter delta** (`TASK_EVENTS_INFO.faults` on Darwin/M4;
+`ru_minflt` on Linux — **not** "minor faults" generically) and rawr/SMP **construction time** per the
+thresholds above, with
 the effect carried by **residency at matched cache state** (**`C3 − C4`**, corroborated by
 **`C1 − C2`**) rather than by the **cache-eviction** contrasts (**`C1 − C3`** / **`C2 − C4`**),
 **CRoaring unmoved**, and **page reuse demonstrated**.
