@@ -109,10 +109,11 @@ documented practice.
   list **sorted by address** specifically for page-level locality; address-ordered free lists are
   standard for coalescing and locality.
 - **Typical magnitudes are small — ours was not.** Vam reports **4–8% average** vs DLmalloc/PHKmalloc
-  with adequate memory; its 2×/10× results require memory scarcity and paging. **A ~60% effect with
-  no paging is far outside that range**, which argues a uniform slab stride is *pathological* rather
-  than merely suboptimal. Treat an outsized effect as evidence of a specific stride interaction, not
-  of general "layout matters."
+  with adequate memory; its 2×/10× results require memory scarcity and paging. **Our effect is far
+  outside that range with no paging at all**, which argues the ordering here is *pathological* rather
+  than merely suboptimal. Treat an outsized effect as evidence of a **specific interaction worth
+  isolating**, not as general "layout matters." (Do **not** describe it as a *uniform* slab stride —
+  the measured stride distribution is skewed; see the hypothesis section.)
 - **Multi-thread allocators penalizing single-threaded programs is current research.** "Old is Gold:
   Optimizing Single-threaded Applications with Exgen-Malloc" (2025) targets this configuration and
   supports **cache/TLB locality concerns** and **single-thread allocator overheads**. **It does NOT
