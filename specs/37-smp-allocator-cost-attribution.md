@@ -60,6 +60,12 @@ symbol, and **subtract 1b from bucket 1** — i.e. bucket 1 is allocation machin
 page-mapping descendants. **Apply the identical rule to libc's mapping descendants** (`mmap`/`madvise`
 etc. beneath `_malloc`/`_posix_memalign`). Buckets must sum to 100% with no sample counted twice.
 
+**Unsymbolized samples are EXCLUDED from the 100% denominator** and reported as their own line with a
+percentage — **not** folded into bucket 4, where measurement failure would masquerade as
+"everything else" and could silently carry a real effect. So buckets sum to 100% **of symbolized
+samples**, stated as such. **If the unsymbolized fraction exceeds 5% in either arm, the profile is
+suspect** — fix symbolization before drawing bucket conclusions.
+
 **Bucket 1b — interpret carefully:** a hot `PageAllocator.map` most likely indicates **SMP slab
 replenishment**, **not** one mapping per 8 KB allocation. (Spec 36's 40-fault result already argues
 against per-allocation fresh mappings.) Report it separately either way.
@@ -163,9 +169,15 @@ P2 − P1  ∈  [ P2_min − P1_max ,  P2_max − P1_min ]
 **Require the SMP and libc derived intervals to SEPARATE (not overlap)** before declaring a
 zeroing/layout difference. **If they overlap, that component is INCONCLUSIVE** — no layout claim.
 
+**The same range-separation rule applies to P1 itself.** Before calling anything **allocator
+overhead**, the **P1 SMP and P1 libc five-process ranges must SEPARATE** (not merely differ in
+median). Overlapping P1 ranges ⇒ the allocation-only component is **INCONCLUSIVE**, not evidence of
+per-call overhead. Same discipline both directions.
+
 **Interpretation:**
 
-- **P1 slower on SMP**, `P2 − P1` intervals overlapping → **per-call allocator overhead.**
+- **P1 ranges separated with SMP slower**, `P2 − P1` intervals overlapping → **per-call allocator
+  overhead.**
 - **`P2 − P1` interval for SMP separated above libc's**, with identical `bzero` and identical
   volume → **allocator-induced layout**; the address statistics suggest (do not prove) why.
 - **Both** → report the split.
@@ -196,8 +208,9 @@ zeroing/layout difference. **If they overlap, that component is INCONCLUSIVE** �
 - Phase 1 bucket attribution for **rawr/SMP vs rawr/libc**, **same binary**, **canonical warmup/timed
   counts** (sample volume from **extra fresh processes**, never extra in-process iterations),
   **samples classified only beneath the named `noinline` timed-only wrapper** (warmups use the ordinary path), **symmetric allocation bucket**
-  (SMP *and* libc frames enumerated), **mutually exclusive leaf-assigned** buckets summing to 100% (1b subtracted from bucket 1, same rule
-  for libc mapping descendants), 1b reported separately, unsymbolized fraction stated.
+  (SMP *and* libc frames enumerated), **mutually exclusive leaf-assigned** buckets summing to 100% **of symbolized samples** (1b subtracted
+  from bucket 1, same rule for libc mapping descendants), 1b reported separately, **unsymbolized samples
+  excluded from the denominator and reported as their own line — profile suspect above 5%**.
 - Phase 1 arithmetic reported as **samples per completed construction** and/or **share of the profiled
   SMP−libc delta** — **never** profile time divided by the canonical 1.941 ms.
 - **Host coverage stated honestly:** if WSL2 `perf`/symbolization preflight fails, **Phase 1 is
@@ -238,5 +251,7 @@ zeroing/layout difference. **If they overlap, that component is INCONCLUSIVE** �
 
 ## Estimate
 
-M — profiling setup and symbolization are the bulk; the Phase 2 probe is small and reuses spec 36's
-lifecycle discipline.
+L — the cross-platform profiling work (Darwin `xctrace` + Linux/WSL2 `perf`, symbolization of Zig and
+libc frames, leaf-assigned bucket classification, the timed-only `noinline` wrapper, and sample
+aggregation across extra fresh processes) dominates. The Phase 2 probe itself is small and reuses
+spec 36's lifecycle discipline.
