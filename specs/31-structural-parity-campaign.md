@@ -97,17 +97,36 @@
 > (`roaring_bitmap_lazy_or` creates a fresh bitset per pair). **Consequence: buffer-count reduction
 > stays blocked**, and no volume-based lever exists.
 >
-> **(b) LIVE: is rawr's zeroing slower per byte?** Two concrete leads found while answering (a):
-> 1. **Alignment differs** — rawr requests **64-byte** alignment for the 8 KB words
->    (`alignedAlloc(u64, .@"64", 1024)`); **CRoaring on M4 requests 32-byte** (`align_size = 32`; the
->    64-byte branch sits inside `#if CROARING_IS_X64`, so ARM keeps 32). Over-aligned requests can take
->    a different allocator path or size class — the spec-13 family of effect. Checkable in a diagnostic
->    without touching production.
-> 2. **memset lowering differs** — CRoaring calls **libc `memset`** (hand-tuned on Darwin, may use ARM
->    cache-zeroing instructions); rawr's **`@memset`** lowers via LLVM and for 8192 B may either call
->    `memset` or inline a store loop. **Disassembly settles it.**
+> **(b) Is rawr's zeroing slower per byte? — ANSWERED FROM THE BINARY (2026-08-07): NO, the codegen is
+> IDENTICAL.** Disassembly of `zig-out/bin/bench_lazy_or_residency` (Mach-O arm64):
 >
-> Diagnose (b) before proposing any lever.
+> | | zero-fill codegen |
+> |---|---|
+> | rawr `BitsetContainer.init` (inlined) | `mov w1, #0x2000` → `bl _bzero` |
+> | CRoaring `roaring_bitmap_lazy_or` (both conversion sites) | `mov w1, #0x2000` → `bl _bzero` |
+>
+> **Same size (8192), same libc routine, same stub address.** Clang folded `memset(p,0,8192)` to
+> `bzero`; Zig's `@memset` lowered to the same call. **rawr does NOT inline a naive store loop** — the
+> "rawr's zeroing codegen is worse" hypothesis is **dead**, as is "tuned libc vs LLVM loop." (Also
+> visible at rawr's site: `str x20,[x22]` / `str wzr,[x22,#8]` = `init` inlined, then a separate
+> `mov w2,#0x2000` → `bl _memcpy` for the 8 KB `clone`.)
+>
+> **Both zeroing hypotheses are therefore closed without a spec.** With **volume**, **routine**, and
+> **residency** all matched, the 2.426 ms is **not in the zeroing**.
+>
+> **What actually survives:**
+> 1. **Allocation path / alignment** — the one remaining named difference: rawr requests **64-byte**
+>    alignment from **SMP**; CRoaring requests **32-byte** from **libc** (`align_size = 32`; the 64-byte
+>    branch is inside `#if CROARING_IS_X64`, so ARM keeps 32) — ~16,364 × 2 allocations per
+>    construction. This is an **allocator** question, not a zeroing one.
+> 2. **Or the gap is elsewhere entirely** — allocation work, the accumulate kernels
+>    (`setList`/`lazyUnionWith` vs CRoaring's `bitset_container_set` loop / `container_lazy_ior`), or
+>    top-level/clone traffic. **The warmed phase cells cannot apportion this** (they put rawr *ahead*
+>    on cloning and accumulation, but under conditioned allocator state).
+>
+> **Do NOT spec a zeroing/codegen investigation** — it would measure something already shown identical.
+> The next diagnostic must re-apportion construction **under canonical conditions**, with allocation
+> path/alignment as the leading named suspect.
 >
 > **Plan of record — steps 1–5 ALL DONE (reconciliation complete; step 5 refuted first touch).**
 > - **Mechanism status:** **page faults / first touch REFUTED** (spec 36 — only 40 operation faults,
