@@ -65,14 +65,42 @@ allocation with an independent order.
 later allocations come back.** Sorted teardown is **state conditioning**; a process that exits right
 after teardown cannot reveal the downstream effect.
 
+### Sample lifecycle — first-cycle vs steady state (pinned; report BOTH)
+
+**The 3-warmup/21-timed protocol is itself a confound for teardown.** Each teardown iteration
+conditions the allocator that the *next* iteration allocates from, so a naive 21-sample run measures an
+**arm-specific steady state**, not first-cycle behaviour — and the ascending/descending arms would each
+converge to their own different steady state. **Allocator state cannot be normalized within a process**
+(`SmpAllocator` is a process-wide singleton with no reset), so:
+
+| mode | protocol | what it answers |
+|---|---|---|
+| **first-cycle** | **one measured teardown per process**; N ≥ 5 fresh processes per arm (warmups would destroy the property, so **no in-process warmup**) | the one-shot library user: build → teardown once |
+| **steady state** | the normal 3 warmup / 21 timed within one process, **labelled as arm-specific steady state** | the looping user: repeated build/teardown cycles |
+
+**Report both, labelled.** They answer different questions and may disagree — a disagreement is a
+finding, not an error. **Never present a steady-state number as first-cycle** or vice versa.
+
 **Stage 1 — immediate teardown**, three orders: **unsorted**, **ascending payload**, **descending
 payload**.
 
-**Stage 2 — refill and re-measure.** For each of the three orders, **refill the same allocator and
-measure the next construction/traversal.** LIFO reuse implies **descending frees tend to produce
+**Stage 2 — refill and re-measure, with an EXACT boundary.** For each of the three orders, refill the
+same allocator and measure the next cycle. LIFO reuse implies **descending frees tend to produce
 ascending allocations** (and vice versa), so descending is expected to be the interesting arm — and the
 same inversion is a plausible mechanism for the measured words-only case (8 KB stride, descending
 allocation order).
+
+**Refill population (pinned):** **16,364** pairs of (16 B header + **8192 B words at 64-byte
+alignment**), allocated in **production order** (header then words, per container) and **all retained** —
+i.e. the same population and shape the teardown just released.
+
+**Report three numbers separately — a combined figure alone is not acceptable**, because a faster refill
+can mask a poisoned traversal order, or a faster traversal can mask a slower refill:
+
+1. **refill/allocation time** (the allocation burst alone),
+2. **unsorted payload traversal time** — the traversal **MUST be unsorted**; sorting it would mask the
+   very thing being tested (what order the allocator handed back),
+3. **combined refill + traversal**.
 
 **Stage 3 — allocator-noise control. MANDATORY for any positive teardown verdict.** Insert defined
 noise traffic **between** teardown and refill, then repeat stage 2. This tests whether a downstream
@@ -102,6 +130,18 @@ class specifically.**
 
 Report the noise workload's own cost separately so it is never confused with teardown or refill time.
 
+**Retained-allocation cleanup rule (required).** The retained 50% is **tens of megabytes per
+iteration** (~8,192 × 8 KB ≈ 67 MB plus secondaries). Without an explicit rule it accumulates across 21
+samples and both memory and allocator state drift. Pinned:
+
+- **Release the retained set AFTER the refill measurement completes, OUTSIDE any timed region.**
+- **Free it in the seeded noise order — NOT address order.** Address-ordered cleanup would be a second
+  intervention silently applied between samples.
+- **Report peak RSS** for the arm so accumulation, if any, is visible rather than inferred.
+- **Because this cleanup itself conditions the freelist for the next sample**, it is a further reason the
+  **first-cycle mode must use one measured teardown per fresh process** (see Sample lifecycle) — that is
+  the only configuration where cleanup order cannot contaminate the measurement.
+
 ## Size-gate derivation
 
 - **Per phase** (teardown and repair get separate thresholds).
@@ -125,9 +165,13 @@ Report the noise workload's own cost separately so it is never confused with tea
 - CRoaring teardown/repair references obtained, or results explicitly labelled rawr-internal deltas.
 - Repair: complete-operation timing (cardinality as attribution only); **cold and reusable** scratch
   both reported; frees confirmed unmoved from the key-ordered pass.
-- Teardown: stage 1 (three orders) **and** stage 2 (refill + next-cycle) reported; **stage 3 noise
-  control run with the pinned workload — without it teardown's verdict is INCONCLUSIVE and it does not
-  advance to `38-01`**; any stage-2-less teardown claim withheld entirely.
+- Teardown: **sample lifecycle reported BOTH ways** — first-cycle (one measured teardown per fresh
+  process, no in-process warmup) **and** arm-specific steady state (3w/21t), each labelled; stage 1
+  (three orders) **and** stage 2 with the pinned refill population and **three separate numbers**
+  (refill / unsorted traversal / combined); **stage 3 noise control run with the pinned workload —
+  without it teardown's verdict is INCONCLUSIVE and it does not advance to `38-01`**; retained-set
+  cleanup rule followed (post-refill, untimed, seeded order) with **peak RSS reported**; any
+  stage-2-less teardown claim withheld entirely.
 - Per-phase size-gate **candidates and crossovers** reported with **monotonicity checked**, per allocator
   and per host; **no shipping threshold selected in this chunk**; host disagreement reported as a finding.
 - Results reported as **raw deltas/ratios plus absolute-throughput findings only** — **no parity

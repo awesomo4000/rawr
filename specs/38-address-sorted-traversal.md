@@ -78,7 +78,8 @@ mechanism for the measured words-only case (8 KB stride, *descending* allocation
 order that helps the *next* cycle may be **descending**, the opposite of "sort ascending before
 freeing."
 
-**`38-00` must therefore measure teardown as a two-stage experiment:**
+**`38-00` must therefore measure teardown as a THREE-stage experiment** (see
+[38-00](38-00-address-sort-measurement.md) for the pinned details):
 
 1. **Immediate teardown** — unsorted, **ascending-payload**, and **descending-payload** free order.
 2. **Then refill the same allocator and measure the next construction/traversal** for each of the three
@@ -162,17 +163,17 @@ addresses. Required keys:
   never fail the operation. Test with allocation-failure injection.
 - Note the irony to keep in mind: the scratch comes from the same allocator we are compensating for.
 
-### Size gate — derivation rule (pinned)
+### Size gate — rule DELEGATED to `38-00`
 
 Below some container count the sort cannot pay (≈0.13 ms per 16k pointers is fatal overhead for a small
-bitmap). **Range separation identifies whether sorted wins at a given size; it does not by itself pick a
-threshold.** Rule:
+bitmap), so a size gate is required in addition to whatever control mechanism is chosen.
 
-- **Per phase** (teardown and repair get their own thresholds — different work per container).
-- Sweep container counts; for each, require **separated five-process ranges favouring sorted**.
-- The threshold is the **smallest count at which sorted wins on BOTH hosts**, then take the
-  **more conservative (larger) of the two hosts' thresholds** so one architecture-neutral value never
-  enables the sort where it loses.
+**The derivation rule lives in [38-00](38-00-address-sort-measurement.md) — do not restate it here.**
+Its load-bearing points: per-phase thresholds; **monotonicity required** (a separated win must persist,
+or at least not regress, at every larger tested size — otherwise it is a **crossover**, not a
+threshold); crossovers reported **per allocator and per host**; and **`38-00` does NOT select the
+shipping threshold** — that happens after the scope and control-mechanism decisions, since default-on
+demands a more conservative value than opt-in.
 - If the two hosts disagree irreconcilably (sorted wins on one, loses on the other at every size), that
   is a **finding, not a threshold** — report it and do not ship a single value.
 - Apply the gate *in addition to* whatever the opt-in mechanism turns out to be: enabled-but-tiny must
@@ -241,10 +242,13 @@ public control mechanism are resolved.**
   only; **mass-bitset teardown corpus** plus the 8-container clone corpus as size-gate control;
   **cold** scratch accounting for teardown and **BOTH cold and reusable-scratch for repair**; per-phase
   size-gate thresholds derived by the pinned rule.
-- **Teardown two-stage requirement:** immediate teardown measured **unsorted / ascending-payload /
-  descending-payload**, then **the same allocator refilled and the next construction/traversal
-  measured** for each order, ideally with an **allocator-noise control** between. **A teardown win
-  without the downstream stage does not count.**
+- **Teardown THREE-stage requirement:** immediate teardown measured **unsorted / ascending-payload /
+  descending-payload**; then **the same allocator refilled and the next construction/traversal
+  measured** for each order (**refill, unsorted traversal, and combined reported separately**); then
+  **stage 3, the pinned allocator-noise control — MANDATORY for any positive teardown verdict.**
+  **A teardown win without stage 2 does not count at all; without stage 3 the verdict ceiling is
+  INCONCLUSIVE and teardown does not advance to `38-01`.** Sample lifecycle (first-cycle vs steady
+  state) per `38-00`.
 - Phase 2 (`38-01`): **blocked** until the scope decision and control mechanism are pinned. Then:
   sorted traversal shipped only for phases that separated, size-gated per phase, chosen opt-in
   mechanism documented, **scratch-failure degrades to unsorted**.
