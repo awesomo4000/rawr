@@ -34,17 +34,20 @@ differs.
 - If sorting recovers nothing → look elsewhere.
 
 The sort is cheap enough not to distort the result: **measured 0.132 ms best / 0.157 ms mean** for
-16,364 8-byte pointers (`std::sort`, shuffled 64 KB-stride addresses, Apple M4) — around **8–9%** of
-the ~1.66 ms this recovered in our case.
+16,364 8-byte pointers (`std::sort`, shuffled 64 KB-stride addresses, Apple M4) — a small fraction of
+the 1.7–2.7 ms recovered in our case. **But do not take that as licence to exclude it:** report the
+honest sort-plus-traversal number (see Measured instance below).
 
 Two refinements worth knowing:
 
 - **Order-sensitivity asymmetry is the real signal.** Measure the sorted-vs-unsorted delta for *both*
-  allocators. An allocator whose addresses are already near-sequential will be **order-insensitive**
-  (ours moved 0.011–0.073 ms); the pathological one will be **order-sensitive** (1.663–2.759 ms).
-- **A full sort is usually unnecessary** for diagnosis or remedy — bucketing by slab base is O(N) and
-  gets near-sorted order. (At 0.13 ms there is nothing to optimize, so prefer the simple sort while
-  diagnosing.)
+  allocators. An allocator whose addresses are already near-sequential is only weakly order-sensitive
+  (libc recovered **0.063–0.180 ms**); the pathological one is strongly order-sensitive (SMP recovered
+  **1.681–2.737 ms**).
+- **UNTESTED IDEA:** bucketing by slab base would be O(N) and might get near-sorted order more
+  cheaply than a comparison sort. **This has not been measured** — it is a hypothesis, not a
+  recommendation. At ~0.13 ms per 16k pointers there is little to optimize anyway, so prefer the plain
+  sort until someone demonstrates otherwise.
 
 ## Critical reconciliation: TLB misses are NOT page faults
 
@@ -60,23 +63,37 @@ touching ~134 MB, with **100% page reuse** proven and no gain from pre-condition
 clean refutation of first touch. The address-order effect was nonetheless ~1.66 ms. **A refuted
 page-fault hypothesis does not clear the allocator.** Check order separately.
 
-## Why allocators do this
+## Why the ordering arises — ALLOCATOR IMPLEMENTATION (not intent)
 
-Multi-thread-oriented allocators deliberately disperse allocations to avoid contention: per-thread or
-per-CPU freelists, size-class segregation, and slab-based backing. Each is good for scalability and
-bad for a single-threaded caller's spatial locality.
+**No allocator deliberately disperses allocations to hurt you.** Zig 0.16's `std.heap.SmpAllocator`
+contains no dispersal policy. The observed ordering is an **emergent consequence** of ordinary
+scalability machinery:
 
-Concretely, Zig 0.16's `std.heap.SmpAllocator` uses **64 KB slabs with per-size-class freelists** and
-per-thread metadata keyed by thread id. For a sequential single-threaded caller requesting many 8 KB
-buffers, the returned stream had a **median 64 KB stride**, versus **8 KB** (i.e. essentially
-sequential) from libc `malloc`.
+- **64 KB slabs** as the backing unit,
+- **LIFO freelists** (most-recently-freed handed back first),
+- **size-class segregation**,
+- **rotating thread-metadata slots** keyed by thread id.
 
-**Why stride matters more than span:** a 64 KB stride over 16,364 buffers walks ~**1 GB** of address
-space while only ~134 MB holds data. Every access lands on a different page (16 KB pages on Darwin),
-far exceeding TLB reach, and defeats stride prefetchers that operate within limited page-local
-windows. Sorting does not shrink the span — it makes the walk **monotonic**, which is what
-prefetchers and page-walk caches exploit. That also explains why the near-sequential allocator was
-order-insensitive: its addresses were already sorted.
+Each is sensible for multi-threaded throughput; together they produce an allocation stream whose
+order is unrelated to address order. **Measured:** for a sequential single-threaded caller requesting
+many 8 KB buffers, the returned stream had a **median 64 KB stride**, versus roughly **8 KB**
+(essentially sequential) from libc `malloc`.
+
+### Hardware mechanism — HYPOTHESIS, NOT PROVEN
+
+The following is a *plausible* account, **not** something this work demonstrated. Treat it as a
+direction for a future experiment, not an explanation to cite:
+
+- Measured **virtual span ≈ 211 MB** for ~134 MB of payload — i.e. the span is **not** the ~1 GB a
+  uniform 64 KB stride across all buffers would imply, so the stride distribution is skewed rather
+  than a uniform march. An earlier draft of this document asserted ~1 GB; that was wrong.
+- On Darwin's **16 KB pages an 8 KB buffer occupies about half a page**, so two buffers can share a
+  page — accesses are *not* necessarily one-page-per-access.
+- Prefetcher and TLB/page-walk behaviour are the leading candidates for why monotonic order is
+  cheaper, but **no fault counter, TLB counter, or prefetch measurement has confirmed them.**
+
+What *is* established: **sorting the same buffers into ascending order recovers most of the cost**,
+and the near-sequential allocator is far less order-sensitive. The mechanism behind that remains open.
 
 ## What the literature says
 
@@ -98,9 +115,9 @@ documented practice.
   of general "layout matters."
 - **Multi-thread allocators penalizing single-threaded programs is current research.** "Old is Gold:
   Optimizing Single-threaded Applications with Exgen-Malloc" (2025) targets this configuration and
-  names per-thread region dispersion, TLB pressure, prefetcher-hostile access, and **size-class/slab
-  striding conflicting with hardware prefetchers**. *(Framing only — the results section was not
-  retrieved; read directly before citing figures.)*
+  supports **cache/TLB locality concerns** and **single-thread allocator overheads**. **It does NOT
+  discuss hardware prefetching or slab-stride conflicts** — an earlier draft of this document
+  attributed those to it in error. Cite it only for the locality and single-thread-cost claims.
 
 References:
 - <https://people.cs.umass.edu/~emery/pubs/p33-feng.pdf>
@@ -109,16 +126,21 @@ References:
 
 ## Measured instance (Apple M4, 16,364 × 8 KB, no rawr/CRoaring code)
 
-| operation | SMP | libc |
-|---|---:|---|
-| allocate blocks | 0.207 ms | 0.232 ms |
-| allocate headers + blocks | **0.132 ms** | 0.305 ms |
-| zero in allocation order | **4.482 ms** | 2.753 ms |
-| zero header-interleaved, allocation order | **5.686 ms** | 2.721 ms |
-| zero same blocks, **sorted by address** | **2.819 ms** | 2.680 ms |
-| sort header-interleaved, then zero | **2.927 ms** | 2.710 ms |
+**Authoritative source: the retained probe `src/bench_smp_layout.zig`.** (An earlier temporary probe
+produced slightly different figures; use the retained one.) Recovery from address-sorting:
 
-Reproducer: `src/bench_smp_layout.zig`.
+| case | SMP recovery | libc recovery |
+|---|---:|---:|
+| words-only | **1.681 ms** | 0.063 ms |
+| header-interleaved | **2.737 ms** | 0.180 ms |
+
+**The order-sensitivity asymmetry is the finding** — SMP recovers 1.7–2.7 ms from reordering; libc
+recovers 0.06–0.18 ms, i.e. its addresses were already close to sorted. Note libc is **not perfectly**
+order-insensitive (0.180 ms on the interleaved case), so treat "insensitive" as relative.
+
+**Timing discipline:** the retained probe distinguishes **sorting performed outside the timed region**
+from **honest sort-plus-zero timing**. Any go/no-go decision must use the **sort-plus-zero** number —
+a recovery figure measured with the sort excluded overstates the achievable win.
 
 ## Zig 0.16 allocator options (and why none is a drop-in fix)
 
@@ -148,9 +170,11 @@ cleanly:
 
 - **Sort the pointers you already hold** before an order-free traversal. Works regardless of
   provenance, other clients, or threads.
-- **Allocate from something private** (arena / pool owned by the operation). Ascending order is
-  guaranteed **by construction**, immune to other clients. Privacy of allocation matters as much as
-  ordering.
+- **Allocate from something private** (arena / pool owned by the operation). Being private makes the
+  order **independent of other clients**, which is the robust part. **It does NOT guarantee ascending
+  addresses:** Zig's `MemoryPool` is arena-backed but its preheated freelist is **LIFO**, and an
+  arena can grow through **non-contiguous backing allocations**. So a private allocator removes the
+  *interference*, but the ordering it produces still has to be **measured, not assumed**.
 
 **Fragile — depend on shared allocator state:**
 
@@ -172,10 +196,15 @@ defined by a format or by sorted-key semantics does not.
 ## Open question
 
 **Which hardware effect** makes the order expensive — hardware prefetching, TLB/page-walk locality,
-cache behaviour, or a combination. Notably, **cache set-aliasing is unlikely**: aliasing is
-order-independent, and reordering the same addresses fixed the problem. Testable prediction if
-TLB/page-walk dominates: reducing *span* (not merely ordering) should help, larger pages should help,
-and **neither would move fault counts**.
+cache conflict/replacement behaviour, or a combination. **All remain candidates.**
+
+An earlier draft claimed reordering's success ruled out **cache set-aliasing**. That reasoning was
+wrong: **cache conflict and replacement behaviour are themselves order-sensitive**, so a win from
+reordering does not exclude them. Nothing is eliminated yet.
+
+Testable prediction *if* TLB/page-walk dominates: reducing *span* (not merely ordering) should help,
+larger pages should help, and **neither would move fault counts**. Distinguishing that from
+conflict/replacement effects needs actual TLB and cache-miss counters, not inference.
 
 ## Checklist for next time
 
