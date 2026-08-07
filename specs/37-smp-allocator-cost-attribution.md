@@ -53,6 +53,13 @@ layout, so any difference is the allocator or what it returns. Do not compare ac
 allocation time into "everything else" and **invalidate every delta.** Enumerate the libc-side frames
 explicitly.
 
+**Buckets MUST be mutually exclusive — assign each LEAF sample exactly once.**
+`PageAllocator.map` sits **beneath** `SmpAllocator.alloc`, so naïve *inclusive* accounting would
+**double-count** it. Rule: classify by the **leaf frame**, walking up to the nearest bucket-owning
+symbol, and **subtract 1b from bucket 1** — i.e. bucket 1 is allocation machinery **excluding**
+page-mapping descendants. **Apply the identical rule to libc's mapping descendants** (`mmap`/`madvise`
+etc. beneath `_malloc`/`_posix_memalign`). Buckets must sum to 100% with no sample counted twice.
+
 **Bucket 1b — interpret carefully:** a hot `PageAllocator.map` most likely indicates **SMP slab
 replenishment**, **not** one mapping per 8 KB allocation. (Spec 36's 40-fault result already argues
 against per-allocation fresh mappings.) Report it separately either way.
@@ -66,11 +73,17 @@ against per-allocation fresh mappings.) Report it separately either way.
   **Preserve canonical warmup/timed counts** and obtain sample volume by **aggregating across
   additional fresh processes** instead. Higher sample *rate* is acceptable; more in-process *work* is
   not.
-- **Profile ONLY the timed construction call tree.** Whole-process sampling would sweep in validation,
-  warmups, result destruction, and allocator frees — and destruction sits **outside** canonical
-  timing. Add a **stable profiling-only wrapper / signpost** around the timed `lazyOr` call and
-  **classify only samples beneath that call tree.** Note: `SmpAllocator.free` (and `_free`) **should
-  not normally appear** inside a successful construction — if they do, say so, it is a finding.
+- **Profile ONLY the timed construction call tree, via a MECHANICALLY PINNED wrapper.** Whole-process
+  sampling would sweep in validation, warmups, result destruction, and allocator frees — and
+  destruction sits **outside** canonical timing. Requirements:
+  - a **named, `noinline`, profiling-build-only wrapper function** (e.g.
+    `rawr_prof_timed_lazy_or`) that calls `lazyOr` and nothing else;
+  - it is used for the **timed invocations ONLY — warmups call the ordinary path**, so warmup samples
+    are excluded structurally rather than by post-hoc filtering;
+  - attribution keeps **only samples whose stack contains that symbol**, i.e. its descendants.
+  - `noinline` matters: an inlined wrapper leaves no frame to filter on.
+  - Note: `SmpAllocator.free` (and `_free`) **should not normally appear** beneath it in a successful
+    construction — if they do, say so, that is a finding.
 - Tool and rate stated: Darwin **Instruments/`xctrace` Time Profiler** (or `sample`); Linux
   **`perf record`**. **Zig and libc frames must symbolize** — state how (frame pointers, dSYM) and
   report the **unsymbolized sample fraction**.
@@ -95,13 +108,25 @@ against per-allocation fresh mappings.) Report it separately either way.
   comparable → **allocator-induced memory-layout cost** (locality / TLB / cache), since the
   instructions and volume are already proven identical.
 - **Both elevated** → report the split; do not force a single story.
-- **Neither, i.e. the recovery does not localize** → say so; the profile is then inconclusive and the
-  Phase 2 probe becomes the primary evidence.
+- **Neither, i.e. the recovery does not localize** → the profile is **INCONCLUSIVE**, and that is the
+  reported verdict. **Phase 2 does NOT get promoted to primary evidence** — it is corroborating only
+  (it omits the ~49,132 unmatched clones and interleaved work), so an inconclusive Phase 1 means the
+  question stays open pending a better-instrumented Phase 1, not that the probe decides it.
 
-## Phase 2 — narrow alloc-plus-zero probe (confirms the distinction)
+## Phase 2 — matched-bitset initialization probe (corroborating, NOT authoritative)
 
-A fresh-process micro-probe reproducing **exactly** the production allocation population — and
-**preserving production's interleaving**, which is itself part of what is under investigation.
+**This is a matched-bitset initialization probe, NOT an exact production reproduction.** Production
+additionally interleaves roughly **49,132 unmatched-container clones**, top-level storage growth, and
+accumulation **between** the matched-bitset allocations — all of which shape allocator history and
+layout. The probe deliberately omits them to isolate one thing, and that omission is a **known
+limitation**, not a claim of fidelity.
+
+**Authority:** **Phase 1 governs the canonical verdict.** If Phase 2 **disagrees with Phase 1**, or
+fails to reproduce the SMP-vs-libc **direction**, the Phase 2 component is **INCONCLUSIVE** — it is
+**not** evidence against the production profile.
+
+It preserves production's **per-container interleaving** for the allocations it does model, which is
+itself part of what is under investigation.
 
 **Production order is `header alloc → words alloc → bzero → accumulate`, per container.** A
 probe that allocates everything and only then zeroes in one late pass **destroys the
@@ -126,14 +151,26 @@ covered, contiguity/stride of successive words buffers, page-straddling count (r
 Darwin 16 KB). **These are CLUES, not proof of physical locality** — virtual contiguity does **not**
 establish cache or physical-page locality, and must not be reported as if it does.
 
+### `P2 − P1` uncertainty handling (pre-registered)
+
+P1 and P2 run in **independent fresh processes**, so subtracting their medians carries real
+uncertainty. Do **not** report a bare difference. Report the **conservative interval**:
+
+```text
+P2 − P1  ∈  [ P2_min − P1_max ,  P2_max − P1_min ]
+```
+
+**Require the SMP and libc derived intervals to SEPARATE (not overlap)** before declaring a
+zeroing/layout difference. **If they overlap, that component is INCONCLUSIVE** — no layout claim.
+
 **Interpretation:**
 
-- **P1 slower on SMP, `P2 − P1` comparable** → **per-call allocator overhead.**
-- **`P2 − P1` slower on SMP**, with identical `bzero` and identical volume → **allocator-induced
-  layout**; the address statistics suggest (do not prove) why.
+- **P1 slower on SMP**, `P2 − P1` intervals overlapping → **per-call allocator overhead.**
+- **`P2 − P1` interval for SMP separated above libc's**, with identical `bzero` and identical
+  volume → **allocator-induced layout**; the address statistics suggest (do not prove) why.
 - **Both** → report the split.
-- This is the clean isolation: **same instructions, same byte volume, same ordering, only the
-  supplying allocator differs.**
+- Isolation achieved: same instructions, same byte volume, same per-container ordering — only the
+  supplying allocator differs. (Within the probe's stated limitation above.)
 
 ## Conditions and gates
 
@@ -144,8 +181,12 @@ establish cache or physical-page locality, and must not be reported as if it doe
   - **A0** = the canonical worker's `lazyOr` construction row, diagnostics absent.
   - **C0** = the **untouched production `lazyOr` row inside the diagnostic executable**, run as **its
     own fresh-process mode, before any probe or profiling work occurs in that process.**
-  - **Gate:** A0 and C0 five-process ranges overlap and medians agree within **5%**. Otherwise the
-    diagnostic executable itself is shifting the row — report and fix before believing any contrast.
+  - **Applied INDEPENDENTLY to BOTH rawr arms — rawr/SMP and rawr/libc.** The diagnostic executable
+    could perturb one allocator without materially moving the other, and a gate run only on the SMP
+    arm would miss exactly that.
+  - **Gate:** for **each arm**, A0 and C0 five-process ranges overlap and medians agree within **5%**.
+    Otherwise the diagnostic executable is shifting that arm — report and fix before believing any
+    contrast involving it.
 - **rawr/libc is a first-class arm here, not a legacy control** — it is the evidence carrier for this
   spec, notwithstanding that libc remains unsuitable as a global default (spec 18).
 - **No production library changes**; `zig build`, `zig build test`, `zig build difftest` green.
@@ -154,20 +195,26 @@ establish cache or physical-page locality, and must not be reported as if it doe
 
 - Phase 1 bucket attribution for **rawr/SMP vs rawr/libc**, **same binary**, **canonical warmup/timed
   counts** (sample volume from **extra fresh processes**, never extra in-process iterations),
-  **samples classified only beneath the timed-`lazyOr` signpost**, **symmetric allocation bucket**
-  (SMP *and* libc frames enumerated), buckets summing to 100%, 1b reported separately, unsymbolized
-  fraction stated.
+  **samples classified only beneath the named `noinline` timed-only wrapper** (warmups use the ordinary path), **symmetric allocation bucket**
+  (SMP *and* libc frames enumerated), **mutually exclusive leaf-assigned** buckets summing to 100% (1b subtracted from bucket 1, same rule
+  for libc mapping descendants), 1b reported separately, unsymbolized fraction stated.
 - Phase 1 arithmetic reported as **samples per completed construction** and/or **share of the profiled
   SMP−libc delta** — **never** profile time divided by the canonical 1.941 ms.
 - **Host coverage stated honestly:** if WSL2 `perf`/symbolization preflight fails, **Phase 1 is
   Darwin-only and Zen 4 contributes Phase 2 only** — recorded as the outcome, not left as an
   unsatisfiable gate.
-- Phase 2 probe: **16,364 retained** pairs, SMP vs libc, cells **P1 (alloc-only)** and **P2
-  (production-order alloc→alloc→bzero)** with **`P2 − P1`** as the primary quantity, **P3 split-pass
-  secondary only**, five fresh processes, both hosts, plus address statistics **labelled as clues, not
-  proof of physical locality**.
-- **A0 vs C0** verified (C0 = untouched production `lazyOr` row in the diagnostic executable, own
-  fresh-process mode, before any probe work).
+- Phase 2 **matched-bitset initialization probe** (explicitly NOT an exact production reproduction —
+  it omits the ~49,132 unmatched clones, top-level growth, and interleaved accumulation): **16,364
+  retained** pairs, SMP vs libc, cells **P1 (alloc-only)** and **P2 (production-order
+  alloc→alloc→bzero)**, **P3 split-pass secondary only**, five fresh processes, both hosts, plus
+  address statistics **labelled as clues, not proof of physical locality**.
+- **`P2 − P1` reported as the conservative interval `[P2_min − P1_max, P2_max − P1_min]`**, with SMP
+  and libc intervals required to **separate** before any zeroing/layout claim; overlap ⇒ that
+  component is **inconclusive**.
+- **Phase 1 governs the verdict**; a Phase 2 result that disagrees with Phase 1 or fails to reproduce
+  the SMP/libc direction is recorded as **inconclusive**, not as counter-evidence.
+- **A0 vs C0 verified INDEPENDENTLY for BOTH rawr arms** (SMP and libc); C0 = untouched production
+  `lazyOr` row in the diagnostic executable, own fresh-process mode, before any probe work.
 - A single stated verdict **per host**: **per-call allocator overhead**, **allocator-induced memory
   layout**, **both (with split)**, or **inconclusive** — per the pre-registered rule.
 - Canonical recovered-share arithmetic derived **within one canonical run**, denominator stated, and
