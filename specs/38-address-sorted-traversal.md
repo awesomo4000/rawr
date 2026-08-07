@@ -25,8 +25,9 @@ to `SmpAllocator`, and the open hardware-mechanism question.
 
 ## BLOCKING SCOPE DECISION — throughput feature or parity lever? (owner call, gates `38-01`)
 
-**A default-off flag cannot close a default-path parity gap.** The canonical board measures rawr/SMP on
-the default path; if the flag is off there, **no board row moves**. This spec cannot claim both. Three
+**A default-off opt-in cannot close a default-path parity gap** — whatever mechanism carries it. The
+canonical board measures rawr/SMP on the default path; if the sorted strategy is inactive there, **no
+board row moves**. This spec cannot claim both. Three
 mutually exclusive positions — **`38-00` runs regardless; `38-01` cannot be written until one is
 chosen:**
 
@@ -194,7 +195,8 @@ demands a more conservative value than opt-in.
   as the rawr cells, so any gap arithmetic is computable rather than asserted. Without these the phase
   results are rawr-internal deltas only — label them that way if the references cannot be obtained.
 - **Expect the libc arm to show little or no gain** (libc recovered only 0.063–0.180 ms in the probe) —
-  that asymmetry is the evidence the flag is allocator-dependent and must default off.
+  that asymmetry is **evidence bearing on the scope decision** (it indicates the remedy is
+  allocator-dependent). It does **not** by itself settle A/B/C — report it and let the owner decide.
 - **Range separation required** (spec-37 discipline): sorted vs unsorted five-process ranges must
   **separate** before claiming a win; overlap ⇒ inconclusive for that phase.
 - **Repair must time the COMPLETE user-visible operation**, not just the cardinality pass. The shipped
@@ -218,7 +220,8 @@ public control mechanism are resolved.**
 
 - **Order-invariance must be asserted, not assumed.** Teardown and per-container cardinality are
   order-invariant by construction; prove it holds: **byte-identical `serialize` output and identical
-  cardinalities** with the flag on vs off, plus CRoaring differential, across container-type mixes.
+  cardinalities** with the **sorted strategy active vs inactive**, plus CRoaring differential, across
+  container-type mixes.
 - **Repair split correctness:** the address-ordered cardinality pass must leave the **key-ordered
   compaction** result identical to today's single-pass repair — same container kinds, same
   cardinalities, same order, same demote/survive decisions.
@@ -230,9 +233,9 @@ public control mechanism are resolved.**
 
 - **Board gate + spec-28 layout exception**, both hosts, on adoption.
 - **Zen 4 policy (spec 30):** within-noise passes; a real regression needs an explicit owner exception.
-- **Flag OFF must be indistinguishable from today** — verify the default path is unchanged (a
-  scaffolding check in the spec-36/37 style: flag-off ranges overlap the pre-change baseline, medians
-  within 5%).
+- **The UNSORTED path must be indistinguishable from today** — verify it is unchanged (a scaffolding
+  check in the spec-36/37 style: unsorted-strategy ranges overlap the pre-change baseline, medians
+  within 5%). This holds whichever control mechanism is chosen.
 - **One architecture-neutral shape.**
 
 ## Acceptance
@@ -277,5 +280,5 @@ public control mechanism are resolved.**
 
 M–L for `38-00` (see the chunk — the teardown three-stage experiment, pinned noise harness, dual
 lifecycle protocol, and monotonic sweep across two allocators × two hosts dominate). M for `38-01` — the
-work is the flag plumbing, propagation rule, scratch reuse, graceful degradation, and the repair split,
+work is the **control-mechanism plumbing**, scratch reuse, graceful degradation, and the repair split,
 not the sort itself.
