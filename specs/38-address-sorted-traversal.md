@@ -7,9 +7,14 @@ Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md). 
 
 Apply the address-sort remedy to the phases whose visit order is **ours to choose**, behind a
 **to-be-decided control mechanism** (see the scope decision below — options include default-off and
-default-on, so this spec uses **neutral wording** until the owner picks). This is the *tactical* remedy — it compensates for allocator-returned order rather than fixing it, and
-it is chosen because it is **robust to allocator sharing** (it depends only on pointers we already hold,
-not on shared allocator state).
+default-on, so this spec uses **neutral wording** until the owner picks). This is the *tactical* remedy — it compensates for allocator-returned order rather than fixing it.
+
+**Robustness differs by phase — do not generalize it:**
+- **Repair (read-only traversal): robust to allocator sharing.** It depends only on pointers we already
+  hold and **leaves no trace in the allocator**, because frees stay in the unchanged key-ordered pass.
+- **Teardown (mass free): NOT robust.** Reordering frees **is allocator-state conditioning** — it
+  rewrites a LIFO freelist and changes what later allocations receive. It carries a downstream
+  measurement obligation and cannot be described as sharing-robust.
 
 **`38-00` (diagnosis) is ready. `38-01` (implementation) is NOT** — it is blocked on two unresolved
 decisions recorded below: the **scope decision** (throughput feature vs parity lever) and the **public
@@ -35,6 +40,11 @@ chosen:**
   not help. The only route to closing parity without harming libc — but it introduces a **heuristic
   tuned on our benchmark**, which is precisely the sole-allocator-client trap (see the pathology doc);
   a probe tuned here may mistune in production.
+  **Option C is NOT evaluable from `38-00`.** `38-00` neither designs nor tests a scatter/direction
+  classifier, so **choosing C requires an additional, currently unscheduled experiment**: design the
+  probe, establish its cost, and demonstrate **cross-host reliability** (correct classification on both
+  M4 and Zen 4/WSL2, including the descending-order case, which a naive stride-magnitude probe would
+  misclassify as sequential). **Explicitly deferred** — C cannot be selected on `38-00`'s output alone.
 
 **Recommendation: (A) for now**, with (C) reconsidered only if `38-00` shows the libc arm is unharmed
 and a scatter probe is reliable across both hosts. **Until this is decided, no parity language is
@@ -190,8 +200,9 @@ threshold.** Rule:
   cardinality-only speedup cannot gate adoption if total `repairAfterLazy` is neutral or slower** —
   report the cardinality sub-phase as attribution, and gate on the total.
 - **Determine the size-gate threshold**: sweep container counts to find where sorted stops paying.
-- Report absolute times and whether each result is a **parity-gap closure** or an
-  **absolute-throughput** gain.
+- **Report raw deltas and ratios plus absolute-throughput findings only.** Do **not** classify any
+  result as a parity closure — that classification is not available until the owner makes the scope
+  decision. (`38-00` supplies the numbers; the scope decision supplies their meaning.)
 
 ## Phase 2 — ship what won (conditional, per phase; BLOCKED until the two decisions are made)
 
