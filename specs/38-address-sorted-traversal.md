@@ -5,13 +5,39 @@
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md). Background:
 [allocator-address-order-pathology.md](../docs/allocator-address-order-pathology.md).
 
-Apply the address-sort remedy to the phases whose visit order is **ours to choose**, behind a
-**default-off** option. This is the *tactical* remedy — it compensates for allocator-returned order
-rather than fixing it, and it is chosen because it is **robust to allocator sharing** (it depends only
-on pointers we already hold, not on shared allocator state).
+Apply the address-sort remedy to the phases whose visit order is **ours to choose**, as an **opt-in**.
+This is the *tactical* remedy — it compensates for allocator-returned order rather than fixing it, and
+it is chosen because it is **robust to allocator sharing** (it depends only on pointers we already hold,
+not on shared allocator state).
+
+**`38-00` (diagnosis) is ready. `38-01` (implementation) is NOT** — it is blocked on two unresolved
+decisions recorded below: the **scope decision** (throughput feature vs parity lever) and the **public
+control mechanism**.
 
 **Not in scope:** compaction/relayout, a private-allocator track (`*Owned` for lazy ops), any change
 to `SmpAllocator`, and the open hardware-mechanism question.
+
+## BLOCKING SCOPE DECISION — throughput feature or parity lever? (owner call, gates `38-01`)
+
+**A default-off flag cannot close a default-path parity gap.** The canonical board measures rawr/SMP on
+the default path; if the flag is off there, **no board row moves**. This spec cannot claim both. Three
+mutually exclusive positions — **`38-00` runs regardless; `38-01` cannot be written until one is
+chosen:**
+
+- **(A) Optional throughput feature (default OFF).** Honest and low-risk. **The board does not move and
+  this is NOT a parity lever** — all gains are absolute-throughput gains for opted-in users (e.g. the
+  datalog backend). Every parity claim must be struck.
+- **(B) Parity lever (default ON).** Requires proving the sort is **non-harmful for every allocator**,
+  including libc, which recovered only **0.063–0.180 ms** and would still pay the ~0.13 ms sort — i.e.
+  plausibly **net-negative** for libc users. Needs an explicit no-regress gate on the libc arm.
+- **(C) Default ON but auto-gated** by a cheap scatter/direction probe, so it is a no-op where it does
+  not help. The only route to closing parity without harming libc — but it introduces a **heuristic
+  tuned on our benchmark**, which is precisely the sole-allocator-client trap (see the pathology doc);
+  a probe tuned here may mistune in production.
+
+**Recommendation: (A) for now**, with (C) reconsidered only if `38-00` shows the libc arm is unharmed
+and a scatter probe is reliable across both hosts. **Until this is decided, no parity language is
+permitted in this spec.**
 
 ## What can and cannot be sorted
 
@@ -25,11 +51,18 @@ The remedy is legal only where nothing downstream depends on visit order.
 | `iterate` / `toArray` | no — must emit ascending values | no |
 | clone / set-op **writes** | no — result must be key-ordered | no |
 
-**Measured motivation:** teardown is a known gap — spec 26a attributed clone's residual to `clone`
-(254.4 vs 96.9 ns) **plus teardown (144.9 vs 48.3 ns)**. Repair-alone is the largest single lazy-OR
-phase (**8.616 ms**) though already at **1.069x**, so improving it is an **absolute-throughput** win
-(relevant to the datalog backend use case), **not** a parity-gap closure. State which goal each
-measurement serves.
+**Confidence differs sharply between the two phases — say so:**
+
+- **Repair is the sound target.** It operates on the **16,364 bitset payloads** that the pathology was
+  actually demonstrated on. Repair-alone is the largest single lazy-OR phase (**8.616 ms**) though
+  already at **1.069x**.
+- **Teardown is LOWER CONFIDENCE, and its usual motivation does not transfer.** The spec-26a teardown
+  gap (144.9 vs 48.3 ns) was measured on the **clone corpus of 8 run containers** — **8 pointers, far
+  below any sensible size gate**, and run containers, not 8 KB bitsets. That number **cannot** motivate
+  sorted teardown at scale. Therefore:
+  - diagnose teardown on a **mass-bitset teardown corpus** (the ~16k 8 KB payload population), and
+  - retain the **canonical 8-container clone corpus as a control** to confirm the size gate correctly
+    excludes it.
 
 ## API shape
 
@@ -38,38 +71,71 @@ reorder: `keys`/`containers` must stay key-ordered, so the sorted order is inher
 traversal strategy*, not stored state. Reordering payload assignment permanently is **compaction** —
 a different operation, out of scope here.
 
-Therefore:
+**Internal:** an address-sorted traversal used by the eligible phases above. That part is settled.
 
-- **Internal:** an address-sorted traversal used by the eligible phases above.
-- **Public control:** an **opt-in flag, default OFF**, set at bitmap creation. Users who know their
-  allocator's behaviour turn it on; everyone else pays nothing.
-- **Public surface, if one is wanted:** expose **sorted variants of the order-free operations** (e.g.
-  a sorted-teardown entry point), not a raw pointer sort. Decide at review whether the flag alone is
-  sufficient.
+### The PUBLIC control mechanism is NOT decided — and must be pinned before `38-01`
 
-### Flag semantics to pin
+A **creation-time persistent flag** (this spec's first draft) **fits the property badly.** The flag
+would describe *the allocator a bitmap is currently using*, but every operation that returns a new
+bitmap (`lazyOr`, `bitwiseAnd`, `clone`, …) takes its **own per-call allocator**. So inheritance is
+questionable from **either** direction: inheriting the source's flag may describe the wrong allocator,
+and defaulting off silently drops the user's intent. There is no clean answer, which is the signal that
+the flag is the wrong shape.
 
-- **Default OFF.** No behaviour change for existing users.
-- **Propagation rule (must be stated):** operations returning a *new* bitmap (`lazyOr`, `bitwiseAnd`,
-  `clone`, …) take a per-call `allocator`, so the flag and the allocator can disagree. Pin whether the
-  result **inherits** the source's flag or **defaults off**, and document it.
-- **The flag is about the allocator, not the data** — note this tension in the doc comment so users
-  understand what they are asserting.
+Candidates, to be decided at review — **`38-00` does not depend on this**:
+
+| option | fit | cost |
+|---|---|---|
+| **Per-operation option** (e.g. an options struct on the ops that can use it) | **good** — matches the per-call allocator exactly | wider signature churn |
+| **Explicit optimized variants** (e.g. a sorted-teardown entry point) | **good** — no hidden state, no propagation question | API surface growth; one variant per eligible op |
+| Creation-time persistent flag | **poor** — describes an allocator that may not be the one used | cheap, but propagation is unanswerable |
+| Raw public `sort()` | **rejected** — no coherent shape (nothing persistent to reorder) | — |
+
+**Rule: `38-01` is not writable until this and the scope decision above are both resolved.**
+
+### Sort KEY — payload address, not header address (pinned)
+
+**`TaggedPtr` points at the container HEADER; the proven pathology is about the 8 KB PAYLOAD.** Header
+and payload are **separate allocations** with independent orders, so sorting `TaggedPtr` sorts the wrong
+addresses. Required keys:
+
+- **repair (bitsets):** sort by **`bc.words`** (the 8 KB payload).
+- **teardown (mixed types):** an explicit **type-specific payload key** — `bc.words` / `ac.values` /
+  `rc.runs`. Note `deinit` frees **both** payload and header (payload first), so there are two address
+  streams and only one can be sorted; **sort by payload** (the large one) and say so.
+- **`38-00` must measure header-address sorting vs payload-address sorting** — that comparison confirms
+  which stream actually matters and is cheap to run.
 
 ### Scratch buffer + failure semantics
 
 - The sort needs a **permutation/pointer array** (~65–131 KB at 16k containers) — `containers` itself
-  cannot be reordered. **Reuse a scratch buffer; do not allocate per call.**
+  cannot be reordered.
+- **"Reuse scratch" does NOT fit `deinit`, which runs once.** There is no steady state to amortize into,
+  so teardown must be measured **cold**. Hiding the scratch allocation before the timer would make
+  teardown results **dishonest**. Measure both, and label which applies to which phase:
+  - **cold:** scratch allocation + sort + traversal + scratch free — **the honest teardown number**;
+  - **reusable steady state:** only where repeated invocation makes reuse legitimate (repair, called
+    per lazy operation) — and say so explicitly.
 - **Graceful degradation is mandatory:** sorting is purely an optimization, so if the scratch
   allocation fails, **fall back to unsorted traversal and continue** — never propagate an error and
-  never fail the operation. This must be tested with allocation-failure injection.
+  never fail the operation. Test with allocation-failure injection.
 - Note the irony to keep in mind: the scratch comes from the same allocator we are compensating for.
 
-### Size gate
+### Size gate — derivation rule (pinned)
 
-Below some container count the sort cannot pay (≈0.13 ms per 16k pointers is fatal overhead for a
-small bitmap). **Determine the threshold by measurement in Phase 1** and apply it *in addition to* the
-flag — an enabled flag on a tiny bitmap must still skip the sort.
+Below some container count the sort cannot pay (≈0.13 ms per 16k pointers is fatal overhead for a small
+bitmap). **Range separation identifies whether sorted wins at a given size; it does not by itself pick a
+threshold.** Rule:
+
+- **Per phase** (teardown and repair get their own thresholds — different work per container).
+- Sweep container counts; for each, require **separated five-process ranges favouring sorted**.
+- The threshold is the **smallest count at which sorted wins on BOTH hosts**, then take the
+  **more conservative (larger) of the two hosts' thresholds** so one architecture-neutral value never
+  enables the sort where it loses.
+- If the two hosts disagree irreconcilably (sorted wins on one, loses on the other at every size), that
+  is a **finding, not a threshold** — report it and do not ship a single value.
+- Apply the gate *in addition to* whatever the opt-in mechanism turns out to be: enabled-but-tiny must
+  still skip the sort.
 
 ## Phase 1 — measurement (before shipping anything)
 
@@ -77,21 +143,30 @@ flag — an enabled flag on a tiny bitmap must still skip the sort.
   probe (`src/bench_smp_layout.zig`) distinguishes sort-outside-timing from sort-plus-traversal;
   **only the sort-plus-traversal number may gate a decision.** A recovery figure with the sort excluded
   overstates the win.
-- **Per eligible phase** (teardown; repair cardinality pass), measure sorted vs unsorted:
-  **rawr/SMP and rawr/libc**, **M4 and Zen 4/WSL2**, canonical protocol (3 warmup / 21 timed, five
-  fresh-process medians + full ranges), one process per `(row, implementation, allocator)` tuple.
+- **Per eligible phase** (teardown; repair), measure sorted vs unsorted: **rawr/SMP and rawr/libc**,
+  **M4 and Zen 4/WSL2**, canonical protocol (3 warmup / 21 timed, five fresh-process medians + full
+  ranges), one process per `(row, implementation, allocator)` tuple.
+- **CRoaring reference required, at matched boundaries.** Sorted-vs-unsorted rawr alone cannot support
+  any statement about gaps. Measure **CRoaring teardown and CRoaring repair** at the **same boundaries**
+  as the rawr cells, so any gap arithmetic is computable rather than asserted. Without these the phase
+  results are rawr-internal deltas only — label them that way if the references cannot be obtained.
 - **Expect the libc arm to show little or no gain** (libc recovered only 0.063–0.180 ms in the probe) —
   that asymmetry is the evidence the flag is allocator-dependent and must default off.
 - **Range separation required** (spec-37 discipline): sorted vs unsorted five-process ranges must
   **separate** before claiming a win; overlap ⇒ inconclusive for that phase.
+- **Repair must time the COMPLETE user-visible operation**, not just the cardinality pass. The shipped
+  operation is *address-ordered cardinality pass + key-ordered conversion/compaction*. **A
+  cardinality-only speedup cannot gate adoption if total `repairAfterLazy` is neutral or slower** —
+  report the cardinality sub-phase as attribution, and gate on the total.
 - **Determine the size-gate threshold**: sweep container counts to find where sorted stops paying.
 - Report absolute times and whether each result is a **parity-gap closure** or an
   **absolute-throughput** gain.
 
-## Phase 2 — ship what won (conditional, per phase)
+## Phase 2 — ship what won (conditional, per phase; BLOCKED until the two decisions are made)
 
-Ship the sorted traversal only for phases whose Phase 1 result separated, behind the default-off flag
-plus the measured size gate.
+Ship the sorted traversal only for phases whose Phase 1 result separated, behind the chosen opt-in
+mechanism plus the measured per-phase size gate. **Cannot be written until the scope decision and the
+public control mechanism are resolved.**
 
 ## Correctness
 
@@ -117,11 +192,16 @@ plus the measured size gate.
 ## Acceptance
 
 - Eligible phases identified and justified; ineligible ones explicitly excluded.
-- Phase 1: sorted vs unsorted, **sort cost inside timing**, both allocators, both hosts, five fresh
-  processes, range separation applied; size-gate threshold measured; each gain labelled parity vs
-  absolute.
-- Phase 2: sorted traversal shipped only for phases that separated, **default OFF**, size-gated, flag
-  propagation rule documented, scratch reused, **scratch-failure degrades to unsorted**.
+- Phase 1 (`38-00`): sorted vs unsorted with **sort cost inside timing**; **payload-key vs header-key
+  sorting compared**; **CRoaring teardown and repair references at matched boundaries** (or the results
+  explicitly labelled rawr-internal deltas); both allocators, both hosts, five fresh processes, range
+  separation applied; **repair timed as the complete operation**, cardinality sub-phase as attribution
+  only; **mass-bitset teardown corpus** plus the 8-container clone corpus as size-gate control;
+  **cold** scratch accounting for teardown and steady-state only where reuse is legitimate; per-phase
+  size-gate thresholds derived by the pinned rule.
+- Phase 2 (`38-01`): **blocked** until the scope decision and control mechanism are pinned. Then:
+  sorted traversal shipped only for phases that separated, size-gated per phase, chosen opt-in
+  mechanism documented, **scratch-failure degrades to unsorted**.
 - Correctness: order-invariance asserted (byte-identity + cardinalities + differential), repair-split
   identical to single-pass, no leak/double-free, failure injection green.
 - Flag-OFF path verified indistinguishable from baseline; board gate held.
@@ -129,10 +209,12 @@ plus the measured size gate.
 
 ## Chunk plan
 
-- **`38-00`** — Phase 1 measurement (both phases, both allocators, both hosts, size-gate sweep). No
-  production change.
-- **`38-01`** — Phase 2: ship what won behind the default-off flag + size gate, with the correctness
-  and failure-injection surface.
+- **`38-00`** — Phase 1 measurement: both phases, both allocators, both hosts, CRoaring references,
+  payload-vs-header key comparison, mass-bitset teardown corpus + clone control, honest scratch
+  accounting, per-phase size-gate sweep. **No production change.** Ready to implement.
+- **`38-01`** — Phase 2 implementation. **NOT ready** — blocked on (i) the scope decision
+  (throughput-only vs parity lever) and (ii) the public control mechanism (per-op option vs explicit
+  variants). Write it after `38-00` reports and both are pinned.
 
 ## Estimate
 
