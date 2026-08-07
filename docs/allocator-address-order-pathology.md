@@ -136,6 +136,39 @@ Reproducer: `src/bench_smp_layout.zig`.
 that works on Darwin.** `BrkAllocator` is the only explicitly single-threaded one and it is
 unavailable on the platform where the pathology was measured.
 
+## Robust vs fragile remedies (library context)
+
+A general-purpose allocator is typically a **process-wide singleton shared with every other data
+structure in the program** — Zig's `SmpAllocator` says so explicitly ("it uses global state and only
+one should be instantiated for the entire process"), with per-thread freelists keyed by thread id.
+A library therefore **cannot own or rely on that allocator's state.** This splits candidate remedies
+cleanly:
+
+**Robust — depend only on things you own:**
+
+- **Sort the pointers you already hold** before an order-free traversal. Works regardless of
+  provenance, other clients, or threads.
+- **Allocate from something private** (arena / pool owned by the operation). Ascending order is
+  guaranteed **by construction**, immune to other clients. Privacy of allocation matters as much as
+  ordering.
+
+**Fragile — depend on shared allocator state:**
+
+- Conditioning the shared allocator so a *later* burst behaves better — e.g. freeing in address order
+  hoping to leave address-ordered freelists for the next allocation burst. Other data structures and
+  other threads perturb that state between operations, so the effect is not dependable in a library.
+
+> **Benchmark warning.** Fragile remedies **measure well and deploy badly.** A single-purpose
+> benchmark process is usually the *only* allocator client, so allocator-state conditioning looks
+> excellent there and evaporates in a real program. This is the deployment-side twin of the
+> measurement-side trap (allocator process history contaminating benchmark numbers): same cause,
+> opposite direction. Before believing any state-conditioning result, ask whether the benchmark is
+> the sole allocator client — and if it is, treat the result as unproven.
+
+**Corollary for choosing among order-free traversals:** sorting only helps where visit order is free.
+Frees/teardown and independent per-object computations qualify; anything whose output order is
+defined by a format or by sorted-key semantics does not.
+
 ## Open question
 
 **Which hardware effect** makes the order expensive — hardware prefetching, TLB/page-walk locality,
