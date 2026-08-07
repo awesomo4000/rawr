@@ -85,13 +85,29 @@
 > **Consequence: the pages are RESIDENT, so the cost is in TOUCHING ~134 MB, not in faulting it in.**
 > The earlier fresh-vs-dirty zeroing delta is therefore **not** a page-fault effect.
 >
-> **Next (pre-registered branch): cold-page zeroing / codegen diagnosis.** Two questions, in order —
-> **(a) does rawr zero MORE BYTES than CRoaring?** rawr does an explicit `@memset` of 8 KB per matched
-> pair; establish whether CRoaring's `container_to_bitset` path actually zeroes the same volume, or
-> avoids/defers it (e.g. `calloc`-style lazy zero pages, or bitset-container reuse from its own free
-> list). A volume difference would be a different finding from a speed difference. **(b) if volumes
-> match, is rawr's zeroing SLOWER per byte?** — width, alignment, non-temporal/streaming stores,
-> disassembly, on both cold and warm memory. Diagnose before proposing any lever.
+> **Next (pre-registered branch): cold-page zeroing / codegen diagnosis.** Two ordered questions —
+>
+> **(a) Does rawr zero MORE BYTES than CRoaring? — ANSWERED FROM SOURCE (2026-08-07): NO, volumes are
+> identical.** CRoaring's lazy path per matched pair is `container_to_bitset` →
+> `bitset_container_from_array` → **`bitset_container_create()`** (`roaring_aligned_malloc` +
+> **`bitset_container_clear()` = `memset(words, 0, 8192)`**) then sets each source bit. rawr is
+> `BitsetContainer.init` (`alignedAlloc` + **`@memset(words, 0)`**, 1024 × u64 = 8192 B) then
+> `lazyAccumulateIntoBitset` for both operands. **One 8 KB zero-fill per matched pair on both sides** —
+> no `calloc` lazy-zero-page trick, no deferral, and **no container reuse in the lazy path**
+> (`roaring_bitmap_lazy_or` creates a fresh bitset per pair). **Consequence: buffer-count reduction
+> stays blocked**, and no volume-based lever exists.
+>
+> **(b) LIVE: is rawr's zeroing slower per byte?** Two concrete leads found while answering (a):
+> 1. **Alignment differs** — rawr requests **64-byte** alignment for the 8 KB words
+>    (`alignedAlloc(u64, .@"64", 1024)`); **CRoaring on M4 requests 32-byte** (`align_size = 32`; the
+>    64-byte branch sits inside `#if CROARING_IS_X64`, so ARM keeps 32). Over-aligned requests can take
+>    a different allocator path or size class — the spec-13 family of effect. Checkable in a diagnostic
+>    without touching production.
+> 2. **memset lowering differs** — CRoaring calls **libc `memset`** (hand-tuned on Darwin, may use ARM
+>    cache-zeroing instructions); rawr's **`@memset`** lowers via LLVM and for 8192 B may either call
+>    `memset` or inline a store loop. **Disassembly settles it.**
+>
+> Diagnose (b) before proposing any lever.
 >
 > **Plan of record — steps 1–5 ALL DONE (reconciliation complete; step 5 refuted first touch).**
 > - **Mechanism status:** **page faults / first touch REFUTED** (spec 36 — only 40 operation faults,
