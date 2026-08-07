@@ -25,10 +25,23 @@ SMP-allocated 8 KB buffers** — **unconfirmed.**
 - Canonical corpus, timing boundaries, **validation-after-timing**, **five fresh processes**,
   canonical **3 warmup / 21 timed**.
 - Per the spec-35 lesson: **no cell takes its production reference from a warmed harness.**
-- **C0 anchor check (range-based, not exact-median):** with cells disabled, the canonical worker's
-  five-process results must fall within the **recorded process ranges — rawr `5.701–5.940 ms`,
-  CRoaring `3.270–3.385 ms`** (M4). Exact median reproduction is **not** required and must not be
-  demanded; falling outside these ranges invalidates the run before any contrast is believed.
+
+### Two anchors: A0 (canonical) and C0 (diagnostic baseline) — they are NOT the same thing
+
+**C0 is not "untouched."** Every diagnostic cell — C0 included — allocates and prefaults the eviction
+buffer and installs fault instrumentation. So:
+
+- **A0 — canonical anchor:** the canonical worker with **all diagnostics disabled** (no eviction
+  buffer, no fault instrumentation), run **contemporaneously** with the cells on the same host and
+  build.
+- **C0 — diagnostic baseline:** diagnostic scaffolding present (eviction buffer allocated +
+  prefaulted, counters installed), but **no pre-pass and no eviction**.
+- **Validity gate:** **A0 and C0 five-process ranges must overlap, and their medians must agree within
+  5%.** If they do not, **the diagnostic scaffolding itself is perturbing the measurement** — report
+  that and fix it before any contrast is believed.
+- **The historical ranges (M4 rawr `5.701–5.940 ms`, CRoaring `3.270–3.385 ms`) are PROVENANCE, not a
+  hard validity gate** — they document what the row measured on 2026-08-06. A0 is the live anchor;
+  note any drift from the historical range rather than failing on it.
 
 ## The measurement problem
 
@@ -53,7 +66,8 @@ other warmed data**. Residency and cache must therefore vary **independently**:
 
 | cell | residency pre-pass | cache | pre-pass before *every* invocation |
 |---|---|---|---|
-| **C0** | — | — | none (untouched production order) — **anchor only** |
+| **A0** | — | — | **canonical anchor: diagnostics fully DISABLED** (no eviction buffer, no counters) |
+| **C0** | — | — | diagnostic baseline: scaffolding present, **no pre-pass, no eviction** |
 | **C1** | **unconditioned** | **warm** | bookkeeping-only pre-pass (alloc + free, payload never written) |
 | **C2** | **conditioned** | **warm** | alloc + **touch** + free |
 | **C3** | **unconditioned** | **evicted** | bookkeeping-only pre-pass, **then evict** |
@@ -66,14 +80,23 @@ other warmed data**. Residency and cache must therefore vary **independently**:
 - **C1 − C3** and **C2 − C4** = the **cache-eviction** effect at each residency level
 - **(C1 − C2) vs (C3 − C4)** = **interaction** — if the residency effect differs by cache state, say
   so rather than reporting a single number
-- **C0 − C1** = allocator **bookkeeping** effect (anchor vs bookkeeping-only)
+- **C0 − C1** = allocator **bookkeeping** effect (diagnostic baseline vs bookkeeping-only pre-pass)
+- **A0 vs C0** = **scaffolding check**, not a result — must overlap per the validity gate above
 
-### Allocation shape (must match production exactly)
+### Allocation SHAPE matches production; the SEQUENCE deliberately does not
 
-Production `BitsetContainer.init`: **`allocator.create(Self)` (16 B header)** then
-**`allocator.alignedAlloc(u64, .@"64", 1024)` (8 KB words)**; `deinit` frees **`words` FIRST, then
-`destroy(header)`**. Pre-passes must replicate that pair, that alignment, and that free order —
-**plain `alloc(u8, 8192)` is NOT acceptable** (different allocator path / size class).
+**Shape (must match):** production `BitsetContainer.init` does **`allocator.create(Self)` (16 B
+header)** then **`allocator.alignedAlloc(u64, .@"64", 1024)` (8 KB words)**; `deinit` frees **`words`
+FIRST, then `destroy(header)`**. Pre-passes must replicate **that pair, that alignment, and that free
+order** — **plain `alloc(u8, 8192)` is NOT acceptable** (different allocator path / size class).
+
+**Sequence (deliberately differs — this is a feature, not an oversight):** production **interleaves**
+per container (allocate → zero → next). The pre-pass instead **allocates all `N` blocks first, then
+touches them** (C2/C4). That divergence is **intentional and required**: it holds **allocator
+bookkeeping identical between C1 and C2** (both allocate all `N` pairs and free them in the same
+order; they differ **only** in whether the payload is touched), which is exactly what makes the
+residency contrast clean. Do not "fix" this to match production's interleave — doing so would
+reintroduce the confound the factorial exists to remove.
 
 ### Pre-pass lifecycle (pinned — must not degenerate into recycling one block)
 
@@ -122,12 +145,22 @@ payload**, faulting the very pages C1 is supposed to leave cold. Therefore:
 - **Aggregation (pinned):** report the **median** per-invocation delta as the headline, plus **min/max
   and the sum across the 21**; then the **five-process median of those medians**, matching the timing
   protocol.
-- **Linux (Zen 4/WSL2):** `getrusage(RUSAGE_SELF)` **`ru_minflt` / `ru_majflt`**.
-- **Darwin (M4) — corrected flavor:** `TASK_VM_INFO` reports **residency, not fault counts**. Use
-  **`TASK_EVENTS_INFO`** → **`task_events_info`** with **`faults`, `pageins`, `cow_faults`**.
-  (`getrusage` may be tried first, but it is not trusted on Darwin.)
+### Host-specific PRIMARY counter (they are not the same quantity)
+
+**Darwin `TASK_EVENTS_INFO.faults` is NOT Linux `ru_minflt`** — do not label it "minor faults" and do
+not pool the two. Each host has one **primary** counter, and the 50% gate applies to **that host's
+primary**:
+
+| host | primary counter (gate applies here) | also reported |
+|---|---|---|
+| **Linux (Zen 4/WSL2)** | `getrusage(RUSAGE_SELF)` **`ru_minflt`** | `ru_majflt` |
+| **Darwin (M4)** | `TASK_EVENTS_INFO` → `task_events_info` **`faults`** | **`pageins`**, **`cow_faults`** (separately, never merged into "faults") |
+
+`TASK_VM_INFO` reports **residency, not fault counts** — not usable here. `getrusage` may be tried
+first on Darwin but is **not trusted**; state which source was actually used.
+
 - **If NO working M4 fault source is found, the M4 mechanism verdict is INCONCLUSIVE.** **Zen 4/WSL2
-  counters cannot prove M4 behavior** — they are a different OS *and* architecture.
+  counters cannot prove M4 behavior** — different OS *and* architecture.
 
 ## Cache eviction must be fully controlled
 
@@ -155,9 +188,11 @@ Fixed **before** data collection; adjust only with an explicit note, never after
   (≥ ~20% of M4's 2.426 ms gap) **AND** the **five-process ranges of C3 and C4 do not overlap.**
   Report **`C1 − C2`** (warm-cache counterpart) alongside; a residency effect that appears only at one
   cache level is an **interaction**, reported as such, not a clean confirmation.
-- **"Materially reduces faults"**: rawr **minor-fault median delta falls ≥ 50% from C3 to C4**
-  (residency at matched cache state). Report the **C1 → C2** fault drop alongside. (A residency effect
-  should be dramatic in fault counts, not marginal.)
+- **"Materially reduces faults"**: rawr's **host-primary fault-counter median delta falls ≥ 50% from
+  C3 to C4** (residency at matched cache state) — **`ru_minflt` on Linux, `TASK_EVENTS_INFO.faults` on
+  Darwin**, each judged against itself, never pooled. Report the **C1 → C2** drop alongside, and
+  Darwin's `pageins` / `cow_faults` separately. (A residency effect should be dramatic in fault
+  counts, not marginal.)
 - **"CRoaring unmoved"**: CRoaring's median moves **≤ 2%** across all cells **AND** its five-process
   ranges **overlap**. If a pre-pass moves CRoaring beyond that, the cell is not isolating what we
   think and **that cell's result is void.**
@@ -194,14 +229,14 @@ the effect carried by **residency at matched cache state** (**`C3 − C4`**, cor
 - **No production library code changes**; cells are gated/benchmark-local.
 - **No recycling-pool implementation or design.**
 - Diagnostic build passes `zig build`, `zig build test`, `zig build difftest`.
-- Board gate not applicable (no production change), but the **C0 anchor check** must show the
+- Board gate not applicable (no production change), but the **A0 vs C0 anchor check** must show the
   canonical rows are unperturbed.
 
 ## Acceptance
 
-- All five cells (C0 anchor + the C1–C4 2×2 factorial), **rawr/SMP and CRoaring as separate per-tuple processes with implementation-specific
+- All six cells (**A0** canonical anchor + **C0** diagnostic baseline + the **C1–C4** 2×2 factorial), **rawr/SMP and CRoaring as separate per-tuple processes with implementation-specific
   init**, five fresh processes each, on **M4 (subject)** and **Zen 4/WSL2 (OS+arch control)**.
-- Pre-pass (and C3 eviction) confirmed to run **before every warmup and every timed invocation**.
+- Pre-pass (and, in **C3 and C4**, the eviction) confirmed to run **before every warmup and every timed invocation**.
 - Pre-pass allocation shape verified to match production (header `create` + 64-byte-aligned 1024-word
   `alignedAlloc`; free words-then-header).
 - **Pre-pass faults reported per cell**; **page-reuse overlap demonstrated** (else void).
@@ -210,7 +245,7 @@ the effect carried by **residency at matched cache state** (**`C3 − C4`**, cor
 - Eviction buffer allocated + prefaulted in **all** cells, outside SMP, size pinned to reported LLC.
 - Allocation counts from an **untimed** source (stated), not a wrapped timed allocator.
 - All factorial contrasts reported (**C3−C4** primary, **C1−C2**, **C1−C3**, **C2−C4**, **C0−C1**, plus the interaction) with **host-local** recovered shares and the pre-registered thresholds
-  applied; **C0 anchor** verified.
+  applied; **A0 vs C0 overlap (ranges overlap, medians within 5%)** verified, with any drift from the historical provenance ranges noted.
 - A clear **CONFIRMED / REFUTED / INCONCLUSIVE** verdict (per host) and the named outcome branch.
 - No production change; `docs/parity-measurement.md` updated with cells and verdict.
 
@@ -220,6 +255,6 @@ the effect carried by **residency at matched cache state** (**`C3 − C4`**, cor
 
 ## Estimate
 
-M — five cells × two implementations × two hosts, reusing the canonical worker. The work is
+M — six cells × two implementations × two hosts, reusing the canonical worker. The work is
 instrumentation and orthogonality discipline (per-invocation pre-passes, Mach fault plumbing,
 page-reuse proof), not new algorithms.
