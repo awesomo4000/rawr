@@ -5,8 +5,9 @@
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md). Background:
 [allocator-address-order-pathology.md](../docs/allocator-address-order-pathology.md).
 
-Apply the address-sort remedy to the phases whose visit order is **ours to choose**, as an **opt-in**.
-This is the *tactical* remedy — it compensates for allocator-returned order rather than fixing it, and
+Apply the address-sort remedy to the phases whose visit order is **ours to choose**, behind a
+**to-be-decided control mechanism** (see the scope decision below — options include default-off and
+default-on, so this spec uses **neutral wording** until the owner picks). This is the *tactical* remedy — it compensates for allocator-returned order rather than fixing it, and
 it is chosen because it is **robust to allocator sharing** (it depends only on pointers we already hold,
 not on shared allocator state).
 
@@ -43,13 +44,41 @@ permitted in this spec.**
 
 The remedy is legal only where nothing downstream depends on visit order.
 
-| phase | order-free? | eligible |
-|---|---|---|
-| **teardown / mass free** (`deinit`) | yes — frees may happen in any order | **yes** |
-| **repair cardinality pass** (`repairAfterLazy`, per-bitset `computeCardinality`) | yes — each container is independent; the **compaction step must stay key-ordered** | **yes, split into address-ordered compute + key-ordered compact** |
-| `serialize` / `serializeToWriter` | no — output byte order is the format | no |
-| `iterate` / `toArray` | no — must emit ascending values | no |
-| clone / set-op **writes** | no — result must be key-ordered | no |
+**Two independent tests** — a phase qualifies only if the visit order is free (**correctness**) **and**
+the reordering is allocator-state-neutral (**robustness**):
+
+| phase | order-free? | state-neutral? | verdict |
+|---|---|---|---|
+| **repair cardinality pass** (per-bitset `computeCardinality`) | yes — containers independent; compaction stays key-ordered | **yes** — a read-only traversal; **frees are untouched** because the demote/free work stays in the key-ordered pass | **clean candidate** |
+| **teardown / mass free** (`deinit`) | yes — frees may happen in any order | **NO** — see below | **candidate with a downstream obligation** |
+| `serialize` / `serializeToWriter` | no — output byte order is the format | — | no |
+| `iterate` / `toArray` | no — must emit ascending values | — | no |
+| clone / set-op **writes** | no — result must be key-ordered | — | no |
+
+### Sorted teardown is NOT allocator-state-neutral (blocking requirement)
+
+`SmpAllocator.free` pushes onto a **per-size-class LIFO freelist**, so **the order we free in
+determines the order later allocations come back.** Sorted teardown is therefore **state conditioning**,
+not a local optimization: it may improve teardown while **poisoning the next allocation/traversal
+cycle** — and **a fresh process that exits right after teardown can never reveal that.**
+
+**Direction inverts, and this matters:** LIFO reuse means **freeing ascending tends to hand back
+descending**, and **freeing descending tends to hand back ascending**. Note this is a plausible
+mechanism for the measured words-only case (8 KB stride, *descending* allocation order). So the free
+order that helps the *next* cycle may be **descending**, the opposite of "sort ascending before
+freeing."
+
+**`38-00` must therefore measure teardown as a two-stage experiment:**
+
+1. **Immediate teardown** — unsorted, **ascending-payload**, and **descending-payload** free order.
+2. **Then refill the same allocator and measure the next construction/traversal** for each of the three
+   free orders — this is where the poisoning (or benefit) appears.
+3. **Ideally insert an allocator-noise control between teardown and refill** (unrelated
+   allocation/free traffic), to test whether any downstream effect survives a realistically shared
+   allocator rather than only in a rawr-only process.
+
+**A teardown improvement measured without stage 2 does not count.** Repair has no such obligation:
+sorting the cardinality traversal does not reorder frees, and key-ordered compaction is unchanged.
 
 **Confidence differs sharply between the two phases — say so:**
 
@@ -114,8 +143,10 @@ addresses. Required keys:
   so teardown must be measured **cold**. Hiding the scratch allocation before the timer would make
   teardown results **dishonest**. Measure both, and label which applies to which phase:
   - **cold:** scratch allocation + sort + traversal + scratch free — **the honest teardown number**;
-  - **reusable steady state:** only where repeated invocation makes reuse legitimate (repair, called
-    per lazy operation) — and say so explicitly.
+  - **reusable steady state:** where repeated invocation could make reuse legitimate (repair).
+  **Measure repair BOTH ways — cold and reusable-scratch.** The eventual control mechanism may not
+  provide persistent scratch at all, so `38-00` **must not assume amortization** before `38-01` chooses
+  it. Report both numbers.
 - **Graceful degradation is mandatory:** sorting is purely an optimization, so if the scratch
   allocation fails, **fall back to unsorted traversal and continue** — never propagate an error and
   never fail the operation. Test with allocation-failure injection.
@@ -197,8 +228,12 @@ public control mechanism are resolved.**
   explicitly labelled rawr-internal deltas); both allocators, both hosts, five fresh processes, range
   separation applied; **repair timed as the complete operation**, cardinality sub-phase as attribution
   only; **mass-bitset teardown corpus** plus the 8-container clone corpus as size-gate control;
-  **cold** scratch accounting for teardown and steady-state only where reuse is legitimate; per-phase
+  **cold** scratch accounting for teardown and **BOTH cold and reusable-scratch for repair**; per-phase
   size-gate thresholds derived by the pinned rule.
+- **Teardown two-stage requirement:** immediate teardown measured **unsorted / ascending-payload /
+  descending-payload**, then **the same allocator refilled and the next construction/traversal
+  measured** for each order, ideally with an **allocator-noise control** between. **A teardown win
+  without the downstream stage does not count.**
 - Phase 2 (`38-01`): **blocked** until the scope decision and control mechanism are pinned. Then:
   sorted traversal shipped only for phases that separated, size-gated per phase, chosen opt-in
   mechanism documented, **scratch-failure degrades to unsorted**.
@@ -211,7 +246,9 @@ public control mechanism are resolved.**
 
 - **`38-00`** — Phase 1 measurement: both phases, both allocators, both hosts, CRoaring references,
   payload-vs-header key comparison, mass-bitset teardown corpus + clone control, honest scratch
-  accounting, per-phase size-gate sweep. **No production change.** Ready to implement.
+  accounting (repair cold **and** reused), the **teardown two-stage refill experiment**, per-phase
+  size-gate sweep. **No production change.** Ready to implement — see
+  [38-00](38-00-address-sort-measurement.md).
 - **`38-01`** — Phase 2 implementation. **NOT ready** — blocked on (i) the scope decision
   (throughput-only vs parity lever) and (ii) the public control mechanism (per-op option vs explicit
   variants). Write it after `38-00` reports and both are pinned.
