@@ -1380,6 +1380,84 @@ pub noinline fn parityRun(row: ParityRow, implementation: ParityImplementation, 
     };
 }
 
+pub const ParityFaultSnapshot = struct {
+    primary: u64 = 0,
+    major: u64 = 0,
+    cow: u64 = 0,
+    source: u32 = 0,
+    valid: bool = false,
+};
+
+pub const ParityLazyObservation = struct {
+    elapsed_ns: u64,
+    before: ParityFaultSnapshot,
+    after: ParityFaultSnapshot,
+};
+
+/// Runs the canonical lazy-OR construction timing body with counter samples
+/// immediately outside its internal clock. Result teardown remains untimed.
+pub noinline fn parityObserveLazyConstruction(
+    implementation: ParityImplementation,
+    sample_faults: *const fn () ParityFaultSnapshot,
+) ParityLazyObservation {
+    const before = sample_faults();
+    return switch (implementation) {
+        .rawr => result: {
+            const start = bench_time.monotonicNanos();
+            var lazy_result = rawr_sparse_a.?.lazyOr(
+                std.heap.smp_allocator,
+                &rawr_sparse_b.?,
+                true,
+            ) catch unreachable;
+            const elapsed_ns = bench_time.monotonicNanos() - start;
+            const after = sample_faults();
+            std.mem.doNotOptimizeAway(&lazy_result);
+            lazy_result.deinit();
+            break :result .{ .elapsed_ns = elapsed_ns, .before = before, .after = after };
+        },
+        .croaring => result: {
+            const start = bench_time.monotonicNanos();
+            const lazy_result = c.roaring_bitmap_lazy_or(
+                cr_sparse_a.?,
+                cr_sparse_b.?,
+                true,
+            ) orelse unreachable;
+            const elapsed_ns = bench_time.monotonicNanos() - start;
+            const after = sample_faults();
+            std.mem.doNotOptimizeAway(lazy_result);
+            c.roaring_bitmap_free(lazy_result);
+            break :result .{ .elapsed_ns = elapsed_ns, .before = before, .after = after };
+        },
+    };
+}
+
+/// Timed-only profiling boundary for the rawr lazy-OR construction row.
+/// Warmups must continue to use parityRun so profile filtering excludes them.
+pub noinline fn rawr_prof_timed_lazy_or(allocator_kind: ParityAllocator) RoaringBitmap {
+    return switch (allocator_kind) {
+        .smp => rawr_sparse_a.?.lazyOr(std.heap.smp_allocator, &rawr_sparse_b.?, true) catch unreachable,
+        .libc => rawr_sparse_a.?.lazyOr(libc_allocator, &rawr_sparse_b.?, true) catch unreachable,
+        else => unreachable,
+    };
+}
+
+/// Performs one untimed production lazy-OR and exposes only its transient
+/// bitset word addresses for the post-timing page-reuse proof.
+pub noinline fn parityRawrLazyWordAddresses(out: []usize) !usize {
+    var result = try rawr_sparse_a.?.lazyOr(std.heap.smp_allocator, &rawr_sparse_b.?, true);
+    defer result.deinit();
+
+    var count: usize = 0;
+    for (result.containers[0..result.size]) |tagged| {
+        if (tagged.getType() != .bitset) continue;
+        if (count == out.len) return error.AddressBufferTooSmall;
+        out[count] = @intFromPtr(tagged.getBitset().words);
+        count += 1;
+    }
+    std.mem.doNotOptimizeAway(&result);
+    return count;
+}
+
 noinline fn parityRunRawr(row: ParityRow, allocator_kind: ParityAllocator) u64 {
     switch (row) {
         .add_random => runRawrAllocator(allocator_kind, benchRawrAddRandomWithAllocator),

@@ -246,6 +246,95 @@ pub fn build(b: *std.Build) void {
     );
     bench_parity_worker_step.dependOn(&b.addInstallArtifact(bench_parity_worker_exe, .{}).step);
 
+    // Fresh-process lazy-OR page-residency diagnosis worker.
+    const bench_lazy_residency_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_lazy_or_residency.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_lazy_residency_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_lazy_residency_mod, target);
+    addTranslatedCImport(b, bench_lazy_residency_mod, .{
+        .header = "tools/bench_residency_diag.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{
+            "tools/croaring_iterate_diag.c",
+            "tools/croaring_select_diag.c",
+            "tools/bench_residency_diag.c",
+        },
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_lazy_residency_exe = b.addExecutable(.{
+        .name = "bench_lazy_or_residency",
+        .root_module = bench_lazy_residency_mod,
+    });
+    const bench_lazy_residency_step = b.step(
+        "bench-lazy-residency",
+        "Build lazy-OR page-residency diagnosis worker",
+    );
+    bench_lazy_residency_step.dependOn(
+        &b.addInstallArtifact(bench_lazy_residency_exe, .{}).step,
+    );
+
+    // Fresh-process lazy-OR allocator cost attribution worker.
+    const bench_lazy_allocator_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_lazy_or_allocator.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_lazy_allocator_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_lazy_allocator_mod, target);
+    addTranslatedCImport(b, bench_lazy_allocator_mod, .{
+        .header = "tools/bench_residency_diag.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{
+            "tools/croaring_iterate_diag.c",
+            "tools/croaring_select_diag.c",
+            "tools/bench_residency_diag.c",
+        },
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_lazy_allocator_exe = b.addExecutable(.{
+        .name = "bench_lazy_or_allocator",
+        .root_module = bench_lazy_allocator_mod,
+    });
+    const bench_lazy_allocator_step = b.step(
+        "bench-lazy-allocator",
+        "Build lazy-OR allocator cost attribution worker",
+    );
+    bench_lazy_allocator_step.dependOn(
+        &b.addInstallArtifact(bench_lazy_allocator_exe, .{}).step,
+    );
+
+    // Standalone SMP allocator address-order diagnosis worker. It intentionally
+    // imports neither rawr nor CRoaring so allocator layout is the only variable.
+    const bench_smp_layout_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_smp_layout.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_smp_layout_mod.link_libc = true;
+
+    const bench_smp_layout_exe = b.addExecutable(.{
+        .name = "bench_smp_layout",
+        .root_module = bench_smp_layout_mod,
+    });
+    const bench_smp_layout_step = b.step(
+        "bench-smp-layout",
+        "Build standalone SMP allocator address-order diagnosis worker",
+    );
+    bench_smp_layout_step.dependOn(
+        &b.addInstallArtifact(bench_smp_layout_exe, .{}).step,
+    );
+
     // Fresh-process four-path iteration diagnosis harness.
     const iterate_diag_optimize = if (optimize == .Debug) .ReleaseFast else optimize;
     const iterate_diag_lib_mod = b.createModule(.{

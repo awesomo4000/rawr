@@ -1033,6 +1033,177 @@ materialization/zeroing itself or the broader construction strategy, not merely 
 Recorded artifacts are `misc/lazy-or-attribution-20260806-182950-summary.txt` on M4 and
 `misc/lazy-or-attribution-20260806-183730-summary.txt` on the Zen 4 reference host.
 
+## Lazy-OR page-residency diagnosis (08/07/2026)
+
+Spec 36 tested whether first-touch faults on rawr's 16,364 transient 8 KB word allocations explain
+the remaining canonical M4 lazy-OR construction gap. The diagnostic retains the canonical
+3-warmup/21-timed protocol and five fresh processes per tuple. A0 is the unchanged parity worker;
+C0 is the instrumented baseline. C1-C4 form a residency/cache factorial using an SMP-only pre-pass
+in both rawr and CRoaring processes. Fault samples sit immediately outside the internal production
+timer and before result teardown. The corpus mechanically fixes each pre-pass at 16,364 header plus
+16,364 words allocations, or 32,728 allocator calls.
+
+The M4 live anchors passed their pre-registered validity gate:
+
+| Implementation | A0 canonical | C0 diagnostic | Median delta | Range overlap |
+| --- | ---: | ---: | ---: | --- |
+| rawr/SMP | 5.779 ms | 5.963 ms | 3.18% | yes |
+| CRoaring | 3.417 ms | 3.354 ms | 1.84% | yes |
+
+The Darwin counter source was `TASK_EVENTS_INFO.faults`; `pageins` and `cow_faults` were both zero
+throughout. Runtime pages were 16 KB. The highest cache level exposed by the OS was the 16 MB
+performance-cluster L2, so C3/C4 walked a fully prefaulted 64 MB buffer.
+
+| M4 cell | rawr/SMP | CRoaring | rawr operation faults | rawr pre-pass faults |
+| --- | ---: | ---: | ---: | ---: |
+| C0 diagnostic baseline | 5.963 ms | 3.354 ms | 40 | 0 |
+| C1 bookkeeping, cache warm | 6.118 ms | 3.430 ms | 40 | 0 |
+| C2 pages touched, cache warm | 6.100 ms | 3.390 ms | 40 | 0 |
+| C3 bookkeeping, cache evicted | 6.132 ms | 3.525 ms | 40 | 0 |
+| C4 pages touched, cache evicted | 6.143 ms | 3.562 ms | 40 | 0 |
+
+The page-overlap proof found exactly 8,184 unique 16 KB pages in both the pre-pass and the following
+production construction, with 100% overlap in every rawr C1-C4 process. Despite conditioning the
+exact pages production reused, C1-C2 improved by only 0.018 ms with overlapping ranges, C3-C4
+regressed by 0.011 ms, and the operation fault count remained exactly 40. Forty task faults are
+less than 0.5% of the 8,184 reused word-buffer pages and cannot account for a 2.426 ms construction
+gap. C2 also failed to improve either timing or faults relative to C0.
+
+The cache-evicted C3/C4 contrast is formally void: CRoaring moved by more than the allowed 2%, so
+walking the eviction buffer was a general environmental disturbance. C1 also narrowly missed the
+per-cell CRoaring control at 2.27%; C2 passed at 1.07%. Those exclusions do not change the direct
+C0/C2 evidence or the operation counters, but their timing contrasts are not used as parity claims.
+
+**M4 verdict: REFUTED as the explanation of the canonical timed gap.** This does not refute the
+broader observation that rawr/SMP depends on prior process activity. It establishes that, after the
+canonical warmups, the timed constructions are already reusing resident pages and pre-touching
+those pages does not remove the gap. A recycling pool is therefore not justified by first-touch
+faults. The named follow-up branch is matched-state zeroing/codegen diagnosis.
+
+The Zen 4/WSL2 control used 4 KB pages, a reported 16 MB L3, and Linux `ru_minflt`. It likewise found
+100% page reuse, unchanged rawr operation faults (160 in every cell), and sub-gate rawr movement:
+C1-C2 was 0.068 ms and C3-C4 was 0.126 ms. Its rawr A0/C0 anchor passed, but CRoaring's narrow A0 and
+C0 process ranges did not overlap despite only a 0.61% median difference. Under the pre-registered
+rule the **Zen 4 verdict is INCONCLUSIVE**; its factorial timings are control observations, not
+decision evidence.
+
+The recorded M4 artifact is `misc/lazy-residency-20260807-055354-summary.txt`. The Zen 4 artifact is
+`misc/lazy-residency-20260807-063922-summary.txt`, retained on the WSL2 reference host.
+
+## Standalone SMP allocator layout reproducer (08/07/2026)
+
+The central allocator-layout result is preserved in `src/bench_smp_layout.zig` and can be rerun with
+`scripts/run-bench-smp-layout.sh`. The executable imports neither rawr nor CRoaring: it allocates
+16,364 separate 64-byte-aligned 8 KB buffers with `std.heap.smp_allocator` or
+`std.heap.c_allocator`, optionally interleaves replica 16-byte headers, and zeroes the same buffers
+in allocation or address order. Each tuple runs in five fresh processes with 3 warmups and 21 timed
+runs per process.
+
+| M4 standalone cell | SMP | libc |
+| --- | ---: | ---: |
+| Allocate words buffers | 0.235 ms | 0.230 ms |
+| Allocate headers plus words | 0.171 ms | 0.298 ms |
+| Zero words in allocation order | 4.524 ms | 2.841 ms |
+| Zero header-interleaved words in allocation order | 5.476 ms | 2.883 ms |
+| Zero words in address order, sorting untimed | 2.843 ms | 2.778 ms |
+| Zero header-interleaved words in address order, sorting untimed | 2.739 ms | 2.703 ms |
+| Sort plus zero words, sorting timed | 2.851 ms | 2.864 ms |
+| Sort plus zero header-interleaved words, sorting timed | 2.965 ms | 2.780 ms |
+
+SMP allocation calls are not the cost: they match or beat libc. Changing only traversal order
+recovers 1.681 ms for words-only allocation and 2.737 ms with interleaved headers. The honest cells
+that include sorting still finish close to libc, although sorting is a diagnostic control rather
+than a proposed production strategy.
+
+The address stream explains why a single median-stride claim is incomplete. In the words-only SMP
+cell, 16,361 of 16,363 adjacent allocation pairs are 8 KB apart, but all pairs are descending; the
+ascending address-order control is still substantially faster. With interleaved headers, SMP's
+median absolute stride is 64 KB, with only 292 adjacent pairs and 2,045 increasing pairs. libc is
+nearly ascending and contiguous in both shapes. This establishes allocator-induced traversal order
+as the source of the zeroing difference, but it does not distinguish hardware prefetch, TLB,
+page-table, or cache effects.
+
+The recorded artifact is `misc/smp-layout-20260807-165649-summary.txt`. Benchmark artifacts remain
+local measurement records and are not required to run the reproducer.
+
+## Lazy-OR allocator cost attribution (08/07/2026)
+
+Spec 37 separated time spent inside allocator machinery from time spent doing otherwise-identical
+work on allocator-supplied addresses. The rawr/SMP and rawr/libc arms use the same ReleaseFast
+binary, corpus, code, 64-byte alignment, warmup count, and timed count; only the allocator is
+selected at runtime. This is diagnostic infrastructure only and does not change the library.
+
+On M4, `/usr/bin/sample` captured five fresh processes per allocator at a 1 ms interval. The worker
+announced a post-warmup rendezvous, and attribution retained only stacks below the named `noinline`
+`rawr_prof_timed_lazy_or` boundary. Each leaf sample was assigned to one mutually exclusive bucket.
+Zig, libc, and the Darwin zeroing stubs symbolized completely; the unsymbolized share was 0% in both
+arms, and no allocator-free samples appeared below the timed wrapper. The reported milliseconds are
+sample-count estimates normalized over 21 completed timed constructions per process, not canonical
+timing measurements.
+
+| M4 profile bucket | rawr/SMP | rawr/libc | SMP - libc |
+| --- | ---: | ---: | ---: |
+| Allocation machinery | 0.581 ms | 1.229 ms | -0.648 ms |
+| Mapping fallthrough | 0.000 ms | 0.057 ms | -0.057 ms |
+| Zeroing | 3.886 ms | 1.800 ms | +2.086 ms |
+| Accumulation and assembly | 0.610 ms | 0.819 ms | -0.210 ms |
+| Other symbolized work | 0.114 ms | 0.152 ms | -0.038 ms |
+| Total profiled | 5.190 ms | 4.057 ms | +1.133 ms |
+
+SMP spends less sampled time in allocation machinery, not more. Its excess is concentrated in the
+same zeroing routine operating on allocator-supplied addresses. Under the pre-registered Phase 1
+rule, the **M4 verdict is allocator-induced memory layout**, not per-call allocator overhead. This
+does not by itself identify the physical cache or TLB mechanism.
+
+The separate canonical run keeps timing arithmetic independent from profiler samples:
+
+| M4 canonical arm | Median | Full five-process range |
+| --- | ---: | ---: |
+| rawr/SMP | 5.863 ms | 5.779-5.951 ms |
+| rawr/libc | 3.711 ms | 3.695-3.782 ms |
+| CRoaring | 3.399 ms | 3.288-3.496 ms |
+
+Within that single run, changing only rawr's allocator recovered 2.152 ms of the 2.464 ms
+rawr/SMP-to-CRoaring gap, or 87.34%. Both M4 A0/C0 diagnostic anchors passed independently: the SMP
+median moved 0.70% and the libc median moved 0.35%, with overlapping process ranges.
+
+The matched-bitset initialization probe corroborated the profile. It retained 16,364 header plus
+64-byte-aligned 8 KB words pairs and measured allocation-only P1 separately from production-order
+allocation plus zeroing P2:
+
+| M4 probe | rawr/SMP | rawr/libc |
+| --- | ---: | ---: |
+| P1 allocation only | 0.129 ms [0.123, 0.136] | 0.313 ms [0.302, 0.322] |
+| P2 production-order initialization | 6.581 ms [6.526, 6.705] | 2.976 ms [2.777, 3.267] |
+| Conservative P2 - P1 interval | 6.390-6.582 ms | 2.455-2.965 ms |
+
+The P1 ranges separate with SMP faster, while the P2-P1 intervals separate with SMP slower. The
+virtual-address statistics provide a clue, not proof of physical locality: libc returned almost all
+successive words buffers at an 8,192-byte stride across a roughly 138 MB span, whereas SMP's median
+stride was 65,536 bytes across roughly 211 MB with only about 292 contiguous pairs. Both arms covered
+essentially the same number of 16 KB pages and neither produced page-straddling buffers.
+
+The Zen 4/WSL2 run is a control observation only. Ubuntu's `/usr/bin/perf` wrapper had no package
+matching the Microsoft 6.6 WSL2 kernel, but the installed versioned Linux 6.8 `perf` binary passed a
+record/report preflight against that kernel. Five fresh processes per allocator then produced fully
+symbolized user-space call chains. The profile did not reproduce the M4 problem: SMP was faster in
+every material bucket, with normalized sampled totals of 19.829 ms for SMP and 82.724 ms for libc.
+The SMP-minus-libc differences were -15.610 ms allocation, -41.762 ms zeroing, -3.352 ms work, and
+-2.171 ms other. There is no positive SMP recovery to localize on this host, so Phase 1 is
+inconclusive for the M4 question.
+
+Phase 2 also missed the pre-registered rawr/libc A0/C0 range-overlap gate despite a 1.60% median
+difference, and its allocator direction was likewise the opposite of M4: SMP was substantially
+faster for both allocation and P2-P1 initialization. The **Zen 4 verdict is INCONCLUSIVE** rather
+than promoted from a non-analogous profile or an invalid probe. This host is an
+OS-plus-architecture control, not a pure architecture control.
+
+The M4 timing artifact is `misc/lazy-allocator-20260807-153305-summary.txt`; its profile artifact is
+`misc/lazy-allocator-profile-20260807-150313-summary.txt`. The corrected Zen 4 timing artifact is
+`misc/lazy-allocator-20260807-153235-summary.txt`; its profile artifact is
+`misc/lazy-allocator-profile-20260807-160837-summary.txt`. Both Zen artifacts are retained on the
+WSL2 reference host.
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad
@@ -1046,6 +1217,12 @@ default-allocator optimization spec; their remaining libc gaps are relevant only
 explicitly allocation-matched investigation.
 
 ## Reproduction
+
+Build and run the standalone five-process allocator-layout matrix:
+
+```sh
+./scripts/run-bench-smp-layout.sh
+```
 
 Build and run the controlled five-process matrix:
 
@@ -1099,6 +1276,24 @@ Build and run the fused removeRangeCopy diagnosis:
 
 ```sh
 ./scripts/run-bench-remove-range-copy.sh
+```
+
+Build and run the lazy-OR page-residency diagnosis:
+
+```sh
+./scripts/run-bench-lazy-residency.sh
+```
+
+Build and run the lazy-OR allocator attribution timing probe:
+
+```sh
+./scripts/run-bench-lazy-allocator.sh
+```
+
+On Darwin or Linux with a working system profiler, collect the named-boundary sampling attribution:
+
+```sh
+./scripts/profile-bench-lazy-allocator.sh
 ```
 
 These scripts build native `ReleaseFast` executables, retain individual process output under

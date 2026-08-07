@@ -173,9 +173,9 @@
 > **No lever until that is established.** (Note for whenever a lever is eventually discussed: the
 > address-sort result and the header-interleaving penalty are *diagnostic observations*, not proposals.)
 >
-> **Evidence hygiene:** the reproducer lives at `/tmp/smp_layout_probe.zig` and is **not in the
-> repository** — it is now load-bearing evidence for the campaign's central finding and should be
-> preserved in-tree.
+> **Evidence hygiene:** the load-bearing reproducer is preserved at
+> [`src/bench_smp_layout.zig`](../src/bench_smp_layout.zig), with its fresh-process controller at
+> [`scripts/run-bench-smp-layout.sh`](../scripts/run-bench-smp-layout.sh).
 >
 > **Plan of record — steps 1–5 ALL DONE (reconciliation complete; step 5 refuted first touch).**
 > - **Mechanism status:** **page faults / first touch REFUTED** (spec 36 — only 40 operation faults,

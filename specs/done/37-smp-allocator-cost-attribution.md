@@ -45,8 +45,9 @@
 > **Bookkeeping:** the Phase 1 profiling apparatus and Phase 2 probe specced below were **not needed** —
 > a targeted standalone reproducer answered the question more cleanly and more strongly (it removes
 > rawr entirely). Retained as the record of the plan, and as the fallback design if the *hardware-effect*
-> question needs profiling. **Reproducer currently at `/tmp/smp_layout_probe.zig`, NOT yet in the
-> repository — it is now load-bearing evidence and should be preserved.**
+> question needs profiling. The load-bearing standalone reproducer is preserved at
+> [`src/bench_smp_layout.zig`](../../src/bench_smp_layout.zig), with its fresh-process controller at
+> [`scripts/run-bench-smp-layout.sh`](../../scripts/run-bench-smp-layout.sh).
 
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md). **Diagnosis only —
 no production change, no lever design.** Answer one narrow question:
