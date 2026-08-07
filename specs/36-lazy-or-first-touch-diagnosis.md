@@ -9,10 +9,13 @@ hypothesis** for the last material row.
 **Target (canonical, fresh-process, 2026-08-06) — M4:** lazy-OR construction **rawr/SMP 5.762 ms vs
 CRoaring 3.336 ms = 1.727x**, gap **2.426 ms**. (Repair-only 1.069x; combined 1.190x.)
 
-**Standing evidence:** rawr/SMP construction moves with **prior allocation activity**, not cache
-warmth (allocator prime 5.150 / cache prime 3.890 / target-only 4.139); moving validation ahead of
-timing took rawr **5.762 → 4.243 ms** while CRoaring stayed **3.336 → 3.357**. Leading mechanism:
-**page residency / first touch on freshly SMP-allocated 8 KB buffers** — **unconfirmed.**
+**Standing evidence:** rawr/SMP construction is **highly sensitive to prior process activity** —
+moving validation ahead of timing in the canonical worker took rawr **5.762 → 4.243 ms** while
+CRoaring stayed **3.336 → 3.357** (the operation unchanged). The older context modes (allocator prime
+5.150 / cache prime 3.890 / target-only 4.139) **were confounded — each also ran
+`initAllBenchmarkData()` — so they do NOT establish "allocator state, not cache warmth."** Separating
+those two is precisely this spec's job. Leading mechanism: **page residency / first touch on freshly
+SMP-allocated 8 KB buffers** — **unconfirmed.**
 
 ## Canonical conditions (corrected)
 
@@ -22,9 +25,10 @@ timing took rawr **5.762 → 4.243 ms** while CRoaring stayed **3.336 → 3.357*
 - Canonical corpus, timing boundaries, **validation-after-timing**, **five fresh processes**,
   canonical **3 warmup / 21 timed**.
 - Per the spec-35 lesson: **no cell takes its production reference from a warmed harness.**
-- **C0 anchor check:** with cells disabled, the canonical worker must still reproduce
-  **5.762 / 3.336** on M4 — C0 is validated against that untouched anchor before any contrast is
-  believed.
+- **C0 anchor check (range-based, not exact-median):** with cells disabled, the canonical worker's
+  five-process results must fall within the **recorded process ranges — rawr `5.701–5.940 ms`,
+  CRoaring `3.270–3.385 ms`** (M4). Exact median reproduction is **not** required and must not be
+  demanded; falling outside these ranges invalidates the run before any contrast is believed.
 
 ## The measurement problem
 
@@ -38,35 +42,58 @@ Existing modes cannot do this: **`allocator_prime` and `cache_prime` both also r
 
 ## Cell matrix
 
-**Pre-pass timing (corrected — critical):** the pre-pass (and C3's eviction) runs **outside the timer
-but immediately before EVERY invocation — each of the 3 warmups and each of the 21 timed runs.** A
+**Pre-pass timing (corrected — critical):** the pre-pass (and, in C3/C4, the eviction) runs **outside
+the timer but immediately before EVERY invocation — each of the 3 warmups and each of the 21 timed runs.** A
 single pre-pass before the batch would be overwritten by the warmups, which are exactly the
 allocation activity under test.
 
-| cell | pre-pass before *every* invocation | isolates |
-|---|---|---|
-| **C0** | none (production order) | reference / anchor |
-| **C1** | `N ×` (header + words) **alloc + free, payload NEVER written** | bookkeeping / free-list state |
-| **C2** | `N ×` (header + words) **alloc + touch every page + free** | bookkeeping **+ faulted pages** (cache warm) |
-| **C3** | C2's pre-pass, **then evict caches** | bookkeeping + faulted pages, **cache cold** |
+**A FULL 2×2 FACTORIAL is required (corrected).** With eviction present in only one cell, a
+residency-vs-non-residency contrast would also carry eviction of **allocator metadata, TLB state, and
+other warmed data**. Residency and cache must therefore vary **independently**:
 
-**Allocation shape must match production exactly (corrected).** Production is
-`BitsetContainer.init`: **`allocator.create(Self)` (16 B header)** then
-**`allocator.alignedAlloc(u64, .@"64", 1024)` (8 KB words)**; teardown is `deinit`:
-**`free(words)` FIRST, then `destroy(header)`**. C1/C2 must replicate **that pair, that alignment,
-and that free order** — **plain `alloc(u8, 8192)` is NOT acceptable** (it may take a different
-allocator path and a different size class).
+| cell | residency pre-pass | cache | pre-pass before *every* invocation |
+|---|---|---|---|
+| **C0** | — | — | none (untouched production order) — **anchor only** |
+| **C1** | **unconditioned** | **warm** | bookkeeping-only pre-pass (alloc + free, payload never written) |
+| **C2** | **conditioned** | **warm** | alloc + **touch** + free |
+| **C3** | **unconditioned** | **evicted** | bookkeeping-only pre-pass, **then evict** |
+| **C4** | **conditioned** | **evicted** | alloc + **touch** + free, **then evict** |
 
-**`N = 16_384`** — matches corpus demand (~16.4 k matched keys) and the existing `primeAllocatorOnly`
-block count.
+**Contrasts (sign convention: `less-conditioned − more-conditioned`, positive = improvement):**
 
-**Contrasts (sign convention: `less-conditioned − more-conditioned`, so positive = improvement):**
+- **C3 − C4** = **residency, cache held cold** ← **PRIMARY**
+- **C1 − C2** = **residency, cache held warm** (the warm-cache counterpart)
+- **C1 − C3** and **C2 − C4** = the **cache-eviction** effect at each residency level
+- **(C1 − C2) vs (C3 − C4)** = **interaction** — if the residency effect differs by cache state, say
+  so rather than reporting a single number
+- **C0 − C1** = allocator **bookkeeping** effect (anchor vs bookkeeping-only)
 
-- **C0 − C1** = allocator **bookkeeping** effect
-- **C1 − C2** = **first-touch** effect, cache-warm
-- **C3 − C2** = **cache-warmth** contribution
-- **C1 − C3** = **residency isolated from cache** ← **primary number** (positive when residency
-  helps; the earlier draft's `C3 − C1` had the sign inverted)
+### Allocation shape (must match production exactly)
+
+Production `BitsetContainer.init`: **`allocator.create(Self)` (16 B header)** then
+**`allocator.alignedAlloc(u64, .@"64", 1024)` (8 KB words)**; `deinit` frees **`words` FIRST, then
+`destroy(header)`**. Pre-passes must replicate that pair, that alignment, and that free order —
+**plain `alloc(u8, 8192)` is NOT acceptable** (different allocator path / size class).
+
+### Pre-pass lifecycle (pinned — must not degenerate into recycling one block)
+
+A naive "allocate a pair, free it, repeat `N` times" would **recycle a single block** and condition
+nothing. Required sequence, per invocation:
+
+1. **Allocate and RETAIN all `N` pairs simultaneously** (all live at once).
+2. **Touch each words allocation while it is still live** (C2/C4 only).
+3. **Then free all pairs**, in the **same cross-container order production frees them** (ascending
+   index/key order, matching the repair/deinit traversal).
+4. **Within each pair, free `words` then `header`**, as `deinit` does.
+
+### `N` and page geometry (corrected)
+
+- **`N = 16_364`** — the **exact corpus matched-key count**. Do **not** use 16,384; that figure came
+  from the confounded `primeAllocatorOnly` diagnostic and carries no authority.
+- **"Touch every page" means every RUNTIME OS page intersecting each allocation**, computed from the
+  **runtime page size**, not assumed. On **Darwin the page size is 16 KB**, so an 8 KB allocation may
+  **straddle two pages** (or share one with a neighbour) depending on alignment — touch every page in
+  `[base, base + len)` for each allocation.
 
 ## C1 is an assumption to be measured, not asserted (corrected)
 
@@ -76,11 +103,16 @@ payload**, faulting the very pages C1 is supposed to leave cold. Therefore:
 - **Measure faults during each pre-pass itself** (separately from the timed operation) and **report
   them per cell.** If C1's pre-pass faults ≈ C2's, C1 is not a bookkeeping-only control and the
   bookkeeping/residency separation collapses — say so rather than reporting a false contrast.
-- **Page-reuse proof (untimed):** an explicit **pointer / page-overlap check** demonstrating that the
-  production run actually **reuses the pages conditioned by C1/C2** (compare pre-pass buffer page
-  addresses against the words buffers production receives; report overlap fraction). **Without
-  demonstrated reuse the entire experiment is void** — we would be conditioning pages production
-  never gets.
+- **Page-reuse proof — must NOT pollute the measured process history (corrected).** An explicit
+  **pointer / page-overlap check** must demonstrate that production actually **reuses the pages
+  conditioned by the pre-pass** (compare pre-pass page addresses against the words buffers production
+  receives; report the **overlap fraction**). Run it **either in a separate fresh diagnostic process
+  or after ALL timing in the process** — never before or between timed runs, since the check is
+  itself allocation activity that would condition the state under test. Implement it with an
+  **untimed production construction** whose resulting bitset word addresses are **inspected
+  directly**; **do not wrap the timed allocator.**
+  **Without demonstrated reuse the entire experiment is void** — we would be conditioning pages
+  production never receives.
 
 ## Fault counters
 
@@ -100,7 +132,7 @@ payload**, faulting the very pages C1 is supposed to leave cold. Therefore:
 ## Cache eviction must be fully controlled
 
 - The eviction buffer is **allocated and FULLY PREFAULTED identically in every cell** (C0/C1/C2 too,
-  even though only C3 walks it) so no cell differs in allocator or memory state because of it.
+  even though only C3 and C4 walk it) so no cell differs in allocator or memory state because of it.
 - It is allocated **outside the target SMP allocator** (page allocator / direct mapping) so it does
   not perturb the state under test.
 - **Size pinned relative to reported LLC** (state the host LLC and the multiple used).
@@ -119,10 +151,13 @@ which source was used.
 
 Fixed **before** data collection; adjust only with an explicit note, never after seeing results.
 
-- **"Materially reduces time"** (residency effect): **`C1 − C3 ≥ 0.5 ms`** (≥ ~20% of M4's 2.426 ms
-  gap) **AND** the **five-process ranges of C1 and C3 do not overlap.**
-- **"Materially reduces faults"**: rawr **minor-fault median delta falls ≥ 50%** from C1 to C3.
-  (A residency effect should be dramatic in fault counts, not marginal.)
+- **"Materially reduces time"** (residency effect, cache held cold): **`C3 − C4 ≥ 0.5 ms`**
+  (≥ ~20% of M4's 2.426 ms gap) **AND** the **five-process ranges of C3 and C4 do not overlap.**
+  Report **`C1 − C2`** (warm-cache counterpart) alongside; a residency effect that appears only at one
+  cache level is an **interaction**, reported as such, not a clean confirmation.
+- **"Materially reduces faults"**: rawr **minor-fault median delta falls ≥ 50% from C3 to C4**
+  (residency at matched cache state). Report the **C1 → C2** fault drop alongside. (A residency effect
+  should be dramatic in fault counts, not marginal.)
 - **"CRoaring unmoved"**: CRoaring's median moves **≤ 2%** across all cells **AND** its five-process
   ranges **overlap**. If a pre-pass moves CRoaring beyond that, the cell is not isolating what we
   think and **that cell's result is void.**
@@ -137,8 +172,9 @@ Fixed **before** data collection; adjust only with an explicit note, never after
 
 **CONFIRMED only if, on M4 under canonical conditions:** the residency pre-pass materially reduces
 **BOTH** rawr/SMP **minor faults** and rawr/SMP **construction time** per the thresholds above, with
-the effect carried by **`C1 − C3`** (residency) rather than **`C3 − C2`** (cache), **CRoaring
-unmoved**, and **page reuse demonstrated**.
+the effect carried by **residency at matched cache state** (**`C3 − C4`**, corroborated by
+**`C1 − C2`**) rather than by the **cache-eviction** contrasts (**`C1 − C3`** / **`C2 − C4`**),
+**CRoaring unmoved**, and **page reuse demonstrated**.
 
 - **A timing win with unchanged fault counts does NOT confirm first touch** — it points at allocator
   bookkeeping, size-class behavior, or zeroing codegen.
@@ -163,7 +199,7 @@ unmoved**, and **page reuse demonstrated**.
 
 ## Acceptance
 
-- All four cells, **rawr/SMP and CRoaring as separate per-tuple processes with implementation-specific
+- All five cells (C0 anchor + the C1–C4 2×2 factorial), **rawr/SMP and CRoaring as separate per-tuple processes with implementation-specific
   init**, five fresh processes each, on **M4 (subject)** and **Zen 4/WSL2 (OS+arch control)**.
 - Pre-pass (and C3 eviction) confirmed to run **before every warmup and every timed invocation**.
 - Pre-pass allocation shape verified to match production (header `create` + 64-byte-aligned 1024-word
@@ -173,7 +209,7 @@ unmoved**, and **page reuse demonstrated**.
   Darwin via `TASK_EVENTS_INFO`, or **M4 INCONCLUSIVE** stated.
 - Eviction buffer allocated + prefaulted in **all** cells, outside SMP, size pinned to reported LLC.
 - Allocation counts from an **untimed** source (stated), not a wrapped timed allocator.
-- Four contrasts reported with **host-local** recovered shares and the pre-registered thresholds
+- All factorial contrasts reported (**C3−C4** primary, **C1−C2**, **C1−C3**, **C2−C4**, **C0−C1**, plus the interaction) with **host-local** recovered shares and the pre-registered thresholds
   applied; **C0 anchor** verified.
 - A clear **CONFIRMED / REFUTED / INCONCLUSIVE** verdict (per host) and the named outcome branch.
 - No production change; `docs/parity-measurement.md` updated with cells and verdict.
@@ -184,6 +220,6 @@ unmoved**, and **page reuse demonstrated**.
 
 ## Estimate
 
-M — four cells × two implementations × two hosts, reusing the canonical worker. The work is
+M — five cells × two implementations × two hosts, reusing the canonical worker. The work is
 instrumentation and orthogonality discipline (per-invocation pre-passes, Mach fault plumbing,
 page-reuse proof), not new algorithms.
