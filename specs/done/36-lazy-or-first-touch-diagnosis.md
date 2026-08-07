@@ -2,6 +2,37 @@
 
 # Spec 36: Lazy-OR first-touch / page-residency diagnosis
 
+> **Outcome (2026-08-07) — REFUTED on M4; INCONCLUSIVE on Zen 4/WSL2. No production library changes.**
+>
+> **First touch / page faults are NOT the canonical gap mechanism.** The decisive fact: **operation
+> faults stayed at 40** for the whole timed construction — with ~16,364 × 8 KB (~134 MB) of buffers in
+> play, **40 faults cannot explain a 2.426 ms gap.** The pages were already resident, so there was
+> nothing for conditioning to recover: **page reuse measured 100%** (the pre-pass *was* hitting the
+> pages production receives, so the experiment was valid and the answer is simply "no"), and
+> conditioning produced **no material timing improvement**.
+>
+> **The gates worked as designed rather than yielding a false positive:**
+> - **Cache-evicted cells (C3/C4) disturbed CRoaring** and were **correctly voided** by the ≤ 2%
+>   negative-control gate — so the primary `C3 − C4` contrast was unusable, and the refutation rests
+>   instead on the **fault count (40)**, the **100% reuse proof**, and the **warm-cache `C1 − C2`**
+>   contrast. The environmental negative control caught a contaminated intervention instead of letting
+>   it produce an answer.
+> - **Zen 4/WSL2 is formally INCONCLUSIVE** because its **CRoaring A0/C0 ranges did not overlap** —
+>   the A0-vs-C0 scaffolding gate (added at review) immediately detected that the diagnostic
+>   scaffolding perturbed that host, rather than reporting a result from a perturbed baseline.
+>
+> **Retroactive correction:** the earlier fresh-vs-dirty zeroing delta is therefore **not** a page-fault
+> effect. Whatever it is, it is not faults.
+>
+> **Branch taken (as pre-registered): cold-page zeroing / codegen diagnosis.** See the umbrella for the
+> reframed question.
+>
+> Artifacts: `src/bench_lazy_or_residency.zig`, `scripts/run-bench-lazy-residency.sh`,
+> `tools/bench_residency_diag.c`, build wiring + benchmark-only observation hooks,
+> `docs/parity-measurement.md`. Verified: `zig build`, `zig build test`, `zig build difftest
+> -Doptimize=ReleaseFast`, native M4, Zen 4/WSL2 control, Windows x86-64 GNU cross-compile,
+> `git diff --check`.
+
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md). **Diagnosis only —
 no production change, no recycling-pool design.** Confirm or refute the **first-touch / page-residency
 hypothesis** for the last material row.

@@ -73,21 +73,39 @@
 > **pre-touch experiment** (pre-fault the buffer, then re-time zeroing); until one of those runs, call
 > it the **first-touch / page-fault hypothesis** and do not build on it as established.
 >
-> **Plan of record — steps 1–4 DONE (reconciliation complete, above). Remaining:**
-> - **Step 5 (next):** investigate the **production-order SMP allocate-and-first-touch/zero path** for
->   the 8 KB buffers, and **test the mechanism directly** — **fault counters**, or a
->   **pre-touch-then-re-time** experiment — rather than inferring it from the fresh/dirty delta or the
->   prime experiments. Any new diagnostic must be **narrowly aimed** at that
->   allocate/first-touch/zero sequence, run in **canonical fresh-process conditions**.
-> - **Mechanism status:** allocator residency / page-touch is the leading mechanism with **stronger
->   evidence now** (allocator prime moves it 4.139 → 5.150; cache prime does not), but **page faults
->   are still unconfirmed** — direct measurement required before any lever is designed.
-> - **Lever-space note (not a proposal):** the fix must be allocator-residency-shaped, and the obvious
->   neighbours are closed — allocator replacement (spec 18), and reducing the 8 KB buffer *count* is
->   blocked because `bitset_conversion = true` forces one per matched key and **CRoaring materializes
->   identically** (spec 35 assertion). Note a **fixed-size 8 KB recycling pool/free-list is NOT the
->   same shape as spec 17's bump arena** (bump-allocate + bulk-free, which lost on teardown), so it is
->   not automatically closed — but **do not design it until the mechanism is confirmed.**
+> **Step 5 DONE (2026-08-07) — spec 36: FIRST TOUCH REFUTED on M4; Zen 4/WSL2 inconclusive.**
+> Operation faults stayed at **40** across the whole timed construction (~16,364 × 8 KB ≈ 134 MB of
+> buffers) — **40 faults cannot explain 2.426 ms**. Page reuse measured **100%**, so the pre-pass did
+> reach production's pages and the answer is genuinely "no"; conditioning gave no material timing
+> improvement. The cache-evicted cells **disturbed CRoaring and were correctly voided** by the ≤ 2%
+> negative-control gate, so the refutation rests on the fault count, the reuse proof, and the
+> warm-cache contrast. Zen 4/WSL2 was **INCONCLUSIVE** — its CRoaring A0/C0 ranges did not overlap, the
+> scaffolding gate catching a perturbed baseline rather than reporting from it. No production change.
+>
+> **Consequence: the pages are RESIDENT, so the cost is in TOUCHING ~134 MB, not in faulting it in.**
+> The earlier fresh-vs-dirty zeroing delta is therefore **not** a page-fault effect.
+>
+> **Next (pre-registered branch): cold-page zeroing / codegen diagnosis.** Two questions, in order —
+> **(a) does rawr zero MORE BYTES than CRoaring?** rawr does an explicit `@memset` of 8 KB per matched
+> pair; establish whether CRoaring's `container_to_bitset` path actually zeroes the same volume, or
+> avoids/defers it (e.g. `calloc`-style lazy zero pages, or bitset-container reuse from its own free
+> list). A volume difference would be a different finding from a speed difference. **(b) if volumes
+> match, is rawr's zeroing SLOWER per byte?** — width, alignment, non-temporal/streaming stores,
+> disassembly, on both cold and warm memory. Diagnose before proposing any lever.
+>
+> **Plan of record — steps 1–5 ALL DONE (reconciliation complete; step 5 refuted first touch).**
+> - **Mechanism status:** **page faults / first touch REFUTED** (spec 36 — only 40 operation faults,
+>   100% page reuse, no material improvement from conditioning). **Allocator-residency-as-faults is
+>   dead.** The live question is now the **zeroing volume and zeroing speed** over ~134 MB of already-
+>   resident memory (see the step-5 outcome above for the two ordered questions).
+> - **Lever-space note (not a proposal), UPDATED post-spec-36:** a **recycling pool** was the candidate
+>   *if* faults had been confirmed — **they were refuted, so a pool aimed at residency has no
+>   mechanism to exploit** and must not be built on the old rationale. (It would still avoid *some*
+>   allocator work, but that is a different, unevidenced claim.) Reducing the 8 KB buffer *count*
+>   remains blocked — `bitset_conversion = true` forces one per matched key and **CRoaring materializes
+>   identically** (spec 35 assertion) — **unless** question (a) above shows CRoaring does **not**
+>   actually zero the same volume, which would reopen exactly that door. Allocator replacement stays
+>   closed (spec 18).
 >
 > Levers already closed for this row: Array compact header (spec 32, made it *worse*), transient arena
 > (17), allocator swap (18), header elimination (35). Specs 29/32/33/34/35 + chunks in `specs/done/`.
