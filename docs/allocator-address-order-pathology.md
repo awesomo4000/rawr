@@ -178,8 +178,9 @@ cleanly:
 
 **Robust — depend only on things you own:**
 
-- **Sort the pointers you already hold** before an order-free traversal. Works regardless of
-  provenance, other clients, or threads.
+- **Sort the pointers you already hold before a READ-ONLY traversal** (zeroing, scanning, computing).
+  Works regardless of provenance, other clients, or threads, and **leaves no trace in the allocator.**
+  This is the only unambiguously robust form of the sort remedy.
 - **Allocate from something private** (arena / pool owned by the operation). Being private makes the
   order **independent of other clients**, which is the robust part. **It does NOT guarantee ascending
   addresses:** Zig's `MemoryPool` is arena-backed but its preheated freelist is **LIFO**, and an
@@ -188,9 +189,20 @@ cleanly:
 
 **Fragile — depend on shared allocator state:**
 
-- Conditioning the shared allocator so a *later* burst behaves better — e.g. freeing in address order
-  hoping to leave address-ordered freelists for the next allocation burst. Other data structures and
-  other threads perturb that state between operations, so the effect is not dependable in a library.
+- **Sorting FREES is not the same as sorting reads — it is state conditioning.** `SmpAllocator.free`
+  pushes onto a **per-size-class LIFO freelist**, so **the order you free in determines the order later
+  allocations come back.** A sorted teardown may improve teardown itself while **poisoning the next
+  allocation/traversal cycle** — and a benchmark process that exits immediately after teardown **can
+  never reveal that.** Any sorted-free result must be paired with a **refill-and-re-measure** of the
+  following cycle.
+- **Direction matters, and it inverts.** Because reuse is LIFO, **freeing ascending tends to hand back
+  descending**, and **freeing descending tends to hand back ascending.** This is a plausible mechanism
+  for the measured words-only case (8 KB stride, *descending* allocation order): an ascending free pass
+  would produce exactly that. If the goal is a fast *next* cycle, the useful free order may be
+  **descending**, not ascending — the opposite of what "sort before freeing" suggests.
+- Conditioning the shared allocator so a *later* burst behaves better, in general. Other data
+  structures and other threads perturb that state between operations, so the effect is not dependable
+  in a library.
 
 > **Benchmark warning.** Fragile remedies **measure well and deploy badly.** A single-purpose
 > benchmark process is usually the *only* allocator client, so allocator-state conditioning looks
@@ -199,9 +211,17 @@ cleanly:
 > opposite direction. Before believing any state-conditioning result, ask whether the benchmark is
 > the sole allocator client — and if it is, treat the result as unproven.
 
-**Corollary for choosing among order-free traversals:** sorting only helps where visit order is free.
-Frees/teardown and independent per-object computations qualify; anything whose output order is
-defined by a format or by sorted-key semantics does not.
+**Corollary — two independent tests, not one.** A phase is a candidate only if it passes **both**:
+
+1. **Is the visit order free?** (correctness test) — independent per-object computation and frees pass;
+   format-defined or sorted-key output order fails.
+2. **Is it allocator-state-neutral?** (robustness test) — **read-only traversals pass; FREES DO NOT**,
+   because they rewrite the freelist order.
+
+So **independent per-object reads/computations are clean candidates**, while **teardown/mass-free is
+order-free but NOT state-neutral** — it belongs in the fragile column and needs downstream measurement,
+not the robust one. An earlier version of this document listed teardown as simply eligible; that was a
+contradiction with the fragile-conditioning entry above.
 
 ## Open question
 
@@ -227,3 +247,6 @@ conflict/replacement effects needs actual TLB and cache-miss counters, not infer
 6. Check whether interleaving small allocations among large ones worsens the returned order.
 7. Remember the sort remedy only helps traversals you are free to reorder; order dictated by data
    (e.g. key-ordered merges) cannot be sorted away, which favours fixing order at the source.
+8. **Apply the two-test rule before sorting anything: order-free AND allocator-state-neutral.** Sorting
+   a read traversal leaves no trace; **sorting frees rewrites a LIFO freelist and changes the next
+   cycle's allocation order** — measure the following cycle before believing a sorted-free win.
