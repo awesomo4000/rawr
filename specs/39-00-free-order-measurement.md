@@ -71,9 +71,21 @@ ordering only. **Selection must use fresh two-host measurements.**
 - **Rung 0 must be QUALIFIED**, not assumed: the container array is **key-ordered**, and mutation,
   replacement, conversion and long-lived bitmaps break any allocation-order correlation. Report
   **measured order quality (travel and/or page-locality)** on the real repair-demote lifecycle.
-- **Rung 1:** key `(addr − min) >> shift`, `shift = max(0, @bitSizeOf(usize) − @clz(span) − log2(nbuckets))`
-  — **portable, never hardcoded 64**; clamp index to `nbuckets − 1`; count → prefix → scatter → copy back;
-  within-bucket order arbitrary; descending by iterating buckets **high→low**; `nbuckets` default 4096.
+- **Rung 1:** key `(addr − min) >> shift`. **The shift MUST NOT be written as `max(0, a − b)`** — Zig
+  evaluates the unsigned subtraction *first*, so it underflows (panic in safe modes, wrap in fast) whenever
+  `significant_bits < bucket_bits`. Pin it as:
+
+  ```zig
+  const significant_bits = @bitSizeOf(usize) - @clz(span);   // portable, never hardcoded 64
+  const bucket_bits = std.math.log2_int(usize, nbuckets);
+  const shift: std.math.Log2Int(usize) = if (significant_bits > bucket_bits)
+      @intCast(significant_bits - bucket_bits)
+  else
+      0;
+  ```
+
+  Then: clamp index to `nbuckets − 1`; count → prefix → scatter → copy back; within-bucket order arbitrary;
+  descending by iterating buckets **high→low**; `nbuckets` default 4096.
 - **Rung 2:** normalized `addr − min`; `significant_bits = @bitSizeOf(usize) − @clz(span)`; passes =
   `ceil(significant_bits / bits_per_pass)`; state `bits_per_pass` and count-table size; **descending output
   constructed explicitly**.
@@ -133,12 +145,27 @@ today is released incrementally. **Report peak RSS per arm.** This is a real cos
 - Rungs 1–2 must be **permutations** (same multiset in and out).
 - Repair results **byte-identical** to today across all arms — same container kinds, cardinalities, values,
   key order.
-- **Deferred-free ownership:** once conversions begin, the scratch list is the **sole owner** of bitsets no
-  longer reachable through `self.containers`. Mid-conversion error ⇒ every collected bitset freed **exactly
-  once** via `errdefer`. *(Note: the full partial-repair invariant — tail compaction + final `size`
-  commit — is NEW behaviour introduced by `39-01`, not present today; `39-00` need only avoid leaks/
-  double-frees in its diagnostic build.)*
-- Failure injection at **first / middle / last** collected-bitset positions and the scratch allocation.
+- **Deferred-free ownership on the SUCCESSFUL path:** once conversions begin, the scratch list is the
+  **sole owner** of bitsets no longer reachable through `self.containers`. Verify on success that every
+  collected bitset is freed exactly once and the scratch is released.
+- **Scratch-allocation failure** is verified here, because it fails **before any mutation** and simply
+  falls back to arm `I` — a well-defined state with no partial repair.
+
+### Mid-conversion failure injection is DEFERRED to `39-01` — deliberately
+
+**`39-00` must NOT require positional mid-conversion failure injection.** Verifying leak/double-free
+freedom after a mid-conversion error presupposes the bitmap is safely deinit-able in that state — which
+requires **tail compaction and a committed `size`**, i.e. the **partial-repair invariant that does not
+exist today and that `39-01` introduces**. Without it the failed bitmap's state is not well-defined, so
+the verification would be checking an undefined property.
+
+Two ways out; **the first is chosen:**
+
+- **(SELECTED) move positional conversion-failure injection entirely to `39-01`**, alongside the invariant
+  it depends on. `39-00` retains only the successful-path ownership checks and the pre-mutation
+  scratch-failure case above.
+- (rejected) implement benchmark-local partial-commit cleanup in `39-00` — duplicates `39-01`'s work in a
+  throwaway diagnostic, for no measurement benefit.
 - `zig build test`, `zig build difftest`, `ReleaseSafe`, `ReleaseFast`.
 
 ## Acceptance
@@ -156,7 +183,9 @@ today is released incrementally. **Report peak RSS per arm.** This is a real cos
 - Inverted (ascending) read retest run once; verdict recorded.
 - Crossover **candidates and monotonicity** reported per allocator/host; **no shipping value selected**.
 - Rows that cannot move documented.
-- Correctness surface green; **no production library change**.
+- Correctness surface green — **successful-path ownership + pre-mutation scratch failure only**;
+  positional mid-conversion injection explicitly **deferred to `39-01`** with the invariant it needs.
+- **No production library change.**
 - `docs/parity-measurement.md` updated; `docs/allocator-address-order-pathology.md` cross-referenced.
 
 ## Estimate

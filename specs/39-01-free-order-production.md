@@ -38,25 +38,31 @@ pointers**; then run a **separate descending free pass** using the rung `39-00` 
 - Portability: `@bitSizeOf(usize) − @clz(span)`, **never hardcoded 64**; `span == 0` / `n <= 1` early
   return; **must compile on 32-bit targets** even though gates run on M4 and Zen 4.
 
-## API surface — PINNED
+## API, libc policy, and benchmark gate — ALL CONDITIONAL ON A/B
 
-| decision | |
-|---|---|
-| **ADD** | `repairAfterLazyWithOptions(...)` — the only new public entry point *(under (B), the default path changes instead)* |
-| **UNCHANGED** | `repairAfterLazy()` |
-| **EXCLUDED** | `deinit`, `clearRetainingCapacity`, `Roaring64Bitmap`, `OwnedBitmap` |
+These three follow from the scope decision and **must not be stated unconditionally.** An earlier draft
+described A's API and libc policy as if they held under B; they do not.
 
-`OwnedBitmap` is excluded on principle — **its arena owns teardown**, so container-level free order is
-irrelevant. The other three are excluded to keep the first shipped surface minimal; they may be revisited
-on their own evidence, not this spec's.
+| axis | under **(A) opt-in variant** | under **(B) default** |
+|---|---|---|
+| **new API** | **ADD `repairAfterLazyWithOptions(...)`** — the only new public entry point | no new entry point required; behaviour moves into the existing one |
+| **`repairAfterLazy()`** | **UNCHANGED** | **CHANGES** — it becomes the deferred descending path (gated by the demotion prepass) |
+| **runtime gate** | **none** — caller-controlled | **demotion prepass**, so the mechanism can decline cheaply below threshold |
+| **benchmark gate** | a **separate opt-in variant row** (precedent: `bitwiseAnd (sparse, arena)`); the canonical row is **not** claimed | **the canonical row itself is gated** — no variant row; the canonical number is the result |
+| **libc position** | **excluded from the default path** by not opting in; opting in remains possible and documented — a **contract, not a mechanism** | **libc is necessarily ON the default path.** Admissible **only after `39-00` proves libc unharmed on the repair-demote path**; if it regresses, (B) is unavailable |
+| **caller assertion** | documented: *"my allocator benefits from descending free order"* — **not** *"I am on M4"* | n/a — no caller assertion exists |
 
-**Document what the caller asserts:** *"my allocator benefits from descending free order"* — **not** *"I am
-on M4."* The effect is **SMP-specific, and Zen 4 gains more in absolute terms** (−3.577 vs −2.086 ms in
-`38-00`).
+**Common to both:** `deinit`, `clearRetainingCapacity`, `Roaring64Bitmap`, `OwnedBitmap` are **EXCLUDED**.
+`OwnedBitmap` on principle — **its arena owns teardown**, so container-level free order is irrelevant; the
+other three to keep the first shipped surface minimal, revisitable on their own evidence.
 
-**libc-on-M4 is excluded from the DEFAULT path**, not made impossible — opting in remains available and
-that is documented. With detection rejected (opaque `Allocator` vtable; comparing against
-`smp_allocator.vtable` breaks for every wrapped allocator), this is a **contract, not a mechanism**.
+**Common to both:** allocator **detection stays rejected** (opaque `Allocator` vtable; comparing against
+`smp_allocator.vtable` breaks for every wrapped allocator). Under (A) that is why the opt-in is
+caller-declared; under (B) it is why the mechanism must be **safe for all allocators** rather than
+conditionally enabled.
+
+**Reminder on framing:** the effect is **SMP-specific, and Zen 4 gains MORE in absolute terms**
+(−3.577 vs −2.086 ms in `38-00`) — so neither position should be described as an M4 fix.
 
 ## NEW GUARANTEE this chunk introduces — partial-repair invariant
 
@@ -77,7 +83,8 @@ complete loop**, so a mid-loop allocation failure currently leaves compacted/ove
 ## Gates
 
 - **Full-cycle** (construction + repair + result teardown) improvement on steady-state `lazyOr+repair`,
-  reported against the **canonical-equivalent opt-in variant** with **no injected noise**.
+  with **no injected noise** — reported against the **canonical-equivalent opt-in variant** under **(A)**,
+  or against **the canonical row itself** under **(B)**.
 - **Peak RSS reported** — deferral raises the temporary live peak (~134 MB held simultaneously).
 - Size gate per the scope decision: **(A) none / (B) prepass**, threshold from `39-00`'s crossover
   candidates, chosen deliberately (the M4/Zen spread was 16× at rung 4).
@@ -98,12 +105,16 @@ complete loop**, so a mid-loop allocation failure currently leaves compacted/ove
 
 ## Acceptance
 
-- Scope position **recorded**; API shipped accordingly; reporting rule honoured (variant row under (A)).
+- Scope position **recorded**, and **API / libc policy / benchmark gate all shipped per that position's
+  row of the conditional table** — not a blend. Under (A): new options entry point, `repairAfterLazy()`
+  untouched, variant-row reporting, libc excluded by non-opt-in. Under (B): `repairAfterLazy()` changes,
+  prepass gate, canonical row claimed, **libc proven unharmed** on the repair-demote path.
 - Selected rung implemented; portability asserted; scratch from `self.allocator` with pre-mutation
   fallback.
 - **Partial-repair invariant implemented and tested** — documented as new behaviour.
-- Full-cycle win demonstrated on the no-noise canonical-equivalent variant; peak RSS reported; board gate
-  held; Zen 4 within noise or explicitly excepted.
+- Full-cycle win demonstrated with no injected noise — on the **canonical-equivalent opt-in variant under
+  (A)**, or on **the canonical row itself under (B)**; peak RSS reported; board gate held; Zen 4 within
+  noise or explicitly excepted.
 - Correctness surface green.
 - `docs/parity-measurement.md` updated; the pathology doc cross-referenced.
 

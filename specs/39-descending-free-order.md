@@ -211,10 +211,20 @@ on the repair-demote path, rung 0 is out for that path regardless of its cost.
 ### Rung 1 — bucket partition, specified
 
 - Key: **`(address − min_address) >> shift`**, `min_address` from a first pass.
-- **`shift = max(0, @bitSizeOf(usize) − @clz(span) − log2(nbuckets))`** — span-adaptive, and **portable:
-  do NOT hardcode 64**, production must compile on 32-bit targets even though the performance gates run
-  on M4 and Zen 4. A **fixed** shift is a recorded trap: 256 buckets over a 160 MB span left travel
-  **unchanged at 6856x**.
+- **Shift — span-adaptive, portable, and UNDERFLOW-SAFE.** Do **not** write `max(0, a − b)`: Zig evaluates
+  the unsigned subtraction first, so it underflows when `significant_bits < bucket_bits`. Pin:
+
+  ```zig
+  const significant_bits = @bitSizeOf(usize) - @clz(span);   // never hardcoded 64
+  const bucket_bits = std.math.log2_int(usize, nbuckets);
+  const shift: std.math.Log2Int(usize) = if (significant_bits > bucket_bits)
+      @intCast(significant_bits - bucket_bits)
+  else
+      0;
+  ```
+
+  Production must compile on 32-bit targets even though the gates run on M4 and Zen 4. A **fixed** shift is
+  a recorded trap: 256 buckets over a 160 MB span left travel **unchanged at 6856x**.
 - **`span == 0` (zero or one item) must be pinned:** with `n <= 1` there is nothing to reorder — return
   immediately; `@clz(0)` is `@bitSizeOf(usize)` so the shift formula degenerates safely, but the
   early-return is required so the count/scatter passes are never entered with a degenerate span.
