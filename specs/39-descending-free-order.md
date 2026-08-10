@@ -150,7 +150,9 @@ existed; **option (a) is selected:**
   restructures repair, adding a second variable to an experiment about free order. Two options were
   considered:
   - **(SELECTED) upper-bound `self.size` pointers**, filled as demotions are found, count tracked. Simple,
-    no restructure. **Cost: ~65,496 × 8 ≈ 524 KB** rather than the ~131 KB an exact fit would need —
+    no restructure. **Allocated from `self.allocator`**, per the project allocation contract — the same
+    allocator the mechanism is compensating for (noted, accepted), and its failure falls back **before
+    mutation**. **Cost: ~65,496 × 8 ≈ 524 KB** rather than the ~131 KB an exact fit would need —
     roughly **4×**, and **that larger memory cost must be reported** alongside peak RSS.
   - (deferred) a cardinality/demotion prepass **inside timing**, with cached cardinality reads during
     conversion — exact scratch *and* it avoids recomputing cardinality, but it is a repair restructure and
@@ -263,18 +265,37 @@ rejected, **a size gate cannot exclude libc-on-M4** — that has to be a contrac
 irrelevant); the other three are excluded to keep the first shipped surface minimal — they may be
 revisited in a later spec on their own evidence, not on this one's.
 
-## Size gate — unit must be pinned
+## Size gate — unit, and the timing contradiction it creates
 
-**PINNED: the gate counts the number of BITSETS ACTUALLY BEING DEMOTED** in this repair call — not total
-containers, and not all reorderable payloads.
-
-Rationale: `38-00`'s crossovers (**64 M4 / 1,024 Zen 4**) were measured in **8 KB bitset payload count**,
-and the demoted-bitset count is exactly the population this mechanism reorders. A total-container gate
-would be wrong by ~4× on a lazy-OR result (65,496 containers vs 16,364 demoted bitsets) and is
-unjustified without mixed-corpus measurement.
+**Unit (for MEASUREMENT / crossover derivation): the number of BITSETS ACTUALLY DEMOTED** — not total
+containers, not all reorderable payloads. `38-00`'s crossovers (**64 M4 / 1,024 Zen 4**) were measured in
+8 KB bitset payload count, and that is the population this mechanism reorders; a total-container gate
+would be wrong by ~4× on a lazy-OR result (65,496 containers vs 16,364 demoted bitsets).
 
 **The array-result teardown remains DIAGNOSTIC EVIDENCE ONLY** — it characterises the array-dominated
-reality of a lazy-OR result, but it must **neither select nor block** the bitset-demotion mechanism.
+reality of a lazy-OR result, but must **neither select nor block** the bitset-demotion mechanism.
+
+### CONTRADICTION: that count is not known in time to gate on it
+
+The demoted-bitset count is only known **after** walking containers and computing cardinalities — i.e.
+**after conversions have already been deferred.** By then it is **too late to fall back to today's
+interleaved path**. So a *runtime* gate on that unit is unimplementable as previously written. It is fine
+as a **measurement unit**; it is not usable as a runtime switch without one of the following.
+
+**Resolution: the gate choice FOLLOWS FROM the scope decision — it is not an independent choice.**
+
+| scope position | gate mechanism | why |
+|---|---|---|
+| **(A) optional opt-in variant** *(recommended)* | **Option 3 — NO runtime gate; activation entirely caller-controlled via the opt-in API** | Consistent with the caller-declared design already pinned: the caller declares allocator suitability, so they can equally declare workload size. No prepass, no forced deferral, simplest `39-01`. |
+| **(B) default adoption** | **Option 1 — a demotion PREPASS is REQUIRED**, so the gate controls the whole deferred-free mechanism *before* mutation | A default-on mechanism must be able to **decline cheaply** for small inputs; it cannot force deferral (and its raised memory peak) on every caller. Accepts the repair restructure and its cost on the default path. |
+
+**Option 2 — unconditional deferral, gating only the reordering — is REJECTED** in both positions: it
+imposes the deferral cost and the raised memory peak on **every** call regardless of benefit, and makes
+**`D-key` the silent floor**, so below-gate callers get a behaviour change they neither asked for nor
+benefit from.
+
+**`39-00` is unaffected** — it measures all three arms and derives the crossover regardless. **This is a
+`39-01` decision only**, and it is settled by choosing (A) or (B).
 
 ## Gate re-derivation
 
@@ -323,15 +344,18 @@ separation before any claim; stage-3 noise control per rung.
   errors free every collected bitset exactly once; **`39-01` INTRODUCES the partial-repair invariant**
   (tail compaction + final `size`/cardinality commit) — new behaviour, not preservation — with
   first/middle/last positional injection green.
-- **Scratch sized at `self.size` (upper bound), no prepass**, with the ~4× memory cost (~524 KB vs ~131 KB
-  exact) reported alongside peak RSS.
+- **Scratch sized at `self.size` (upper bound), no prepass, allocated from `self.allocator`**, with the
+  ~4× memory cost (~524 KB vs ~131 KB exact) reported alongside peak RSS.
 - Representative **result teardown (~65,496 arrays)** measured; the all-bitset corpus reported as a
   control only.
 - Rungs 0–2 measured (3 reference, 4 quantified); **rung 0 qualified by measured order quality on the
   real lifecycles**; cheapest sufficient rung selected.
 - Repair read-traversal retest run **once, ASCENDING**, with the explicit note that rung 0 offers no
   read-side candidate; verdict recorded either way.
-- Size gate counts **demoted bitsets**; threshold **re-derived for the selected rung** on both hosts.
+- Size-gate **measurement unit** is **demoted bitsets**; crossover **re-derived for the selected rung** on
+  both hosts. **The runtime gate mechanism is a `39-01` decision that follows from the scope position** —
+  (A) ⇒ no runtime gate, caller-controlled; (B) ⇒ demotion prepass required. `39-00` derives the crossover
+  either way and does not depend on the choice.
 - API is **`repairAfterLazyWithOptions(...)` only**; `repairAfterLazy()` unchanged; `deinit`,
   `clearRetainingCapacity`, `Roaring64Bitmap`, `OwnedBitmap` **excluded from `39-01`**; libc-on-M4
   excluded **from the default path** (opt-in remains possible, and that wording is used).
