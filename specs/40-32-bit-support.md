@@ -64,9 +64,9 @@ reconstruction in the repository** — my original survey filtered `src/bench*` 
 - **`src/bench_lazy_or_attribution.zig:170`** — `@ptrFromInt(@as(u64, tagged.addr) << 2)`, an independent
   reconstruction of the same encoding in diagnostic tooling.
 
-It must be **either converted to `usize` or explicitly excluded from the 32-bit build surface** — decide
-and record which. Any future duplicate of this decode is a latent 32-bit break; consider whether the
-decode should live only behind `TaggedPtr`'s accessors.
+**PINNED: convert it to `usize`** — `@ptrFromInt(@as(usize, tagged.addr) << 2)`. Not excluded; the
+diagnostic stays on the 32-bit build surface. Any future duplicate of this decode is a latent 32-bit
+break, so **prefer routing new call sites through `TaggedPtr`'s accessors** rather than re-deriving it.
 
 The remaining `@intFromPtr` use (`counting_allocator.zig`) is a width-agnostic comparison and is fine.
 
@@ -78,10 +78,12 @@ The remaining `@intFromPtr` use (`counting_allocator.zig`) is a width-agnostic c
   pointers are ≥4-byte aligned — but that must be *asserted*, not assumed (below).
 - Arithmetic that is fine at 64-bit `usize` may **overflow or truncate at 32-bit** in ways the type
   checker accepts (e.g. `@as(usize, x) * 4` in size computations).
-- SIMD paths use `@Vector(8, u16)` (128-bit). **Correction to an earlier draft: baseline i386 does NOT
-  guarantee SSE2** — SIMD lowering depends on target CPU features, and Zig will emit a scalar fallback
-  where they are absent. So 32-bit validation must include **an explicit scalar-fallback target**
-  (e.g. `x86-linux` with `-mcpu=baseline`) as well as a feature-bearing one, to exercise both lowerings.
+- **SIMD is not a 32-bit variable at all.** `array_simd.zig` gates dispatch on
+  **`arch == .x86_64`** (`has_x86_simd`) and **`arch == .aarch64`** (`has_neon`), so **every current
+  32-bit target — x86, arm32, riscv32, wasm32 — takes the scalar array-intersection path regardless of
+  CPU features.** There is only one lowering to validate, and **the executable 32-bit test already
+  covers it**. (Two earlier drafts were wrong here: first claiming i386 guarantees SSE2, then claiming
+  the matrix exercises both a scalar and a feature-bearing 32-bit lowering. Neither holds.)
 - **Nothing has been executed on a 32-bit target.**
 
 ## Alignment headroom shrinks — assert it at comptime
@@ -152,27 +154,40 @@ needs.
 **does not establish that `wasm32-wasi` can build and run the C-backed differential test.** wasm32 may be
 added later as a *compile-only* target; it is not the execution vehicle.
 
-**Preflight before committing to the plan:** confirm that **both `zig build test` AND `zig build difftest`**
-build and run under `qemu-i386` with static musl. If `difftest` cannot be made to run there, say so and
-re-pick — do not silently reduce the acceptance to unit tests only.
+### Execution host and preflight — OUTSTANDING, blocks `40-01`
+
+**Host (pinned): the Zen 4 / WSL2 machine.** It currently has **neither `qemu-i386` nor `zig` on `PATH`**,
+so this is not a formality — it is real setup work that must land **before `40-01` is finalized**:
+
+1. **Install QEMU user-mode** (`qemu-user` / `qemu-user-static`) on that host.
+2. **Use the explicit Zig path** — do not assume `zig` resolves on `PATH` there.
+3. **Invoke builds with `-fqemu`**, so Zig runs the foreign-architecture test binaries under qemu-user
+   automatically rather than requiring hand-rolled invocation.
+4. **Preflight BOTH `zig build test` AND `zig build difftest`** under static `x86-linux-musl` + qemu.
+
+**If `difftest` cannot be made to run there, report it and re-pick the runner — do NOT silently reduce
+acceptance to unit tests only.** `difftest` is the reason the runner had to link C in the first place, so
+losing it would invalidate the choice of vehicle, not just narrow the coverage.
+
+**`40-01` is not ready until this preflight succeeds.**
 
 **Secondary compile-only matrix** (no execution required): `wasm32-freestanding`, `arm-linux-musleabi`,
-`riscv32-linux`, and `x86-linux -mcpu=baseline` (the scalar-fallback case).
+`riscv32-linux`, `x86-linux -mcpu=baseline`. These are breadth checks across pointer-width targets — **not**
+SIMD-lowering checks, since all of them are scalar (see above).
 
 ## Build guard — note the repository currently has NO CI
 
 Verified: there is **no `.github/`, no `.gitlab-ci.yml`, no CI configuration of any kind** in this repo.
-So "add it to CI" is not actionable as written. **Pick one and record it:**
 
-- **(RECOMMENDED) a local `zig build check-32` step** in `build.zig` that cross-compiles the
-  compile-only matrix above. Works today with zero infrastructure, is runnable by hand, and is exactly
-  what a future CI job would invoke.
-- **(alternative) introduce GitHub Actions** as part of this spec — a larger change that brings CI to a
-  repository that has deliberately had none, and should be a separate decision rather than a side effect
-  of a portability fix.
+**PINNED: add a local `zig build check-32` step** in `build.zig` that cross-compiles the compile-only
+matrix above. Works today with zero infrastructure, runnable by hand, and is exactly what a future CI job
+would invoke.
 
-Either way the guard is **build-only** and independent of whether 32-bit *execution* is wired up — it
-costs seconds and would have caught this while it sat latent.
+**Introducing GitHub Actions is EXPLICITLY EXCLUDED from this spec.** Bringing CI to a repository that has
+deliberately had none is its own decision and must not arrive as a side effect of a portability fix.
+
+The guard is **build-only** and independent of whether 32-bit *execution* is wired up — it costs seconds
+and would have caught this while it sat latent.
 
 ## Out of scope
 
@@ -195,6 +210,18 @@ machine-checks — so a full board run is not warranted. Pinned:
 - Any change to the container model, tag scheme, or serialized format.
 - `SmpAllocator` behaviour (32-bit allocator characteristics are not investigated here).
 
+## Also fix: the stale alignment comment
+
+`src/container.zig:7` currently reads:
+
+```zig
+/// Low 2 bits encode the container type (pointers are at least 8-byte aligned).
+```
+
+That was true when the type was 64-bit-only. **The invariant this spec establishes is ≥4-byte
+alignment** (which is what 2 tag bits actually require, and what 32-bit containers provide). Update the
+comment to say **4**, so it matches the new `@compileError` invariant rather than contradicting it.
+
 ## Acceptance
 
 - `TaggedPtr` made width-generic; **`zig build` succeeds for wasm32 and at least one of
@@ -205,10 +232,12 @@ machine-checks — so a full board run is not warranted. Pinned:
 - Full test suite **and `difftest` execute and pass** under **static `x86-linux-musl` / `qemu-i386`**,
   preflighted; if `difftest` cannot run there, that is reported and the runner re-picked — **not**
   silently downgraded to unit tests.
-- **`bench_lazy_or_attribution.zig:170` converted to `usize` or explicitly excluded** from the 32-bit
-  surface, with the choice recorded.
-- **Build guard added** via the chosen mechanism (`zig build check-32` recommended), covering the
-  compile-only matrix **including the scalar-fallback target**.
+- **`bench_lazy_or_attribution.zig:170` converted to `usize`** (pinned — not excluded).
+- **`zig build check-32` added** (pinned mechanism; **GitHub Actions explicitly out of scope**), covering
+  the compile-only matrix.
+- **`src/container.zig:7` comment corrected** from 8-byte to 4-byte alignment.
+- **Runner preflight completed on the WSL2 host** — qemu-user installed, explicit Zig path, `-fqemu`, and
+  **both `test` and `difftest` confirmed running**; `40-01` does not start until this passes.
 - **64-bit focused smoke** (M4; clone / dense-AND / select / lazyOr+repair; ≤5%, five fresh processes)
   shows no regression.
 - Address-space limitation documented in the README / allocator guidance.
