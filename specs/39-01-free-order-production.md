@@ -33,8 +33,11 @@ canonical row.**
 pointers**; then run a **separate descending free pass** using the rung `39-00` selected.
 
 - Reorder mechanism: **the cheapest rung `39-00` found sufficient** — no re-litigating the ladder here.
-- Scratch: **`self.size` pointers, upper bound, no prepass** (unless (B), which adds the prepass),
-  **allocated from `self.allocator`**; failure **falls back to interleaved before any mutation**.
+- Scratch — **A/B-conditional**, **allocated from `self.allocator`** in both cases, failure **falls back
+  to interleaved before any mutation**:
+  - **(A):** no prepass ⇒ **`self.size` pointers, upper bound ≈ 524 KB** (canonical corpus).
+  - **(B):** the demotion prepass is required for gating and yields the **exact demotion count** ⇒
+    **exactly-sized scratch ≈ 131 KB** (canonical corpus). The prepass's own cost is reported.
 - Portability: `@bitSizeOf(usize) − @clz(span)`, **never hardcoded 64**; `span == 0` / `n <= 1` early
   return; **must compile on 32-bit targets** even though gates run on M4 and Zen 4.
 

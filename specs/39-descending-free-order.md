@@ -159,9 +159,11 @@ existed; **option (a) is selected:**
     allocator the mechanism is compensating for (noted, accepted), and its failure falls back **before
     mutation**. **Cost: ~65,496 × 8 ≈ 524 KB** rather than the ~131 KB an exact fit would need —
     roughly **4×**, and **that larger memory cost must be reported** alongside peak RSS.
-  - (deferred) a cardinality/demotion prepass **inside timing**, with cached cardinality reads during
-    conversion — exact scratch *and* it avoids recomputing cardinality, but it is a repair restructure and
-    belongs in its own spec if the 524 KB proves material.
+  - the alternative — a cardinality/demotion prepass **inside timing**, with cached cardinality reads
+    during conversion — gives exact scratch *and* avoids recomputing cardinality, but it is a repair
+    restructure. **It is NOT deferred to some future spec: under scope (B) it is REQUIRED in `39-01`**
+    (for gating), and it then supplies the exact count for free. It is deferred only for `39-00` and
+    scope (A).
 - **Rung 0 is NOT free on this path.** Deferring requires storing the collected old-bitset pointers —
   the `self.size`-sized scratch above, plus the fill. "Reverse iteration" then means reverse
   iteration *of that deferred array*. So rung 0's cost is **scratch allocation + fill, not zero**; it is
@@ -360,10 +362,13 @@ separation before any claim; stage-3 noise control per rung.
   errors free every collected bitset exactly once; **`39-01` INTRODUCES the partial-repair invariant**
   (tail compaction + final `size`/cardinality commit) — new behaviour, not preservation — with
   first/middle/last positional injection green.
-- **Scratch sized at `self.size` (upper bound), allocated from `self.allocator`**, with the ~4× memory
-  cost (~524 KB vs ~131 KB exact) reported alongside peak RSS. **Prepass is A/B-conditional: none under
-  (A); under (B) the demotion prepass is REQUIRED** (it is what lets a default-on mechanism decline
-  cheaply below threshold) and its cost must be reported.
+- **Scratch sizing is A/B-conditional**, allocated from `self.allocator` in both cases, with the memory
+  cost reported alongside peak RSS:
+  - **(A) — no prepass:** `self.size` pointers, **upper bound ≈ 524 KB** on the canonical corpus.
+  - **(B) — prepass-derived:** the demotion prepass is **REQUIRED** for gating (it is what lets a
+    default-on mechanism decline cheaply below threshold), and because it yields the **exact demotion
+    count**, scratch is **exactly sized ≈ 131 KB** on the canonical corpus. Report the prepass's own cost.
+  - `39-00` uses the (A) shape, since it adds no prepass.
 - Representative **result teardown (~65,496 arrays)** measured; the all-bitset corpus reported as a
   control only.
 - Rungs 0–2 measured (3 reference, 4 quantified); **rung 0 qualified by measured order quality on the

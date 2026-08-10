@@ -95,6 +95,10 @@ ordering only. **Selection must use fresh two-host measurements.**
 ## Scratch
 
 - **`self.size` pointers (upper bound), no prepass**, filled as demotions are found, count tracked.
+  `39-00` deliberately takes the **scope-(A) shape** — adding a prepass would restructure repair and
+  introduce a second variable into an experiment about free order. (Under scope (B), `39-01`'s required
+  gating prepass supplies the exact count and scratch drops to ~131 KB; that is a `39-01` property, not a
+  missed option here.)
 - **Allocated from `self.allocator`** per the project allocation contract — the same allocator being
   compensated for (accepted, noted).
 - Cost **~524 KB** vs ~131 KB for an exact fit (**~4×**) — **report it, alongside peak RSS.**
