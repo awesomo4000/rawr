@@ -248,28 +248,30 @@ on the repair-demote path, rung 0 is out for that path regardless of its cost.
   do not leave direction implicit.
 - **Scratch and count-table sizes** stated; **allocation failure falls back to unreordered**.
 
-## API — pinned before chunking
+## API — CONDITIONAL on A/B (deferred to `39-01`)
 
 **Corrections to the previous draft:** `deinit()` always uses the bitmap's **stored** allocator, so the
 "per-call allocator can differ" rationale does **not** apply to teardown. And with allocator detection
 rejected, **a size gate cannot exclude libc-on-M4** — that has to be a contract, not a mechanism.
 
-**Enforceable contract:**
+**The API, libc policy, and benchmark gate are CONDITIONAL on the A/B scope decision — they are NOT
+pinned here.** An earlier draft of this umbrella stated A's contract unconditionally; under (B)
+`repairAfterLazy()` changes, the canonical row itself is gated rather than a variant, and libc is
+necessarily on the default path.
 
-- **Ordinary `deinit()` is unchanged.** The default path never reorders.
-- **An explicit variant / options call** enables descending frees.
-- **The caller accepts allocator-specific behaviour** by choosing it — the documented assertion is "my
-  allocator benefits from descending free order," not "I am on M4."
-- So **"libc-on-M4 excluded" means excluded from the DEFAULT path** — it remains possible to opt into,
-  and that is acceptable and documented. It is not, and cannot be, made impossible.
+**Single source of truth: the conditional A/B table in
+[`39-01`](39-01-free-order-production.md#api-libc-policy-and-benchmark-gate--all-conditional-on-ab).**
+Do not restate it here — that duplication is exactly what drifted.
 
-**Surface scope — PINNED (minimal):**
+**Common to both positions (safe to state unconditionally):**
 
-| decision | |
-|---|---|
-| **ADD** | **`repairAfterLazyWithOptions(...)`** — the only new public entry point |
-| **UNCHANGED** | **`repairAfterLazy()`** — default path untouched, no behaviour change |
-| **EXCLUDED from `39-01`** | **`deinit`**, **`clearRetainingCapacity`**, **`Roaring64Bitmap`**, **`OwnedBitmap`** |
+- **EXCLUDED surfaces:** `deinit`, `clearRetainingCapacity`, `Roaring64Bitmap`, `OwnedBitmap`.
+  `OwnedBitmap` on principle — **its arena owns teardown**, so container-level free order is irrelevant.
+- **Allocator detection stays rejected** — opaque `Allocator` vtable; comparing against
+  `smp_allocator.vtable` breaks for every wrapped allocator. (Under (A) this is why the opt-in is
+  caller-declared; under (B) it is why the mechanism must be safe for *all* allocators.)
+- The effect is **SMP-specific, and Zen 4 gains MORE in absolute terms** (−3.577 vs −2.086 ms) — **neither
+  position may be framed as an M4 fix.**
 
 `OwnedBitmap` is excluded on principle (**its arena owns teardown**, so container-level free order is
 irrelevant); the other three are excluded to keep the first shipped surface minimal — they may be
@@ -348,8 +350,9 @@ separation before any claim; stage-3 noise control per rung.
   **canonical-equivalent opt-in variant** with no injected noise (identical corpus/boundaries/protocol,
   differing only in opting in).
 - **Scope position recorded — (A) optional variant or (B) default** — and while the API is opt-in,
-  results are reported **as a variant row, never as the canonical row**. (B) requires libc shown
-  unharmed on the repair-demote path.
+  results are reported **as a variant row, never as the canonical row**; **under (B) the canonical row
+  itself is the result** and there is no variant row. (B) requires libc shown unharmed on the
+  repair-demote path.
 - **Deferred-free failure handling verified:** scratch failure falls back before mutation; mid-conversion
   errors free every collected bitset exactly once; **`39-01` INTRODUCES the partial-repair invariant**
   (tail compaction + final `size`/cardinality commit) — new behaviour, not preservation — with
@@ -366,9 +369,9 @@ separation before any claim; stage-3 noise control per rung.
   both hosts. **The runtime gate mechanism is a `39-01` decision that follows from the scope position** —
   (A) ⇒ no runtime gate, caller-controlled; (B) ⇒ demotion prepass required. `39-00` derives the crossover
   either way and does not depend on the choice.
-- API is **`repairAfterLazyWithOptions(...)` only**; `repairAfterLazy()` unchanged; `deinit`,
-  `clearRetainingCapacity`, `Roaring64Bitmap`, `OwnedBitmap` **excluded from `39-01`**; libc-on-M4
-  excluded **from the default path** (opt-in remains possible, and that wording is used).
+- **API, libc policy and benchmark gate shipped per the chosen A/B row** of `39-01`'s conditional table —
+  one position's row, not a blend. Common to both: `deinit`, `clearRetainingCapacity`, `Roaring64Bitmap`,
+  `OwnedBitmap` **excluded**; detection stays rejected.
 - Algorithms **portable**: `@bitSizeOf(usize) − @clz(span)` (never hardcoded 64), `span == 0` / `n <= 1`
   early-return pinned, compiles on 32-bit targets.
 - Reorder costs reported as **fresh two-host measurements**, with the `smp-free-order.md` figures cited
@@ -382,9 +385,10 @@ separation before any claim; stage-3 noise control per rung.
   repair-demote path, inverted (ascending) read retest, crossover candidates. **No production change.
   Ready to implement.**
 - **[`39-01`](39-01-free-order-production.md)** — production: deferred descending free at the selected
-  rung, the pinned opt-in surface, and the **new** partial-repair invariant. **BLOCKED** on (i) a
-  full-cycle win from `39-00` and (ii) the scope decision (A optional-variant / B default), which also
-  determines the gate mechanism.
+  rung, the surface **determined by the A/B decision** (see its conditional table), and the **new**
+  partial-repair invariant. **BLOCKED** on (i) a full-cycle win from `39-00` and (ii) the scope decision
+  (A optional-variant / B default), which determines the API, the gate mechanism, the libc position, and
+  which row is reported.
 
 ## Estimate
 
