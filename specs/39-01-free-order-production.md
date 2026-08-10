@@ -5,12 +5,22 @@
 Toplevel: [39-descending-free-order.md](39-descending-free-order.md). Gated on:
 [39-00](39-00-free-order-measurement.md).
 
-**BLOCKED until two things happen:** (1) `39-00` reports a full-cycle win, and (2) the **scope decision**
-below is made. Everything else here is already pinned.
+> **UNBLOCKED (2026-08-10). Both preconditions are resolved, and the scope decision was made BY THE DATA,
+> not by judgement:**
+>
+> 1. **Full-cycle win confirmed** — M4 14.098 → **12.469 ms** (**1.035x**), Zen 4/WSL2 37.517 →
+>    **29.759 ms** (**0.938x, rawr ahead**); survived shared-allocator noise on both hosts.
+> 2. **Scope = (A), FORCED.** `39-00` found **M4 libc REGRESSED**, which eliminates (B) default adoption.
+> 3. **Runtime gate = NONE, FORCED.** The count-only crossover was **not portable across hosts**, so no
+>    threshold can be inferred — confirming option 3, caller-controlled activation.
+> 4. **Rung = 0** — reverse iteration of the deferred pointer array. No bucket, no radix, no sort.
+>
+> **Read the (A) column of every conditional table below; the (B) column is retained for provenance only.**
 
-## Precondition — the scope decision (owner call)
+## Precondition — RESOLVED: scope is (A)
 
-**An opt-in cannot close a default-path row.** Pick one; the rest of this chunk follows from it.
+**An opt-in cannot close a default-path row.** (B) was eliminated by `39-00`'s libc regression; (A) is the
+position. The table below is kept because the rest of the chunk keys off it — **(B) is now historical.**
 
 | | (A) optional opt-in variant *(recommended)* | (B) default adoption |
 |---|---|---|
@@ -38,8 +48,14 @@ pointers**; then run a **separate descending free pass** using the rung `39-00` 
   - **(A):** no prepass ⇒ **`self.size` pointers, upper bound ≈ 524 KB** (canonical corpus).
   - **(B):** the demotion prepass is required for gating and yields the **exact demotion count** ⇒
     **exactly-sized scratch ≈ 131 KB** (canonical corpus). The prepass's own cost is reported.
-- Portability: `@bitSizeOf(usize) − @clz(span)`, **never hardcoded 64**; `span == 0` / `n <= 1` early
-  return; **must compile on 32-bit targets** even though gates run on M4 and Zen 4.
+- **Rung 0 selected** — reverse iteration of the deferred pointer array. **No span/shift/radix arithmetic
+  is needed at all**, since no partitioning is performed; the rung-1/2 portability notes are therefore moot
+  for the shipped path.
+- **Portability requirement RESTATED (per `39-00`):** the library **already cannot compile on 32-bit** —
+  the cross-build hits a **pre-existing** failure in `TaggedPtr`'s fixed `u64` pointer conversion before
+  reaching this code. So the requirement is **"do not ADD a 32-bit limitation"**, not "must compile on
+  32-bit." If any future rung reintroduces span arithmetic, use `@bitSizeOf(usize) − @clz(span)` and the
+  underflow-safe shift — but that is not on the shipped path.
 
 ## API, libc policy, and benchmark gate — ALL CONDITIONAL ON A/B
 
