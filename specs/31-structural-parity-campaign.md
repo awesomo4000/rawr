@@ -463,6 +463,22 @@ parallel agents **disjoint diagnostic files/scripts** (E1 / E2 / E4 each own the
 **shared integration points — `build.zig`, parity infrastructure, measurement documentation — are
 owned by the implementer**, not edited concurrently by diagnostic branches.
 
+## Standing review question — "would this check fail if the defect were present?"
+
+Ask it of **every** gate, guard, benchmark and assertion before trusting it. It has caught a
+would-have-passed check **four** times in this campaign:
+
+| spec | the check that would have passed anyway |
+|---|---|
+| **35** | production reference taken from a **warmed harness** — measured a conditioned allocator, not the row |
+| **38** | teardown measured **without the downstream cycle**, where the effect actually lands |
+| **39** | full-cycle span **excluding result teardown**, the phase most likely to erase the win |
+| **40** | `zig build-lib` of the module — **passed silently with the `TaggedPtr` bug present**, because Zig's lazy analysis never instantiated the broken path |
+
+Every instance is the same failure mode: **a check that does not actually touch the thing it claims to
+verify.** The cure is always the same — construct the failing case and confirm the check *fails* on it,
+before believing it when it passes.
+
 ## Shared experimental discipline (every experiment inherits)
 
 1. Assert the **canonical corpus** and exact container/type inventory before timing.

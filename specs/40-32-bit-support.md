@@ -66,7 +66,7 @@ reconstruction in the repository** — my original survey filtered `src/bench*` 
 
 **PINNED — centralize the decode rather than patching the copy.** Converting that one line to `usize`
 fixes today's break but leaves the *class* open: a third raw decode could appear and regress 32-bit
-silently, because `check-32` compiles the library and might not compile diagnostics.
+silently, because **`check-32` compiles the API probe — it does not compile every diagnostic**.
 
 So: **add a single type-agnostic accessor on `TaggedPtr`** and route every raw-address reconstruction
 through it —
@@ -240,6 +240,17 @@ the surface to force analysis:
 - **`Roaring64Bitmap`:** `init`, `add`, `contains`, `cardinality`, `deinit`.
 - **No file I/O**, so it builds for freestanding targets. Compile-only — it is never executed.
 
+**The probe must be SEMANTICALLY REACHABLE, or lazy analysis skips it anyway.** Calls sitting in an
+unreferenced helper are not analyzed — the same lazy-analysis rule that let the module-only build pass.
+**Pin the probe as an exported root function** and compile *that object* per target:
+
+```zig
+export fn rawrCheck32Api() void { ... }   // export forces analysis of every call inside
+```
+
+*(This is exactly why the authoring probe caught the bug: it used `export fn`. An unexported helper
+would have produced another false clean.)*
+
 **The serialization *fixture* executable stays separate**, because it needs file I/O and therefore cannot
 target freestanding.
 
@@ -296,10 +307,11 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
   silently downgraded to unit tests.
 - **Decode centralized:** `TaggedPtr.rawAddr()` added, the three getters and
   `bench_lazy_or_attribution.zig:170` all routed through it — **exactly one decode site repository-wide**.
-- **`zig build check-32` added — required**, compiling an **in-tree, no-I/O API probe** (not merely the
-  module — Zig's lazy analysis makes a module-only guard shallow enough to have missed this very bug)
-  across the compile-only **breadth matrix**, exercising the listed `RoaringBitmap` surface plus
-  `Roaring64Bitmap`. **GitHub Actions explicitly out of scope.**
+- **`zig build check-32` added — required**, compiling an **in-tree, no-I/O API probe exported as a root
+  function** (`export fn rawrCheck32Api() void`) so lazy analysis cannot skip it — not merely the module,
+  which is shallow enough to have missed this very bug — across the compile-only **breadth matrix**,
+  exercising the listed `RoaringBitmap` surface plus `Roaring64Bitmap`. **GitHub Actions explicitly out of
+  scope.**
 - **`src/container.zig:7` comment corrected** from 8-byte to 4-byte alignment.
 - **Runner preflight completed on the WSL2 host** — `qemu-user` installed (outstanding), Zig invoked at
   **`/home/alr/.zvm/0.16.0/zig`** with **`-Dtarget=x86-linux-musl -fqemu`**, and **both `test` and
