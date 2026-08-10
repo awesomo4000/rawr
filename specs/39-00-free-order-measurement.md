@@ -2,6 +2,37 @@
 
 # Spec 39-00: Free-order measurement — three arms, full cycle
 
+> **Outcome (2026-08-10) — GO. Rung 0 (reverse iteration of deferred bitset frees) is the cheapest
+> sufficient strategy. No production library behaviour changed.**
+>
+> **Full-cycle result** (construction + repair + result teardown, no injected noise):
+>
+> | host | baseline | candidate | delta | vs CRoaring |
+> |---|---:|---:|---:|---:|
+> | **M4** | 14.098 ms | **12.469 ms** | −1.629 ms (11.6%) | **1.035x** (from ~1.170x) |
+> | **Zen 4/WSL2** | 37.517 ms | **29.759 ms** | −7.758 ms (20.7%) | **0.938x — rawr AHEAD** |
+>
+> - **Wins survived shared-allocator noise on BOTH hosts** — the stage-3 gate passed, so this is not a
+>   sole-allocator-client artifact.
+> - **The ladder discipline paid: rung 0 won.** Reverse iteration of the deferred pointer array was
+>   sufficient — **no bucket partition, no radix, no sort was needed or built.**
+> - **M4 libc REGRESSED ⇒ scope (B) default adoption is ELIMINATED.** Only **position (A)** — the explicit
+>   allocator-sensitive opt-in — remains viable. That is now forced by data, not chosen.
+> - **Count-only crossover was NOT portable across hosts ⇒ no inferred runtime threshold.** This
+>   independently confirms (A)+option 3: **no runtime gate**, activation entirely caller-controlled.
+> - 1.035x is **inside the ≤1.10x gate** — but under (A) the canonical row does **not** move; it is
+>   reported as a **variant row**.
+>
+> **Note on 32-bit:** the cross-build hits a **pre-existing** failure in `TaggedPtr`'s fixed `u64` pointer
+> conversion, *before* reaching this benchmark. Not introduced here; documented for `39-01`, whose
+> portability requirement must be restated as "do not ADD a 32-bit limitation" rather than "must compile
+> on 32-bit," since the library already cannot.
+>
+> Artifacts: `src/bench_free_order.zig`, `scripts/run-bench-free-order.sh`; results in
+> `docs/parity-measurement.md` and `docs/allocator-address-order-pathology.md`. Verified: `zig build test`,
+> ReleaseSafe + ReleaseFast, CRoaring differential, both host matrices, reorder permutation/ownership
+> audit, forced scratch-allocation fallback, `git diff --check`. **Uncommitted at time of report.**
+
 Toplevel: [39-descending-free-order.md](39-descending-free-order.md). Background:
 [allocator-address-order-pathology.md](../docs/allocator-address-order-pathology.md),
 [smp-free-order.md](../docs/smp-free-order.md).
