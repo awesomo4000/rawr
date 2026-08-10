@@ -49,20 +49,27 @@ path actually changes.
 
 **Diagnostic sequence (pinned):**
 
-**One timed cycle is exactly:**
+**One timed cycle is exactly — and teardown is INSIDE it:**
 
 ```
-[ lazyOr construction  →  repairAfterLazy(candidate)  →  result teardown ]  →  next cycle
-   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   the timed span                                       held constant
+timed span = [ lazyOr construction  →  repairAfterLazy(candidate)  →  result teardown ]
 ```
 
-- **Timed span = construction + repair.** The reported full cycle is that span, measured across
-  consecutive iterations so that iteration *k*'s descending frees condition iteration *k+1*'s allocations.
-- **Result teardown happens at the end of each cycle and is HELD CONSTANT across all arms** (default
-  order, unchanged). Teardown is itself a large free burst that conditions allocator state, so varying it
-  would introduce a second variable and confound the repair-free one. State its placement explicitly in
-  the harness.
+**Corrected from an earlier draft, which excluded teardown.** The canonical row includes it:
+`bench_parity_worker.zig` declares `allocating_teardown = "result deinit/free inside timing"`, and
+`benchRawrLazyOrSparseRepairWithAllocator` runs `defer result.deinit()` before the timed function
+returns. **The hard gate must therefore be `construction + repair + result teardown`.**
+
+**This is not merely about matching the row — excluding teardown would hide the most likely way the
+mechanism fails.** Result teardown is a *larger* free burst (~65,496 arrays) running immediately after
+repair's reordered frees, so it can **overwrite the very allocator conditioning those frees produced**
+before the next construction ever sees it. A measurement that stops before teardown would report a
+benefit the full cycle does not have.
+
+- **Teardown order itself stays UNCHANGED (default) across all arms** — it is not a second intervention;
+  only repair's frees vary. But it is **timed**, not excluded.
+- **Phase timings may still be reported separately** — construction, repair, and teardown — as
+  attribution beneath the full-cycle gate.
 
 **Report separately:** (i) **repair cost**, (ii) **following construction cost**, (iii) **full cycle**.
 **The hard gate is FULL-CYCLE improvement.** A repair-only improvement that does not appear in the full
@@ -70,9 +77,11 @@ cycle is not a win; a repair-only regression offset by a larger construction gai
 why the cycle is the gate.
 
 **Noise is a DIAGNOSTIC, not the gate.** The injected stage-3 allocator noise exists to prove the effect
-survives a shared allocator. **The parity/adoption number must come from a separate rerun of the
-unchanged canonical row with NO injected noise**, because that is what the board measures. Report both;
-never substitute the noise-injected figure for the canonical one.
+survives a shared allocator. **The adoption number must come from a separate no-injected-noise run of a
+CANONICAL-EQUIVALENT OPT-IN VARIANT** — identical to the canonical row in corpus, boundaries and protocol,
+differing *only* in that it opts into the candidate. (A genuinely *unchanged* canonical row cannot
+exercise an opt-in mechanism at all, so "rerun the unchanged row" — an earlier draft's wording — would
+measure nothing.) Report both; never substitute the noise-injected figure for the variant one.
 
 **Note what `38-00` did and did not test:** it sorted repair's **cardinality read traversal** (regressed)
 and separately measured **descending frees on a synthetic bitset corpus** (won, survived stage-3 noise).
@@ -123,15 +132,31 @@ existed; **option (a) is selected:**
   list becomes the **sole owner** of old bitsets that are **no longer reachable through
   `self.containers`** (their slots now hold the new arrays). Therefore:
   - **On any later conversion error, every bitset collected so far must be freed exactly once**, via
-    `errdefer` over the scratch list, and the bitmap must be left in **the same valid partial-repair
-    state as today** (per spec 35's build-before-free / in-place partial-commit invariant: prefix
-    repaired, tail compacted behind it, `size` updated, cardinality unknown, no dangling entries).
+    `errdefer` over the scratch list.
+  - **The partial-repair invariant is a NEW GUARANTEE INTRODUCED BY `39-01` — it does not exist today.**
+    Verified in source: `repairAfterLazy` commits `self.size = @intCast(write_idx)` **only after the
+    complete loop**, so a mid-loop allocation failure today leaves compacted/overwritten entries with the
+    **old** `size`. Spec 35 *designed* the in-place partial-commit invariant but **35-01 never shipped**
+    (35 was NO-GO at the diagnostic). So `39-01` must **introduce** it, and its scope explicitly includes
+    **tail compaction and final state commit**: on failure, compact the untouched tail behind the repaired
+    prefix, commit `size`, leave cardinality unknown, no dangling entries. Do not describe this as
+    preserving existing behaviour.
   - **Scratch allocation failure is the easy case: fall back BEFORE any mutation** to today's interleaved
     free path — no partial state, no error propagated.
   - Failure injection must hit **first / middle / last** collected-bitset positions and the scratch
     allocation itself; verified leak-free and double-free-free with a shadow bitmap.
+- **SCRATCH SIZING — PINNED: allocate `self.size` pointers (upper bound), no prepass.** Exact sizing
+  would need the demotion count *before* mutation, which means a cardinality/demotion prepass — and that
+  restructures repair, adding a second variable to an experiment about free order. Two options were
+  considered:
+  - **(SELECTED) upper-bound `self.size` pointers**, filled as demotions are found, count tracked. Simple,
+    no restructure. **Cost: ~65,496 × 8 ≈ 524 KB** rather than the ~131 KB an exact fit would need —
+    roughly **4×**, and **that larger memory cost must be reported** alongside peak RSS.
+  - (deferred) a cardinality/demotion prepass **inside timing**, with cached cardinality reads during
+    conversion — exact scratch *and* it avoids recomputing cardinality, but it is a repair restructure and
+    belongs in its own spec if the 524 KB proves material.
 - **Rung 0 is NOT free on this path.** Deferring requires storing the collected old-bitset pointers —
-  **~N pointers of scratch (≈131 KB at n=16,364)** plus the fill. "Reverse iteration" then means reverse
+  the `self.size`-sized scratch above, plus the fill. "Reverse iteration" then means reverse
   iteration *of that deferred array*. So rung 0's cost is **scratch allocation + fill, not zero**; it is
   still far cheaper than any sort, but the cost table below must be read with that correction. (Rung 0 is
   genuinely free only for an in-place traversal we already perform — which is the read side, not this
@@ -283,18 +308,23 @@ separation before any claim; stage-3 noise control per rung.
 - **Primary:** the **three-arm matrix I / D-key / D-desc** measured inside `repairAfterLazy`, both
   allocators, both hosts — reporting `D-key − I` (deferral) and `D-desc − D-key` (direction)
   **separately**, plus **peak RSS** for the raised temporary live footprint.
-- **Hard gate is FULL-CYCLE improvement** on steady-state `lazyOr+repair` (timed span = construction +
-  repair; result teardown held constant), with **repair / following-construction / full-cycle reported
-  separately**. `lazy-or-construction` and `lazy-or-repair-only` documented as rows this mechanism
+- **Hard gate is FULL-CYCLE improvement** on steady-state `lazyOr+repair`, where the timed span is
+  **construction + repair + result teardown** (matching the canonical row's
+  `"result deinit/free inside timing"`), with **construction / repair / teardown / full-cycle reported
+  separately** as attribution beneath the gate. Teardown *order* stays default across arms but is timed. `lazy-or-construction` and `lazy-or-repair-only` documented as rows this mechanism
   **cannot** move.
-- **Noise-injected results reported as DIAGNOSTIC only**; the adoption number comes from a **separate
-  rerun of the unchanged canonical row with no injected noise**.
+- **Noise-injected results reported as DIAGNOSTIC only**; the adoption number comes from a
+  **canonical-equivalent opt-in variant** with no injected noise (identical corpus/boundaries/protocol,
+  differing only in opting in).
 - **Scope position recorded — (A) optional variant or (B) default** — and while the API is opt-in,
   results are reported **as a variant row, never as the canonical row**. (B) requires libc shown
   unharmed on the repair-demote path.
 - **Deferred-free failure handling verified:** scratch failure falls back before mutation; mid-conversion
-  errors free every collected bitset exactly once and leave the documented partial-repair state;
+  errors free every collected bitset exactly once; **`39-01` INTRODUCES the partial-repair invariant**
+  (tail compaction + final `size`/cardinality commit) — new behaviour, not preservation — with
   first/middle/last positional injection green.
+- **Scratch sized at `self.size` (upper bound), no prepass**, with the ~4× memory cost (~524 KB vs ~131 KB
+  exact) reported alongside peak RSS.
 - Representative **result teardown (~65,496 arrays)** measured; the all-bitset corpus reported as a
   control only.
 - Rungs 0–2 measured (3 reference, 4 quantified); **rung 0 qualified by measured order quality on the
