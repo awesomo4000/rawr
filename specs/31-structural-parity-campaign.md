@@ -85,6 +85,16 @@
 > **Consequence: the pages are RESIDENT, so the cost is in TOUCHING ~134 MB, not in faulting it in.**
 > The earlier fresh-vs-dirty zeroing delta is therefore **not** a page-fault effect.
 >
+> **UPDATE (2026-08-10) — spec 39-00 GO, but the headline row is UNCHANGED.** Descending demote frees via
+> **rung 0** (reverse iteration of deferred bitset frees) improved the **combined `lazyOr+repair`** cycle:
+> M4 14.098 → **12.469 ms (1.035x)**, Zen 4/WSL2 37.517 → **29.759 ms (0.938x, rawr ahead)**, surviving
+> shared-allocator noise on both hosts. **M4 libc regressed**, forcing scope **(A) opt-in** — so the
+> **canonical row does NOT move**; it is reported as a **variant row**.
+>
+> **This does not close the campaign's headline gap.** `lazy-or-construction` (~1.7x) **never calls
+> repair** and is untouched by spec 39 — it remains **the last material open row**. Spec 39's value is on
+> the combined row, and only for callers who opt in.
+>
 > **Next (pre-registered branch): cold-page zeroing / codegen diagnosis.** Two ordered questions —
 >
 > **(a) Does rawr zero MORE BYTES than CRoaring? — ANSWERED FROM SOURCE (2026-08-07): NO, volumes are
