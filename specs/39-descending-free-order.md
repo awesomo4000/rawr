@@ -145,10 +145,15 @@ existed; **option (a) is selected:**
     free path — no partial state, no error propagated.
   - Failure injection must hit **first / middle / last** collected-bitset positions and the scratch
     allocation itself; verified leak-free and double-free-free with a shadow bitmap.
-- **SCRATCH SIZING — PINNED: allocate `self.size` pointers (upper bound), no prepass.** Exact sizing
-  would need the demotion count *before* mutation, which means a cardinality/demotion prepass — and that
-  restructures repair, adding a second variable to an experiment about free order. Two options were
-  considered:
+- **SCRATCH SIZING — depends on whether a prepass exists, which is A/B-conditional.** Exact sizing needs
+  the demotion count *before* mutation, i.e. a demotion prepass.
+  - **`39-00` and scope (A): NO prepass ⇒ upper-bound scratch.** A prepass would restructure repair and add
+    a second variable to an experiment about free order.
+  - **Scope (B): the demotion prepass is REQUIRED anyway** (it is what lets a default-on mechanism decline
+    cheaply below threshold) — **and since it yields the exact count, exact scratch sizing comes free under
+    (B).** The ~4× upper-bound cost below applies to (A), not (B).
+
+  Two options were considered for the no-prepass case:
   - **(SELECTED) upper-bound `self.size` pointers**, filled as demotions are found, count tracked. Simple,
     no restructure. **Allocated from `self.allocator`**, per the project allocation contract — the same
     allocator the mechanism is compensating for (noted, accepted), and its failure falls back **before
@@ -266,16 +271,13 @@ Do not restate it here — that duplication is exactly what drifted.
 **Common to both positions (safe to state unconditionally):**
 
 - **EXCLUDED surfaces:** `deinit`, `clearRetainingCapacity`, `Roaring64Bitmap`, `OwnedBitmap`.
-  `OwnedBitmap` on principle — **its arena owns teardown**, so container-level free order is irrelevant.
+  `OwnedBitmap` on principle — **its arena owns teardown**, so container-level free order is irrelevant;
+  the other three to keep the first shipped surface minimal, revisitable later on their own evidence.
 - **Allocator detection stays rejected** — opaque `Allocator` vtable; comparing against
   `smp_allocator.vtable` breaks for every wrapped allocator. (Under (A) this is why the opt-in is
   caller-declared; under (B) it is why the mechanism must be safe for *all* allocators.)
 - The effect is **SMP-specific, and Zen 4 gains MORE in absolute terms** (−3.577 vs −2.086 ms) — **neither
   position may be framed as an M4 fix.**
-
-`OwnedBitmap` is excluded on principle (**its arena owns teardown**, so container-level free order is
-irrelevant); the other three are excluded to keep the first shipped surface minimal — they may be
-revisited in a later spec on their own evidence, not on this one's.
 
 ## Size gate — unit, and the timing contradiction it creates
 
@@ -347,8 +349,9 @@ separation before any claim; stage-3 noise control per rung.
   separately** as attribution beneath the gate. Teardown *order* stays default across arms but is timed. `lazy-or-construction` and `lazy-or-repair-only` documented as rows this mechanism
   **cannot** move.
 - **Noise-injected results reported as DIAGNOSTIC only**; the adoption number comes from a
-  **canonical-equivalent opt-in variant** with no injected noise (identical corpus/boundaries/protocol,
-  differing only in opting in).
+  **no-injected-noise** run — **under (A)** a **canonical-equivalent opt-in variant** (identical
+  corpus/boundaries/protocol, differing only in opting in); **under (B) the canonical row itself**, since
+  the default path is what changed and there is no variant to compare.
 - **Scope position recorded — (A) optional variant or (B) default** — and while the API is opt-in,
   results are reported **as a variant row, never as the canonical row**; **under (B) the canonical row
   itself is the result** and there is no variant row. (B) requires libc shown unharmed on the
@@ -357,8 +360,10 @@ separation before any claim; stage-3 noise control per rung.
   errors free every collected bitset exactly once; **`39-01` INTRODUCES the partial-repair invariant**
   (tail compaction + final `size`/cardinality commit) — new behaviour, not preservation — with
   first/middle/last positional injection green.
-- **Scratch sized at `self.size` (upper bound), no prepass, allocated from `self.allocator`**, with the
-  ~4× memory cost (~524 KB vs ~131 KB exact) reported alongside peak RSS.
+- **Scratch sized at `self.size` (upper bound), allocated from `self.allocator`**, with the ~4× memory
+  cost (~524 KB vs ~131 KB exact) reported alongside peak RSS. **Prepass is A/B-conditional: none under
+  (A); under (B) the demotion prepass is REQUIRED** (it is what lets a default-on mechanism decline
+  cheaply below threshold) and its cost must be reported.
 - Representative **result teardown (~65,496 arrays)** measured; the all-bitset corpus reported as a
   control only.
 - Rungs 0–2 measured (3 reference, 4 quantified); **rung 0 qualified by measured order quality on the
