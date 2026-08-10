@@ -16,6 +16,15 @@ Toplevel: [39-descending-free-order.md](39-descending-free-order.md). Gated on:
 > 4. **Rung = 0** — reverse iteration of the deferred pointer array. No bucket, no radix, no sort.
 >
 > **Read the (A) column of every conditional table below; the (B) column is retained for provenance only.**
+>
+> **OWNER DECISION (2026-08-10): SHIP IT - scope (A), `repairAfterLazy` only.** No other free site is in
+> scope; `deinit`, `clearRetainingCapacity`, `Roaring64Bitmap` and `OwnedBitmap` remain excluded, and no
+> other iterated-free path is generalized to without its own measurement.
+>
+> **Parity wording - be precise when reporting.** Under (A) this is an **opt-in**, so the **canonical
+> `lazyOr+repair` row does NOT reach parity**; it stays where it is. What reaches 1.035x (M4) / 0.938x
+> (Zen 4) is the **opt-in variant row** - parity **for callers who opt in**. Report it as a variant row
+> and say *at parity when enabled*, never *row closed*.
 
 ## Precondition — RESOLVED: scope is (A)
 
