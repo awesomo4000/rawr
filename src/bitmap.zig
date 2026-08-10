@@ -1707,6 +1707,118 @@ pub const RoaringBitmap = struct {
         self.cached_cardinality = @intCast(total);
     }
 
+    pub const RepairAfterLazyOptions = struct {
+        /// The caller asserts that the bitmap allocator benefits when transient
+        /// bitsets are freed in descending allocation order.
+        allocator_benefits_from_descending_free_order: bool = false,
+    };
+
+    /// Restore invariants after lazy operations with allocator-specific tuning.
+    ///
+    /// The descending-free option is intended for allocators whose reuse order
+    /// benefits from reverse frees. It is not selected automatically because
+    /// the effect is allocator-dependent and can regress other allocators.
+    pub fn repairAfterLazyWithOptions(self: *Self, options: RepairAfterLazyOptions) !void {
+        if (!options.allocator_benefits_from_descending_free_order) {
+            return self.repairAfterLazy();
+        }
+
+        const deferred_bitsets = self.allocator.alloc(*BitsetContainer, self.size) catch {
+            return self.repairAfterLazy();
+        };
+        defer self.allocator.free(deferred_bitsets);
+
+        var deferred_count: usize = 0;
+        errdefer deinitBitsetsReverse(self.allocator, deferred_bitsets[0..deferred_count]);
+
+        const original_size: usize = self.size;
+        var read_idx: usize = 0;
+        var write_idx: usize = 0;
+        var total: u64 = 0;
+
+        while (read_idx < original_size) : (read_idx += 1) {
+            const key = self.keys[read_idx];
+            const tp = self.containers[read_idx];
+            switch (Container.fromTagged(tp)) {
+                .array => |ac| {
+                    if (ac.cardinality == 0) {
+                        ac.deinit(self.allocator);
+                        continue;
+                    }
+                    self.keys[write_idx] = key;
+                    self.containers[write_idx] = tp;
+                    total += ac.cardinality;
+                    write_idx += 1;
+                },
+                .bitset => |bc| {
+                    const card = bc.computeCardinality();
+                    if (card == 0) {
+                        deferred_bitsets[deferred_count] = bc;
+                        deferred_count += 1;
+                        continue;
+                    }
+                    if (card <= ArrayContainer.MAX_CARDINALITY) {
+                        const ac = ops.bitsetToArray(self.allocator, bc) catch |err| {
+                            self.commitPartialLazyRepair(write_idx, read_idx, original_size);
+                            return err;
+                        };
+                        deferred_bitsets[deferred_count] = bc;
+                        deferred_count += 1;
+                        self.keys[write_idx] = key;
+                        self.containers[write_idx] = TaggedPtr.initArray(ac);
+                    } else {
+                        self.keys[write_idx] = key;
+                        self.containers[write_idx] = tp;
+                    }
+                    total += card;
+                    write_idx += 1;
+                },
+                .run => |rc| {
+                    const card = rc.getCardinality();
+                    if (card == 0) {
+                        rc.deinit(self.allocator);
+                        continue;
+                    }
+                    self.keys[write_idx] = key;
+                    self.containers[write_idx] = tp;
+                    total += card;
+                    write_idx += 1;
+                },
+                .reserved => unreachable,
+            }
+        }
+
+        self.size = @intCast(write_idx);
+        self.cached_cardinality = @intCast(total);
+        deinitBitsetsReverse(self.allocator, deferred_bitsets[0..deferred_count]);
+    }
+
+    fn commitPartialLazyRepair(self: *Self, write_idx: usize, read_idx: usize, original_size: usize) void {
+        const tail_len = original_size - read_idx;
+        if (write_idx != read_idx) {
+            std.mem.copyForwards(
+                u16,
+                self.keys[write_idx .. write_idx + tail_len],
+                self.keys[read_idx..original_size],
+            );
+            std.mem.copyForwards(
+                TaggedPtr,
+                self.containers[write_idx .. write_idx + tail_len],
+                self.containers[read_idx..original_size],
+            );
+        }
+        self.size = @intCast(write_idx + tail_len);
+        self.cached_cardinality = -1;
+    }
+
+    fn deinitBitsetsReverse(allocator: std.mem.Allocator, bitsets: []const *BitsetContainer) void {
+        var index = bitsets.len;
+        while (index > 0) {
+            index -= 1;
+            bitsets[index].deinit(allocator);
+        }
+    }
+
     /// Insert a tagged container at the given position, shifting existing containers.
     fn insertTaggedContainerAt(self: *Self, pos: usize, key: u16, tp: TaggedPtr) !void {
         try self.ensureTotalCapacity(self.size + 1);
@@ -2596,8 +2708,10 @@ pub const RoaringBitmap = struct {
 
     /// ## Allocator guidance
     ///
-    /// Avoid `std.heap.c_allocator` — it is 10-40x slower than alternatives
-    /// for rawr's allocation patterns (many small containers).
+    /// Allocator effects are operation-dependent. On measured container-heavy
+    /// operations, `std.heap.c_allocator` was roughly 1.3-1.8x slower than
+    /// alternatives, while some allocation-heavy operations favored libc.
+    /// See `docs/parity-measurement.md` for the current measurements.
     ///
     /// Recommended:
     /// - `OwnedBitmap` API: fastest (uses optimized allocation internally)

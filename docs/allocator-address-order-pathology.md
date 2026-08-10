@@ -152,6 +152,55 @@ order-insensitive (0.180 ms on the interleaved case), so treat "insensitive" as 
 from **honest sort-plus-zero timing**. Any go/no-go decision must use the **sort-plus-zero** number —
 a recovery figure measured with the sort excluded overstates the achievable win.
 
+## Production-shaped follow-up: repair loses, teardown conditions reuse
+
+Spec 38 applied the diagnosis to complete production-shaped boundaries on M4 and Zen 4/WSL2. The
+benchmark implementation is retained in `src/bench_address_sorted.zig`; no production path changed.
+
+Sorting the read-only repair cardinality pass by payload address did **not** improve complete repair.
+After the local cardinality scan, the required key-order conversion pass touches the payloads again;
+collection, sorting, and that second traversal made total repair 1.221x slower on M4 and 1.344x slower
+on Zen 4. This is the practical limit of the otherwise robust read-sort remedy: an independently
+reorderable sub-phase is not enough when the complete operation must revisit the same objects in
+semantic order.
+
+Descending payload-order frees did improve SMP's following refill plus unsorted zero traversal. In
+steady state, including the timed sort/free cost, the clean cycle changed from 6.213 to 3.520 ms on M4
+and from 25.997 to 15.671 ms on Zen 4. With the pinned shared-allocator noise workload, it changed from
+7.436 to 5.350 ms on M4 and from 22.742 to 19.165 ms on Zen 4; all four steady-state ranges separated.
+The M4 first-cycle shared-noise ranges overlapped, so that cell remains inconclusive.
+
+This does **not** promote sorted frees to a robust remedy. M4 libc regressed while Zen 4 libc improved
+substantially, demonstrating dependence on the concrete allocator and OS. The measured effect is
+exactly the fragile state-conditioning case described below. The conservative clean-sweep crossover
+was 1,024 containers across the two hosts, but no shipping threshold or control mechanism has been
+selected.
+
+### Production repair follow-up: direction works, count is not a portable gate
+
+Spec 39-00 deferred the actual transient-bitset frees inside lazy-OR repair and measured the complete
+construction/repair/teardown cycle. It separated deferral in key order from descending direction. Key
+deferral alone was neutral-to-worse; reverse iteration of the collected key-order pointers produced a
+separated full-cycle win on both M4 and Zen 4/WSL2, including under shared-allocator noise. Exact address
+ordering improved further, but reverse iteration was the cheapest sufficient rung.
+
+The benefit lands primarily on later allocations, not on the free call itself. Reverse iteration only
+approximated address order (81.9% descending on M4 and 43.8% on Zen 4), yet the canonical no-noise cycle
+improved by 1.629 ms and 7.758 ms respectively. This is direct production-shaped confirmation that free
+order can condition a later allocation/traversal phase.
+
+It is still not a generally safe default. M4 libc regressed, while Zen 4/WSL2 libc improved sharply.
+The synthetic count sweep was monotonic from 4,096 demotions on Zen 4 but not on M4: the M4 win at 8,192
+overlapped again at 16,364 despite a win on the canonical corpus. Allocation/free shape therefore
+matters in addition to count. These results support a caller-declared allocator-sensitive opt-in, not
+a default count gate.
+
+See `docs/parity-measurement.md` under "Deferred demote-free order diagnosis" for complete ranges,
+phase attribution, scratch/RSS accounting, production parity results, and artifact names. The
+benchmark implementation is `src/bench_free_order.zig`. Production now exposes this behavior only
+through the caller-declared `repairAfterLazyWithOptions` path; the default `repairAfterLazy()` path
+remains unchanged because the effect depends on the caller-provided allocator.
+
 ## Zig 0.16 allocator options (and why none is a drop-in fix)
 
 | allocator | single-thread friendly? | usable here? |

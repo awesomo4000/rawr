@@ -69,8 +69,8 @@ summary="${prefix}-summary.txt"
 
 tuple_count="$(awk -F '\t' '$1 == "TUPLE" { count++ } END { print count + 0 }' "$manifest_file")"
 row_count="$(awk -F '\t' '$1 == "ROW" { count++ } END { print count + 0 }' "$manifest_file")"
-if [[ "$row_count" != 39 ]]; then
-    printf 'expected 39 manifest rows, got %s\n' "$row_count" >&2
+if [[ "$row_count" != 40 ]]; then
+    printf 'expected 40 manifest rows, got %s\n' "$row_count" >&2
     exit 1
 fi
 printf 'Accurate parity table: %s rows, %s tuples, %s independent processes each\n' \

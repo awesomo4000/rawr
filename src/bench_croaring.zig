@@ -50,6 +50,7 @@ pub const ParityRow = enum {
     sparse_or_arena,
     dense_or,
     lazy_or_repair,
+    lazy_or_repair_descending,
     lazy_or_construction,
     lazy_or_repair_only,
     or_many,
@@ -479,6 +480,17 @@ fn benchRawrLazyOrSparseRepairWithAllocator(comptime result_allocator: std.mem.A
     var result = a.lazyOr(result_allocator, b, true) catch unreachable;
     defer result.deinit();
     result.repairAfterLazy() catch unreachable;
+    std.mem.doNotOptimizeAway(&result);
+}
+
+fn benchRawrLazyOrSparseRepairDescendingWithAllocator(comptime result_allocator: std.mem.Allocator) void {
+    const a = &rawr_sparse_a.?;
+    const b = &rawr_sparse_b.?;
+    var result = a.lazyOr(result_allocator, b, true) catch unreachable;
+    defer result.deinit();
+    result.repairAfterLazyWithOptions(.{
+        .allocator_benefits_from_descending_free_order = true,
+    }) catch unreachable;
     std.mem.doNotOptimizeAway(&result);
 }
 
@@ -1295,6 +1307,7 @@ pub fn parityPrepare(row: ParityRow, implementation: ParityImplementation) void 
         .sparse_or,
         .sparse_or_arena,
         .lazy_or_repair,
+        .lazy_or_repair_descending,
         .lazy_or_construction,
         .lazy_or_repair_only,
         => initSparseFor(implementation),
@@ -1308,6 +1321,20 @@ pub fn parityPrepare(row: ParityRow, implementation: ParityImplementation) void 
         => initArraysFor(implementation),
         .range_cardinality_small, .range_cardinality_large => initBitsetRangeFor(implementation),
     }
+}
+
+pub const ParityRawrSparseInputs = struct {
+    left: *const RoaringBitmap,
+    right: *const RoaringBitmap,
+};
+
+/// Benchmark-only access to the exact sparse corpus used by the canonical
+/// parity worker. Call parityPrepare(.lazy_or_repair, .rawr) first.
+pub fn parityRawrSparseInputs() ParityRawrSparseInputs {
+    return .{
+        .left = &rawr_sparse_a.?,
+        .right = &rawr_sparse_b.?,
+    };
 }
 
 fn initContainsFor(implementation: ParityImplementation) void {
@@ -1474,6 +1501,7 @@ noinline fn parityRunRawr(row: ParityRow, allocator_kind: ParityAllocator) u64 {
         .sparse_or_arena => benchRawrOrSparseArena(),
         .dense_or => runRawrAllocator(allocator_kind, benchRawrOrDenseWithAllocator),
         .lazy_or_repair => runRawrAllocator(allocator_kind, benchRawrLazyOrSparseRepairWithAllocator),
+        .lazy_or_repair_descending => runRawrAllocator(allocator_kind, benchRawrLazyOrSparseRepairDescendingWithAllocator),
         .lazy_or_construction => return runRawrLazyPhase(allocator_kind, .construction),
         .lazy_or_repair_only => return runRawrLazyPhase(allocator_kind, .repair),
         .or_many => runRawrAllocator(allocator_kind, benchRawrOrManyWithAllocator),
@@ -1532,7 +1560,7 @@ noinline fn parityRunCRoaring(row: ParityRow) u64 {
         .dense_and => benchCRoaringAndDense(),
         .sparse_or, .sparse_or_arena => benchCRoaringOrSparse(),
         .dense_or => benchCRoaringOrDense(),
-        .lazy_or_repair => benchCRoaringLazyOrSparseRepair(),
+        .lazy_or_repair, .lazy_or_repair_descending => benchCRoaringLazyOrSparseRepair(),
         .lazy_or_construction => return timeCRoaringLazyOrSparse(.construction),
         .lazy_or_repair_only => return timeCRoaringLazyOrSparse(.repair),
         .or_many => benchCRoaringOrMany(),
@@ -1744,10 +1772,16 @@ fn makeRawrResult(row: ParityRow, result_allocator: std.mem.Allocator) !RoaringB
         .dense_and => try rawr_dense_a.?.bitwiseAnd(result_allocator, &rawr_dense_b.?),
         .sparse_or, .sparse_or_arena => try rawr_sparse_a.?.bitwiseOr(result_allocator, &rawr_sparse_b.?),
         .dense_or => try rawr_dense_a.?.bitwiseOr(result_allocator, &rawr_dense_b.?),
-        .lazy_or_repair, .lazy_or_construction, .lazy_or_repair_only => result: {
+        .lazy_or_repair, .lazy_or_repair_descending, .lazy_or_construction, .lazy_or_repair_only => result: {
             var result = try rawr_sparse_a.?.lazyOr(result_allocator, &rawr_sparse_b.?, true);
             errdefer result.deinit();
-            try result.repairAfterLazy();
+            if (row == .lazy_or_repair_descending) {
+                try result.repairAfterLazyWithOptions(.{
+                    .allocator_benefits_from_descending_free_order = true,
+                });
+            } else {
+                try result.repairAfterLazy();
+            }
             break :result result;
         },
         .or_many => try RoaringBitmap.orMany(result_allocator, &rawr_many_inputs),
@@ -1795,7 +1829,7 @@ fn makeCRoaringResult(row: ParityRow) !*c.roaring_bitmap_t {
         .dense_and => c.roaring_bitmap_and(cr_dense_a.?, cr_dense_b.?) orelse error.OutOfMemory,
         .sparse_or, .sparse_or_arena => c.roaring_bitmap_or(cr_sparse_a.?, cr_sparse_b.?) orelse error.OutOfMemory,
         .dense_or => c.roaring_bitmap_or(cr_dense_a.?, cr_dense_b.?) orelse error.OutOfMemory,
-        .lazy_or_repair, .lazy_or_construction, .lazy_or_repair_only => result: {
+        .lazy_or_repair, .lazy_or_repair_descending, .lazy_or_construction, .lazy_or_repair_only => result: {
             const result = c.roaring_bitmap_lazy_or(cr_sparse_a.?, cr_sparse_b.?, true) orelse return error.OutOfMemory;
             c.roaring_bitmap_repair_after_lazy(result);
             break :result result;

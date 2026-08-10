@@ -2286,3 +2286,234 @@ test "deserializeSafe rejects invalid bitmap without leaking" {
     try std.testing.expectError(error.BitsetCardinalityMismatch, RoaringBitmap.deserializeSafe(allocator, corrupted));
     try std.testing.expectError(error.BitsetCardinalityMismatch, RoaringBitmap.deserializeSafeOwned(allocator, corrupted));
 }
+
+const lazy_repair_test_container_count = 7;
+
+const LazyRepairAuditAllocator = struct {
+    backing: std.mem.Allocator,
+    fail_index: ?usize = null,
+    alloc_index: usize = 0,
+    failed: bool = false,
+    expected_words: [lazy_repair_test_container_count]usize = [_]usize{0} ** lazy_repair_test_container_count,
+    freed_words: [lazy_repair_test_container_count]bool = [_]bool{false} ** lazy_repair_test_container_count,
+    free_order: [lazy_repair_test_container_count]usize = [_]usize{0} ** lazy_repair_test_container_count,
+    free_order_count: usize = 0,
+    expected_count: usize = 0,
+    duplicate_free: bool = false,
+    unexpected_free: bool = false,
+
+    const Self = @This();
+
+    fn allocator(self: *Self) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    fn expectBitsets(self: *Self, bitmap: *const RoaringBitmap) !void {
+        for (bitmap.containers[0..bitmap.size]) |tagged| {
+            if (tagged.getType() != .bitset) continue;
+            if (self.expected_count == self.expected_words.len) return error.TooManyBitsets;
+            self.expected_words[self.expected_count] = @intFromPtr(tagged.getBitset().words);
+            self.expected_count += 1;
+        }
+    }
+
+    fn expectFreedPrefix(self: *const Self, count: usize) !void {
+        try std.testing.expect(!self.duplicate_free);
+        try std.testing.expect(!self.unexpected_free);
+        for (self.freed_words[0..self.expected_count], 0..) |freed, index| {
+            try std.testing.expectEqual(index < count, freed);
+        }
+    }
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        if (!self.failed and self.fail_index == self.alloc_index) {
+            self.failed = true;
+            return null;
+        }
+        const result = self.backing.rawAlloc(len, alignment, ret_addr) orelse return null;
+        self.alloc_index += 1;
+        return result;
+    }
+
+    fn resize(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) bool {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.backing.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remap(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.backing.rawRemap(memory, alignment, new_len, ret_addr);
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        if (memory.len == BitsetContainer.SIZE_BYTES) {
+            const address = @intFromPtr(memory.ptr);
+            var found = false;
+            for (self.expected_words[0..self.expected_count], 0..) |expected, index| {
+                if (address != expected) continue;
+                found = true;
+                if (self.freed_words[index]) {
+                    self.duplicate_free = true;
+                } else {
+                    self.freed_words[index] = true;
+                    if (self.free_order_count == self.free_order.len) {
+                        self.duplicate_free = true;
+                    } else {
+                        self.free_order[self.free_order_count] = index;
+                        self.free_order_count += 1;
+                    }
+                }
+                break;
+            }
+            if (!found) self.unexpected_free = true;
+        }
+        self.backing.rawFree(memory, alignment, ret_addr);
+    }
+};
+
+fn makeLazyRepairTestInputs() !struct { left: RoaringBitmap, right: RoaringBitmap } {
+    const allocator = std.testing.allocator;
+    var left = try RoaringBitmap.init(allocator);
+    errdefer left.deinit();
+    var right = try RoaringBitmap.init(allocator);
+    errdefer right.deinit();
+
+    for (0..lazy_repair_test_container_count) |chunk| {
+        const high = @as(u32, @intCast(chunk)) << 16;
+        _ = try left.add(high | 1);
+        _ = try left.add(high | 3);
+        _ = try right.add(high | 2);
+        _ = try right.add(high | 4);
+    }
+    return .{ .left = left, .right = right };
+}
+
+fn expectLazyRepairResult(expected: *const RoaringBitmap, actual: *RoaringBitmap) !void {
+    try actual.validate();
+    try std.testing.expect(actual.equals(expected));
+    try std.testing.expectEqual(expected.cardinality(), actual.cardinality());
+    for (actual.containers[0..actual.size]) |tagged| {
+        try std.testing.expectEqual(TaggedPtr.ContainerType.array, tagged.getType());
+    }
+}
+
+test "repairAfterLazyWithOptions frees transient bitsets in reverse key order" {
+    var inputs = try makeLazyRepairTestInputs();
+    defer inputs.left.deinit();
+    defer inputs.right.deinit();
+
+    var expected = try inputs.left.lazyOr(std.testing.allocator, &inputs.right, true);
+    defer expected.deinit();
+    try expected.repairAfterLazy();
+
+    var actual = try inputs.left.lazyOr(std.testing.allocator, &inputs.right, true);
+    var audit = LazyRepairAuditAllocator{ .backing = std.testing.allocator };
+    try audit.expectBitsets(&actual);
+    actual.allocator = audit.allocator();
+    defer actual.deinit();
+
+    try actual.repairAfterLazyWithOptions(.{
+        .allocator_benefits_from_descending_free_order = true,
+    });
+    try audit.expectFreedPrefix(lazy_repair_test_container_count);
+    try std.testing.expectEqual(lazy_repair_test_container_count, audit.free_order_count);
+    for (audit.free_order[0..audit.free_order_count], 0..) |freed_index, index| {
+        try std.testing.expectEqual(lazy_repair_test_container_count - index - 1, freed_index);
+    }
+    try expectLazyRepairResult(&expected, &actual);
+}
+
+test "repairAfterLazyWithOptions falls back when scratch allocation fails" {
+    var inputs = try makeLazyRepairTestInputs();
+    defer inputs.left.deinit();
+    defer inputs.right.deinit();
+
+    var expected = try inputs.left.lazyOr(std.testing.allocator, &inputs.right, true);
+    defer expected.deinit();
+    try expected.repairAfterLazy();
+
+    var actual = try inputs.left.lazyOr(std.testing.allocator, &inputs.right, true);
+    var audit = LazyRepairAuditAllocator{
+        .backing = std.testing.allocator,
+        .fail_index = 0,
+    };
+    try audit.expectBitsets(&actual);
+    try std.testing.expectEqual(lazy_repair_test_container_count, audit.expected_count);
+    actual.allocator = audit.allocator();
+    defer actual.deinit();
+
+    try actual.repairAfterLazyWithOptions(.{
+        .allocator_benefits_from_descending_free_order = true,
+    });
+    try std.testing.expect(audit.failed);
+    try audit.expectFreedPrefix(lazy_repair_test_container_count);
+    try expectLazyRepairResult(&expected, &actual);
+}
+
+test "repairAfterLazyWithOptions commits a retryable partial repair" {
+    const failure_positions = [_]usize{ 0, lazy_repair_test_container_count / 2, lazy_repair_test_container_count - 1 };
+
+    for (failure_positions) |failure_position| {
+        var inputs = try makeLazyRepairTestInputs();
+        defer inputs.left.deinit();
+        defer inputs.right.deinit();
+
+        var expected = try inputs.left.lazyOr(std.testing.allocator, &inputs.right, true);
+        defer expected.deinit();
+        try expected.repairAfterLazy();
+
+        var actual = try inputs.left.lazyOr(std.testing.allocator, &inputs.right, true);
+        var audit = LazyRepairAuditAllocator{
+            .backing = std.testing.allocator,
+            // Scratch is allocation zero; each completed array conversion uses two allocations.
+            .fail_index = 1 + failure_position * 2,
+        };
+        try audit.expectBitsets(&actual);
+        try std.testing.expectEqual(lazy_repair_test_container_count, audit.expected_count);
+        actual.allocator = audit.allocator();
+        defer actual.deinit();
+
+        try std.testing.expectError(
+            error.OutOfMemory,
+            actual.repairAfterLazyWithOptions(.{
+                .allocator_benefits_from_descending_free_order = true,
+            }),
+        );
+        try std.testing.expect(audit.failed);
+        try std.testing.expectEqual(lazy_repair_test_container_count, actual.size);
+        try std.testing.expectEqual(@as(i64, -1), actual.cached_cardinality);
+        for (actual.keys[0..actual.size], 0..) |key, index| {
+            try std.testing.expectEqual(@as(u16, @intCast(index)), key);
+            const expected_type: TaggedPtr.ContainerType = if (index < failure_position) .array else .bitset;
+            try std.testing.expectEqual(expected_type, actual.containers[index].getType());
+        }
+        try audit.expectFreedPrefix(failure_position);
+
+        try actual.repairAfterLazyWithOptions(.{
+            .allocator_benefits_from_descending_free_order = true,
+        });
+        try audit.expectFreedPrefix(lazy_repair_test_container_count);
+        try expectLazyRepairResult(&expected, &actual);
+    }
+}

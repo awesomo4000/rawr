@@ -101,6 +101,10 @@ const arena_variant = [_]Variant{
     .{ .implementation = .rawr, .allocator = .arena },
 };
 
+const smp_variant = [_]Variant{
+    .{ .implementation = .rawr, .allocator = .smp },
+};
+
 const allocating_setup = "input construction outside timing; result construction inside timing";
 const allocating_teardown = "result deinit/free inside timing";
 const query_setup = "input construction outside timing; query operation inside timing";
@@ -310,6 +314,21 @@ const manifest = [_]ManifestRow{
         .teardown_boundary = allocating_teardown,
         .validation_oracle = .portable_bytes,
         .operation = .lazy_or_repair,
+    },
+    .{
+        .id = "lazy-or-repair-descending",
+        .display_name = "lazyOr+repair (sparse, descending frees)",
+        .corpus = "same sparse corpus and full-cycle operation as lazy-or-repair with opt-in descending transient-bitset frees",
+        .seed = 54321,
+        .rawr_operation = "RoaringBitmap.lazyOr plus repairAfterLazyWithOptions descending free order",
+        .croaring_operation = "roaring_bitmap_lazy_or plus roaring_bitmap_repair_after_lazy reference from lazy-or-repair",
+        .allocation_class = .allocating,
+        .variants = &smp_variant,
+        .reference = .{ .row_id = "lazy-or-repair", .variant = .{ .implementation = .croaring, .allocator = .libc } },
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .operation = .lazy_or_repair_descending,
     },
     .{
         .id = "lazy-or-construction",
@@ -756,7 +775,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn validateManifest() !void {
-    if (manifest.len != 39) return error.InvalidManifestRowCount;
+    if (manifest.len != 40) return error.InvalidManifestRowCount;
     for (&manifest, 0..) |*row, i| {
         if (row.id.len == 0 or row.variants.len == 0 or row.batch_count == 0) return error.InvalidManifestRow;
         if (dashboard.parityRequiresAllocator(row.operation) != (row.allocation_class == .allocating)) {

@@ -128,9 +128,10 @@ var it = frozen.iterator();
 
 ## Allocator guidance
 
-Avoid `std.heap.c_allocator` — it is 10-40x slower than alternatives for rawr's
-allocation patterns (many small containers). Measured on macOS M4; gap may vary
-on other platforms.
+Allocator effects are operation-dependent. On measured container-heavy
+operations, `std.heap.c_allocator` was roughly 1.3-1.8x slower than alternatives,
+while some allocation-heavy operations favored libc. See
+[`docs/parity-measurement.md`](docs/parity-measurement.md) for current results.
 
 Recommended allocators, fastest to most flexible:
 
@@ -139,7 +140,7 @@ Recommended allocators, fastest to most flexible:
 | `OwnedBitmap` API | Fastest | Deserialize → query → discard |
 | `ArenaAllocator` | Fast | Bounded lifetime, bulk free |
 | `smp_allocator` | Good | Long-lived mutable bitmaps |
-| `c_allocator` | Avoid | Don't use with rawr |
+| `c_allocator` | Workload-dependent | Interop or workloads where measurement favors libc |
 
 For hot loops with bounded lifetime (evaluation rounds, request handling),
 pre-allocate a `FixedBufferAllocator` and reuse it across iterations.

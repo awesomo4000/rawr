@@ -335,6 +335,71 @@ pub fn build(b: *std.Build) void {
         &b.addInstallArtifact(bench_smp_layout_exe, .{}).step,
     );
 
+    // Address-sorted repair/teardown diagnosis. This is benchmark-only and
+    // leaves the production bitmap implementation unchanged.
+    const bench_address_sorted_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_address_sorted.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_address_sorted_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_address_sorted_mod, target);
+    addTranslatedCImport(b, bench_address_sorted_mod, .{
+        .header = "tools/croaring_address_sorted.h",
+        .include_dir = "tools/",
+        .c_source = "tools/croaring_address_sorted.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_address_sorted_exe = b.addExecutable(.{
+        .name = "bench_address_sorted",
+        .root_module = bench_address_sorted_mod,
+    });
+    const bench_address_sorted_step = b.step(
+        "bench-address-sorted",
+        "Build address-sorted repair and teardown diagnosis worker",
+    );
+    bench_address_sorted_step.dependOn(
+        &b.addInstallArtifact(bench_address_sorted_exe, .{}).step,
+    );
+
+    // Deferred demote-free ordering diagnosis. This imports the canonical
+    // sparse parity corpus but keeps all candidate repair code benchmark-only.
+    const bench_free_order_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_free_order.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_free_order_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_free_order_mod, target);
+    addTranslatedCImport(b, bench_free_order_mod, .{
+        .header = "tools/croaring_bench_diag.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{
+            "tools/croaring_iterate_diag.c",
+            "tools/croaring_select_diag.c",
+            "tools/bench_peak_rss.c",
+        },
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_free_order_exe = b.addExecutable(.{
+        .name = "bench_free_order",
+        .root_module = bench_free_order_mod,
+    });
+    const bench_free_order_step = b.step(
+        "bench-free-order",
+        "Build deferred demote-free ordering diagnosis worker",
+    );
+    bench_free_order_step.dependOn(
+        &b.addInstallArtifact(bench_free_order_exe, .{}).step,
+    );
+
     // Fresh-process four-path iteration diagnosis harness.
     const iterate_diag_optimize = if (optimize == .Debug) .ReleaseFast else optimize;
     const iterate_diag_lib_mod = b.createModule(.{

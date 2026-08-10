@@ -5,5 +5,6 @@
 
 #include "croaring_iterate_diag.h"
 #include "croaring_select_diag.h"
+#include "bench_peak_rss.h"
 
 #endif

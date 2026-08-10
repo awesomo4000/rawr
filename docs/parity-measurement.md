@@ -1204,6 +1204,172 @@ The M4 timing artifact is `misc/lazy-allocator-20260807-153305-summary.txt`; its
 `misc/lazy-allocator-profile-20260807-160837-summary.txt`. Both Zen artifacts are retained on the
 WSL2 reference host.
 
+## Address-sorted repair and teardown diagnosis
+
+Spec 38 tested the address-order remedy only in a benchmark worker; production bitmap code and the
+public API are unchanged. Each tuple used five fresh processes. Repair and steady-state teardown used
+3 warmups and 21 timed samples per process; first-cycle teardown used one sample and no warmup. The
+teardown corpus pre-touched every 8 KB payload before the timed free so the first-cycle arm represents
+constructed bitsets rather than untouched allocator reservations.
+
+### Repair: NO-GO
+
+The complete candidate operation performs the payload-address sort and cardinality pass, then uses
+the production key-order conversion/free pass. Scratch allocation was measured both cold and reused;
+the reusable arm is shown as the candidate's most favorable ownership model, although its timing did
+not uniformly beat cold scratch.
+
+| host | rawr/SMP production repair | payload-sorted, reused scratch | candidate / production |
+| --- | ---: | ---: | ---: |
+| M4 | 8.595 ms [8.360, 8.701] | 10.491 ms [10.319, 11.200] | 1.221x |
+| Zen 4 / WSL2 | 14.738 ms [14.640, 14.776] | 19.807 ms [19.664, 19.860] | 1.344x |
+
+Cold and reused scratch ranges did not establish a material amortization benefit. Payload-key sorting
+was better than header-key sorting at the full corpus, confirming that the payload is the relevant
+stream, but both complete sorted operations were slower. The sort makes the independent cardinality
+pass local, then key-order conversion scans the payloads again; the second scan plus collection and
+sorting exceeds the recovered locality. The sorted arm never produced a range-separated win at any
+tested count from 8 through 16,364 on either host, so repair has no threshold candidate.
+
+### Teardown: useful state conditioning, not a default-path result
+
+Teardown reports an exact per-sample `teardown_and_combined` metric: timed free (including sort) plus
+the next production-order refill and unsorted zero traversal. The pinned noise cost remains separate.
+Descending payload frees are the useful direction because SMP's LIFO reuse tends to return those
+buffers in ascending order.
+
+| host / lifecycle | allocator noise | SMP unsorted | SMP payload-descending | sorted / unsorted |
+| --- | --- | ---: | ---: | ---: |
+| M4 first cycle | none | 7.436 ms [6.794, 8.665] | 5.288 ms [5.171, 6.335] | 0.711x |
+| M4 steady state | none | 6.213 ms [6.155, 6.570] | 3.520 ms [3.516, 3.735] | 0.567x |
+| M4 first cycle | shared | 8.434 ms [8.168, 9.864] | 6.519 ms [5.759, 9.932] | 0.773x, ranges overlap |
+| M4 steady state | shared | 7.436 ms [7.129, 8.336] | 5.350 ms [5.298, 5.413] | 0.719x |
+| Zen 4 first cycle | none | 22.402 ms [21.721, 23.311] | 15.953 ms [15.652, 16.451] | 0.712x |
+| Zen 4 steady state | none | 25.997 ms [22.073, 32.242] | 15.671 ms [15.549, 15.841] | 0.603x |
+| Zen 4 first cycle | shared | 44.603 ms [36.215, 48.802] | 24.074 ms [23.438, 24.319] | 0.540x |
+| Zen 4 steady state | shared | 22.742 ms [22.220, 31.451] | 19.165 ms [19.133, 19.208] | 0.843x |
+
+The shared-noise steady-state ranges separate on both hosts. The M4 shared-noise first-cycle ranges do
+not, so that lifecycle is inconclusive under the pre-registered full-range rule. Peak RSS was stable
+across free-order arms (about 208 MiB on M4 and 198 MiB for Zen steady-state SMP/noise), confirming
+that retained noise allocations were cleaned up rather than accumulated.
+
+The no-noise steady-state size sweep first separated in favor of descending payload frees at 64
+containers on M4 and 1,024 on Zen 4, with the win persisting at larger tested sizes. Thus 64 and 1,024
+are host-specific diagnostic candidates; 1,024 is the conservative cross-host candidate. It is not a
+shipping threshold. The canonical eight-run-container control remains below any plausible gate.
+
+libc prevents a default-on conclusion. On M4, descending payload frees made the no-noise steady-state
+cycle 5.045 ms instead of 3.985 ms and the shared-noise cycle 5.548 ms instead of 4.759 ms. On Zen 4,
+the same intervention strongly helped libc. This OS/allocator reversal confirms that sorted teardown
+is shared-allocator state conditioning, not a generally safe traversal optimization. Spec 38-01
+therefore remains blocked on the explicit scope and control-mechanism decisions; these measurements do
+not select an opt-in API, default, runtime heuristic, or parity classification.
+
+The M4 artifact is `misc/address-sorted-20260809-111118-summary.txt`. The Zen 4 artifact is
+`misc/address-sorted-20260809-114622-summary.txt`, retained on the WSL2 reference host.
+
+## Deferred demote-free order diagnosis
+
+Spec 39-00 moved the successful spec-38 teardown observation onto the production-shaped lazy-OR
+lifecycle. The benchmark-only worker times construction, repair, and result teardown as one consecutive
+cycle, so frees from one iteration condition allocations in the next. Production repair and the public
+API were unchanged during this diagnostic stage.
+
+The three primary arms separate deferral from direction. `I` is today's interleaved conversion/free,
+`D-key` defers old-bitset frees but preserves key order, and `D-desc` uses rung 0: reverse iteration of
+the collected key-order pointer list. Values are five fresh-process medians with full ranges.
+
+| host | arm | no-noise full cycle | delta from preceding arm |
+| --- | --- | ---: | ---: |
+| M4 | I | 14.098 ms [13.854, 15.403] | - |
+| M4 | D-key | 14.806 ms [14.088, 15.466] | +0.708 ms, ranges overlap |
+| M4 | D-desc | 12.469 ms [12.190, 13.081] | -2.337 ms, ranges separate |
+| Zen 4 / WSL2 | I | 37.517 ms [37.290, 37.578] | - |
+| Zen 4 / WSL2 | D-key | 38.116 ms [37.955, 38.611] | +0.599 ms, regression separates |
+| Zen 4 / WSL2 | D-desc | 29.759 ms [29.667, 33.050] | -8.357 ms, ranges separate |
+
+The direction benefit, not deferral alone, produces the win. In the no-noise adoption comparison,
+rung 0 puts rawr/SMP at 1.035x CRoaring on M4 (12.469 vs 12.045 ms) and 0.938x on Zen 4 (29.759 vs
+31.739 ms). Shared allocator noise preserves the full-cycle improvement: M4 moves from 16.732 to
+14.178 ms and Zen 4 from 40.217 to 32.606 ms, with separated ranges on both hosts. Noise figures are
+diagnostic and are not substituted for the no-noise adoption numbers.
+
+Phase timings show that the benefit is allocator-state feedback rather than a faster repair pass in
+isolation. On M4, construction changes from 5.693 ms for I to 3.774 ms for D-desc while repair remains
+8.313 vs 8.344 ms. On Zen 4, construction changes from 21.370 to 17.189 ms and repair from 15.335 to
+11.815 ms. Teardown is effectively unchanged on both hosts. The exact-order rungs improve further, but
+rung 0 is the cheapest sufficient mechanism and has effectively zero reorder cost.
+
+| host | reverse-order quality | exact-order full cycle | exact reorder cost |
+| --- | ---: | ---: | ---: |
+| M4 | 81.9% descending; travel 29.1x footprint | pdq 11.229 ms | 0.079 ms |
+| Zen 4 / WSL2 | 43.8% descending; travel 11.9x footprint | block 26.732 ms | 0.114 ms |
+
+Reverse iteration is only approximate because the container array is key-ordered, but it is sufficient
+on the real canonical lifecycle. The bucket rung regressed on both hosts. Radix, pdq, and block sort
+all produced exact descending order and similar full-cycle wins, so their extra work is not justified
+for the first production candidate. Because rung 0 is already forward traversal's only inverse, it
+offers no new ascending read-order candidate; the spec-38 repair-read NO-GO therefore receives no
+retest.
+
+The structured crossover sweep is host- and shape-dependent. Zen 4 first separates at 4,096 demotions
+and remains separated at 8,192 and 16,364. M4 separates at 8,192 but overlaps again at 16,364, even
+though the exact canonical corpus has a separated win at the same demotion count. Thus 4,096 and 8,192
+are diagnostic crossover candidates, not a portable runtime threshold. This does not block an explicit
+caller opt-in, which has no runtime gate, but it rules out inferring a default gate from count alone.
+
+libc rules out default adoption. On M4 the no-noise full cycle regresses from 12.343 to 13.899 ms and
+the shared-noise cycle from 14.069 to 15.395 ms. Zen 4/WSL2 behaves in the opposite direction, further
+confirming allocator/OS dependence. Spec 39-01 position B is therefore unavailable; the owner selected
+the explicitly declared allocator-sensitive opt-in in position A.
+
+Deferred repair allocates the specified `self.size` upper-bound scratch, about 524 KB for the canonical
+corpus, and can hold about 134 MB of old bitset payloads until the free pass. Peak RSS did not increase
+in the measured no-noise processes (about 157.7 MB on M4 and 157.4 MB on Zen 4), because the process had
+already reached a higher live peak while constructing the corpus. Scratch-allocation fallback,
+successful-path sole ownership, reorder permutation, and portable-byte identity are verified outside
+timing.
+
+The shipped rung 0 path performs no address arithmetic, sorting, or fixed-width span calculation, so it
+adds no 32-bit limitation. An attempted `x86-linux-gnu` build still stops earlier in the existing
+production `TaggedPtr` implementation, whose `u64` payload-to-pointer conversion does not compile when
+`usize` is 32 bits.
+
+Spec 39-01 shipped this mechanism as the explicit
+`repairAfterLazyWithOptions(.allocator_benefits_from_descending_free_order = true)` path. The existing
+`repairAfterLazy()` path remains unchanged. The production parity row is therefore a separate SMP-only
+variant referenced to the canonical CRoaring row; it does not replace or close the default row.
+
+| host | default rawr/SMP | opt-in rawr/SMP | CRoaring | opt-in / CRoaring |
+| --- | ---: | ---: | ---: | ---: |
+| M4 | 14.511 ms [14.355, 14.554] | 12.804 ms [12.736, 12.865] | 12.399 ms [12.277, 12.436] | **1.033x** |
+| Zen 4 / WSL2 | 37.166 ms [37.044, 37.373] | 30.980 ms [30.781, 31.492] | 29.245 ms [29.141, 29.418] | **1.059x** |
+
+Both opt-in results satisfy the `<=1.10x` gate. The default rows remain 1.170x on M4 and 1.271x on
+Zen 4. The production implementation has the same upper-bound scratch and deferred-payload shape as
+the diagnosis above, so the measured ~524 KB scratch, ~134 MB deferred payload, and unchanged peak RSS
+remain the applicable memory accounting.
+
+The opt-in path also introduces an explicit allocation-failure invariant. A failed conversion commits
+the repaired prefix, compacts the untouched lazy tail, marks total cardinality unknown, and frees each
+detached bitset exactly once. Scratch failure falls back before mutation. First, middle, and last
+conversion failures are tested with successful retry, portable-byte identity, and leak/double-free
+auditing.
+
+This mechanism cannot move standalone `lazy-or-construction`, which never repairs, and is not expected
+to move standalone repair-only timing because its benefit conditions the following construction. It
+only targets the steady-state combined `lazyOr+repair` lifecycle for callers that explicitly assert
+their allocator benefits from descending free order.
+
+Artifacts: M4 canonical/noise/sweep are `misc/free-order-20260810-100253-aggregate.tsv`,
+`misc/free-order-20260810-100527-aggregate.tsv`, and
+`misc/free-order-20260810-101036-aggregate.tsv`. Zen 4/WSL2 equivalents are
+`misc/free-order-20260810-102634-aggregate.tsv`, `misc/free-order-20260810-102825-aggregate.tsv`, and
+`misc/free-order-20260810-103048-aggregate.tsv`. Production parity summaries are
+`misc/parity-20260810-125040-summary.txt` (M4) and
+`misc/parity-20260810-130330-summary.txt` (Zen 4/WSL2).
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad
@@ -1222,6 +1388,18 @@ Build and run the standalone five-process allocator-layout matrix:
 
 ```sh
 ./scripts/run-bench-smp-layout.sh
+```
+
+Build and run the address-sorted repair/teardown diagnosis:
+
+```sh
+./scripts/run-bench-address-sorted.sh
+```
+
+Build and run the deferred demote-free order diagnosis:
+
+```sh
+./scripts/run-bench-free-order.sh
 ```
 
 Build and run the controlled five-process matrix:
