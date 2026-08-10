@@ -8,6 +8,21 @@ x86_64-linux with 4 KiB pages, where the effect is absent at 8 KiB object size.
 The originating observation is on Apple M4 (aarch64-macos, 16 KiB pages). Treat
 the designs as mechanisms awaiting validation, not as established fixes.
 
+> **HISTORICAL — superseded in part by spec 38-00 (2026-08-10).** The Zen 4 claim
+> in §1 ("Not observed on AMD Zen4") refers to the *immediate free loop*. Spec
+> 38-00 subsequently measured a **larger Zen 4 downstream benefit** from
+> descending free order (steady-state reuse **22.742 → 19.165 ms**, −3.577 ms)
+> than on M4 (−2.086 ms). So the effect is **not M4-only**; it is
+> allocator-specific (SMP), and Zen 4 gains more in absolute terms. Read §1's
+> platform statement as historical.
+>
+> **All reorder costs below (§4.3–4.5: bucket 11.26, radix 14.68, pdq 86.98
+> ns/op) are PRIOR ESTIMATES from the 1-vCPU Cascade Lake Linux VM described in
+> §4.1** — not from M4 or the current Zen 4 host, and measured on a machine that
+> could not exercise slot rotation (§2.5). They are useful for *relative* ordering
+> of the mechanisms only. **Rung selection must use fresh two-host
+> measurements.**
+
 ---
 
 ## 1. Originating observation
