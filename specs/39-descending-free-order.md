@@ -16,8 +16,26 @@ lazy-OR result is an **array** teardown, not a bitset teardown, and **a default-
 cannot close the lazy-OR construction gap.**
 
 **The production home of "free ~16,364 8 KB bitsets" is `repairAfterLazy`'s demote path.** That is this
-spec's primary target. It sits on the canonical row, so a win there is a real board movement rather than
-an opt-in extra.
+spec's primary target.
+
+### Which canonical row can actually move — and which cannot
+
+| row | can this improve it? |
+|---|---|
+| `lazy-or-construction` | **NO — that row never calls repair.** |
+| `lazy-or-repair-only` | **Probably NO** — the expected benefit lands on the *next* construction, which is **outside that row's timer.** |
+| **steady-state `lazyOr+repair`** | **YES — this is the only row that can move**, because one iteration's descending frees condition the next iteration's allocations. |
+
+**Diagnostic sequence (pinned):**
+
+```
+repair/free candidate  →  stage-3 noise  →  next lazyOr construction
+```
+
+**Report separately:** (i) **current repair cost**, (ii) **following construction cost**, (iii) **full
+cycle**. **The hard gate is FULL-CYCLE improvement.** A repair-only improvement that does not show up in
+the full cycle is not a win, and a repair-only regression offset by a larger construction gain still is
+one — which is exactly why the cycle is the gate.
 
 **Note what `38-00` did and did not test:** it sorted repair's **cardinality read traversal** (regressed)
 and separately measured **descending frees on a synthetic bitset corpus** (won, survived stage-3 noise).
@@ -28,12 +46,40 @@ be teardown:
 
 | workload | contents | role |
 |---|---|---|
-| **repair demote frees** | 16,364 transient 8 KB bitsets, freed **interleaved** with `bitsetToArray` allocations | **primary** — production path, canonical row |
+| **repair demote frees** | 16,364 transient 8 KB bitsets, released in a **deferred descending pass** (see below) | **primary** — production path |
 | **result teardown** | the real lazy-OR result: **~65,496 arrays** (+ any surviving bitsets/runs) | representative teardown; the array-dominated reality |
 | all-bitset teardown | 16,364 bitsets, no interleaving | `38-00`'s corpus — retained as a **control only**, not a production claim |
 
 **No workload-shape claims beyond what is measured.** (An earlier draft asserted a "datalog-backend
 shape" fit; removed — unsupported.)
+
+## Deferred-free design — PINNED (descending frees cannot stay interleaved)
+
+`repairAfterLazy` today does, per demoted container: **`bitsetToArray` allocation → immediately free the
+old bitset.** A *global* descending free order is therefore impossible without restructuring. Two options
+existed; **option (a) is selected:**
+
+- **(a) SELECTED — key-order conversion, deferred descending free.** Keep the conversion pass in key
+  order (preserving result allocation order and key order exactly as today), **collecting the old bitset
+  pointers**; then run a **separate descending free pass**.
+- (b) Rejected — reordering the conversion pass itself, which would change result allocation order and
+  perturb far more than the frees.
+
+**Consequences that must be measured, not assumed:**
+
+- **Frees are NO LONGER INTERLEAVED with allocations.** That is a deliberate change of shape, not an
+  incidental one, and it may itself alter the result independent of ordering — so the deferred-but-
+  ascending / deferred-but-unordered case must be measured as a control, isolating *deferral* from
+  *direction*.
+- **Temporary live-memory peak RISES.** Old bitsets are held while new arrays are allocated: up to
+  ~16,364 × 8 KB ≈ **134 MB retained simultaneously** that today is released incrementally. **Measure and
+  report peak RSS**; this is a real cost the win must justify.
+- **Rung 0 is NOT free on this path.** Deferring requires storing the collected old-bitset pointers —
+  **~N pointers of scratch (≈131 KB at n=16,364)** plus the fill. "Reverse iteration" then means reverse
+  iteration *of that deferred array*. So rung 0's cost is **scratch allocation + fill, not zero**; it is
+  still far cheaper than any sort, but the cost table below must be read with that correction. (Rung 0 is
+  genuinely free only for an in-place traversal we already perform — which is the read side, not this
+  one.)
 
 ## Direction discipline — frees and reads want OPPOSITE orders
 
@@ -54,16 +100,21 @@ sort** (not pdq). Stability is unnecessary — payload addresses are unique — 
 stability *and* in-place rotation, so **both `38-00` verdicts carried an unquantified, probably large
 reorder tax.** Quantify rung 4 so that tax is known.
 
-| rung | mechanism | cost @ n≈16,364 |
+**⚠ The costs below are PRIOR ESTIMATES from the 1-vCPU Cascade Lake Linux VM** in
+`smp-free-order.md` §4.1 — **not** from M4 or the current Zen 4 host, and from a machine that could not
+exercise slot rotation. They establish the **relative ordering** of mechanisms only. **Rung selection
+must use fresh two-host measurements.**
+
+| rung | mechanism | prior estimate @ n≈16,364 |
 |---|---|---:|
-| **0** | reverse iteration of the container array — **no reorder** | **0.000 ms** |
-| **1** | 1-pass span-adaptive bucket partition | **0.184 ms** |
-| **2** | LSD radix on normalized payload addresses | **0.240 ms** |
-| **3** | `std.mem.sortUnstable` (pdq) | 1.423 ms (reference) |
+| **0** | reverse iteration of the **deferred pointer array** | **scratch alloc + fill only** (not zero — see Deferred-free design) |
+| **1** | 1-pass span-adaptive bucket partition | ~0.184 ms |
+| **2** | LSD radix on normalized payload addresses | ~0.240 ms |
+| **3** | `std.mem.sortUnstable` (pdq) | ~1.423 ms (reference) |
 | **4** | `std.mem.sort` (block, stable) — the `38-00` baseline | **unmeasured — measure it** |
 
-**Stop at the cheapest rung that captures the effect.** Report reorder cost as its own column at every
-rung.
+**Stop at the cheapest rung that captures the effect.** Report **measured** reorder cost as its own
+column at every rung.
 
 ### Rung 0 — must be qualified, not assumed
 
@@ -77,8 +128,13 @@ on the repair-demote path, rung 0 is out for that path regardless of its cost.
 ### Rung 1 — bucket partition, specified
 
 - Key: **`(address − min_address) >> shift`**, `min_address` from a first pass.
-- **`shift = max(0, 64 − clz(span) − log2(nbuckets))`** — span-adaptive. A **fixed** shift is a recorded
-  trap: 256 buckets over a 160 MB span left travel **unchanged at 6856x**.
+- **`shift = max(0, @bitSizeOf(usize) − @clz(span) − log2(nbuckets))`** — span-adaptive, and **portable:
+  do NOT hardcode 64**, production must compile on 32-bit targets even though the performance gates run
+  on M4 and Zen 4. A **fixed** shift is a recorded trap: 256 buckets over a 160 MB span left travel
+  **unchanged at 6856x**.
+- **`span == 0` (zero or one item) must be pinned:** with `n <= 1` there is nothing to reorder — return
+  immediately; `@clz(0)` is `@bitSizeOf(usize)` so the shift formula degenerates safely, but the
+  early-return is required so the count/scatter passes are never entered with a degenerate span.
 - **Clamp** the bucket index to `nbuckets − 1` (guards the `hi` element and any rounding).
 - Steps: **count → prefix-sum → scatter into scratch → copy back**.
 - **Within-bucket order is unspecified/arbitrary** (a bucket spans `span/nbuckets`); state that this is
@@ -91,8 +147,10 @@ on the repair-demote path, rung 0 is out for that path regardless of its cost.
 - **Three LSD passes do not sort a full `usize`** — that must be pinned, not implied.
 - Key: **normalized `address − min_address`**, so only the **span's** significant bits need sorting.
 - **Bits per pass** and **pass count adaptive to the observed span**: passes =
-  `ceil(significant_bits / bits_per_pass)`, `significant_bits = 64 − clz(span)`. State `bits_per_pass`
-  (8 or 11) and the resulting count-table size.
+  `ceil(significant_bits / bits_per_pass)` where
+  **`significant_bits = @bitSizeOf(usize) − @clz(span)`** — **portable, not hardcoded 64.** State
+  `bits_per_pass` (8 or 11) and the resulting count-table size.
+- **`span == 0` / `n <= 1`: early-return, no passes.** Same requirement as rung 1.
 - **Descending output** produced explicitly (reverse the final scatter, or reverse-iterate the result) —
   do not leave direction implicit.
 - **Scratch and count-table sizes** stated; **allocation failure falls back to unreordered**.
@@ -112,28 +170,30 @@ rejected, **a size gate cannot exclude libc-on-M4** — that has to be a contrac
 - So **"libc-on-M4 excluded" means excluded from the DEFAULT path** — it remains possible to opt into,
   and that is acceptable and documented. It is not, and cannot be, made impossible.
 
-**Surface scope — decide at review, then pin:**
+**Surface scope — PINNED (minimal):**
 
-| candidate | note |
+| decision | |
 |---|---|
-| `repairAfterLazy` demote frees | **primary target**; internal, so it needs the same opt-in question answered |
-| `deinit` only | array-dominated for lazy-OR results (see Target workload) |
-| **`clearRetainingCapacity()`** | **arguably the more relevant repeated-use operation** — frees containers while retaining arrays, which is the steady-state reuse shape the win was measured in |
-| `Roaring64Bitmap` | in or out? |
-| 32-bit `RoaringBitmap` only | narrower first step |
-| **`OwnedBitmap`** | **EXPLICITLY EXCLUDED — its arena owns teardown**, so container-level free order is irrelevant |
+| **ADD** | **`repairAfterLazyWithOptions(...)`** — the only new public entry point |
+| **UNCHANGED** | **`repairAfterLazy()`** — default path untouched, no behaviour change |
+| **EXCLUDED from `39-01`** | **`deinit`**, **`clearRetainingCapacity`**, **`Roaring64Bitmap`**, **`OwnedBitmap`** |
+
+`OwnedBitmap` is excluded on principle (**its arena owns teardown**, so container-level free order is
+irrelevant); the other three are excluded to keep the first shipped surface minimal — they may be
+revisited in a later spec on their own evidence, not on this one's.
 
 ## Size gate — unit must be pinned
 
-`38-00`'s crossovers (**64 M4 / 1,024 Zen 4**) were measured in **8 KB bitset payload count**, not total
-containers. Pin whether the gate counts:
+**PINNED: the gate counts the number of BITSETS ACTUALLY BEING DEMOTED** in this repair call — not total
+containers, and not all reorderable payloads.
 
-- **bitsets only**, or
-- **all reorderable payloads**, or
-- **total containers**.
+Rationale: `38-00`'s crossovers (**64 M4 / 1,024 Zen 4**) were measured in **8 KB bitset payload count**,
+and the demoted-bitset count is exactly the population this mechanism reorders. A total-container gate
+would be wrong by ~4× on a lazy-OR result (65,496 containers vs 16,364 demoted bitsets) and is
+unjustified without mixed-corpus measurement.
 
-**A total-container gate is not justified without mixed array/run/bitset measurements** — the
-65,496-array result teardown is precisely the case where those units diverge by ~4×.
+**The array-result teardown remains DIAGNOSTIC EVIDENCE ONLY** — it characterises the array-dominated
+reality of a lazy-OR result, but it must **neither select nor block** the bitset-demotion mechanism.
 
 ## Gate re-derivation
 
@@ -164,17 +224,27 @@ separation before any claim; stage-3 noise control per rung.
 
 ## Acceptance
 
-- **Primary:** descending demote frees measured **inside `repairAfterLazy`** (interleaved with
-  `bitsetToArray`), both allocators, both hosts, stage-3 noise verified.
+- **Primary:** descending demote frees measured **inside `repairAfterLazy`** via the pinned **deferred**
+  design, both allocators, both hosts, stage-3 noise verified — plus the **deferred-but-not-descending
+  control** isolating deferral from direction, and **peak RSS reported** for the raised temporary live
+  footprint.
+- **Hard gate is FULL-CYCLE improvement** on steady-state `lazyOr+repair`, with **repair cost, following
+  construction cost, and full cycle reported separately**. `lazy-or-construction` and
+  `lazy-or-repair-only` are documented as rows this mechanism **cannot** move.
 - Representative **result teardown (~65,496 arrays)** measured; the all-bitset corpus reported as a
   control only.
 - Rungs 0–2 measured (3 reference, 4 quantified); **rung 0 qualified by measured order quality on the
   real lifecycles**; cheapest sufficient rung selected.
 - Repair read-traversal retest run **once, ASCENDING**, with the explicit note that rung 0 offers no
   read-side candidate; verdict recorded either way.
-- Size-gate **unit pinned** and threshold **re-derived for the selected rung**.
-- API surface pinned (`OwnedBitmap` excluded); default path unchanged; libc-on-M4 excluded **from the
-  default** and that wording used.
+- Size gate counts **demoted bitsets**; threshold **re-derived for the selected rung** on both hosts.
+- API is **`repairAfterLazyWithOptions(...)` only**; `repairAfterLazy()` unchanged; `deinit`,
+  `clearRetainingCapacity`, `Roaring64Bitmap`, `OwnedBitmap` **excluded from `39-01`**; libc-on-M4
+  excluded **from the default path** (opt-in remains possible, and that wording is used).
+- Algorithms **portable**: `@bitSizeOf(usize) − @clz(span)` (never hardcoded 64), `span == 0` / `n <= 1`
+  early-return pinned, compiles on 32-bit targets.
+- Reorder costs reported as **fresh two-host measurements**, with the `smp-free-order.md` figures cited
+  only as prior estimates.
 - Correctness surface green.
 
 ## Chunk plan
