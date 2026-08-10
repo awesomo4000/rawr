@@ -10,7 +10,17 @@ Toplevel: [39-descending-free-order.md](39-descending-free-order.md). Gated on:
 >
 > 1. **Full-cycle win confirmed** — M4 14.098 → **12.469 ms** (**1.035x**), Zen 4/WSL2 37.517 →
 >    **29.759 ms** (**0.938x, rawr ahead**); survived shared-allocator noise on both hosts.
-> 2. **Scope = (A), FORCED.** `39-00` found **M4 libc REGRESSED**, which eliminates (B) default adoption.
+> 2. **Scope = (A), FORCED — with numbers, not a qualitative word.** M4 canonical full cycle:
+>    CRoaring **12.045** [11.977, 12.105] ms; rawr/libc baseline **12.343** [12.255, 12.430] ms; rawr/libc
+>    deferred-reverse **13.899** [13.819, 14.063] ms. So libc candidate/baseline = **1.126x (12.6%
+>    regression)** and candidate/CRoaring = **1.154x — outside the ≤1.10x gate**, with **cleanly separated
+>    ranges**. Under shared noise it is worse: 14.069 → 15.395 ms (9.4%), candidate/CRoaring **1.278x**.
+>    Spec 38's libc regressions were larger still (repair traversal **1.262x**, teardown/refill **1.266x**,
+>    teardown under noise **1.166x**). **(B) is eliminated on the merits.**
+>    **Independent second reason (B) is unavailable:** default adoption would affect **every
+>    caller-provided allocator** — custom pools, tracking wrappers, GPA, arena-over-X — none of which the
+>    board measures. Generalizing from two measured allocators to *all* allocators is unjustified even
+>    where the measured ones pass.
 > 3. **Runtime gate = NONE, FORCED.** The count-only crossover was **not portable across hosts**, so no
 >    threshold can be inferred — confirming option 3, caller-controlled activation.
 > 4. **Rung = 0** — reverse iteration of the deferred pointer array. No bucket, no radix, no sort.
