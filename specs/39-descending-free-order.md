@@ -367,9 +367,14 @@ separation before any claim; stage-3 noise control per rung.
 
 ## Chunk plan
 
-- **`39-00`** — measurement: the two production workloads, the ladder, rung-0 order-quality
-  qualification, inverted repair retest, gate re-derivation. No production change.
-- **`39-01`** — ship the selected rung behind the pinned opt-in.
+- **[`39-00`](39-00-free-order-measurement.md)** — measurement: three arms (I / D-key / D-desc), full-cycle
+  timing with teardown inside the span, the ladder with rung-0 order-quality qualification, libc on the
+  repair-demote path, inverted (ascending) read retest, crossover candidates. **No production change.
+  Ready to implement.**
+- **[`39-01`](39-01-free-order-production.md)** — production: deferred descending free at the selected
+  rung, the pinned opt-in surface, and the **new** partial-repair invariant. **BLOCKED** on (i) a
+  full-cycle win from `39-00` and (ii) the scope decision (A optional-variant / B default), which also
+  determines the gate mechanism.
 
 ## Estimate
 
