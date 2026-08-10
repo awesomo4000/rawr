@@ -2,6 +2,29 @@
 
 # Spec 39-01: Descending demote frees — production
 
+> **Outcome (2026-08-10) — SHIPPED. Scope (A), `repairAfterLazy` only. Canonical default unchanged.**
+>
+> | host | default | **opt-in** | CRoaring | **opt-in ratio** | default ratio |
+> |---|---:|---:|---:|---:|---:|
+> | **M4** | 14.511 ms | **12.804 ms** | 12.399 ms | **1.033x** | 1.170x |
+> | **Zen 4** | 37.166 ms | **30.980 ms** | 29.245 ms | **1.059x** | 1.271x |
+>
+> **The opt-in path meets the ≤ 1.10x gate on BOTH hosts** (−11.8% M4, −16.6% Zen 4). The **canonical
+> default is unchanged** — 1.170x M4, 1.271x Zen 4 — exactly as scope (A) requires. Report as
+> **"at parity when enabled"**, never as a closed row.
+>
+> Delivered: opt-in `repairAfterLazyWithOptions` (default `repairAfterLazy()` untouched); scratch
+> fallback; reverse frees; **retryable partial-repair semantics** (the new guarantee this chunk
+> introduced); ownership / free-order / first-middle-last allocation-failure tests; an **SMP-only parity
+> variant** that does not alter the canonical row; corrected `c_allocator` guidance in README and source
+> docs; parity + pathology docs updated. Verified: normal build, Debug/ReleaseSafe/ReleaseFast tests,
+> differential in ReleaseSafe/ReleaseFast, full five-process boards both hosts, `git diff --check`.
+>
+> **⚠ Do not compare the Zen 4 ratio against `39-00`'s 0.938x — that is a cross-run comparison.** rawr's
+> own figure barely moved (29.759 → 30.980, **+4.1%**); the **CRoaring reference moved more** (≈31.726 →
+> 29.245, **−7.8%**). The ratio difference is mostly **reference drift between runs**, not a rawr
+> regression. Per campaign discipline, ratios are only valid **within a single run**.
+
 Toplevel: [39-descending-free-order.md](39-descending-free-order.md). Gated on:
 [39-00](39-00-free-order-measurement.md).
 

@@ -2,6 +2,18 @@
 
 # Spec 39: Descending free order for mass bitset release
 
+> **CLOSED (2026-08-10) — SHIPPED as an opt-in.** `39-00` GO at **rung 0** (reverse iteration of deferred
+> bitset frees — no sort, no radix, no bucket); `39-01` shipped scope **(A)**, `repairAfterLazy` only.
+> **Opt-in: M4 1.033x, Zen 4 1.059x — inside the ≤1.10x gate on both hosts.** **Canonical default
+> unchanged (1.170x M4 / 1.271x Zen 4)**, as (A) requires.
+>
+> **(B) default adoption was eliminated on measured merits**, not a qualitative word: libc candidate/
+> CRoaring **1.154x** (outside the gate) with cleanly separated ranges — plus the independent reason that
+> default adoption would affect **every caller-provided allocator**, only three of which the board measures.
+>
+> **This did NOT close the campaign's headline gap.** `lazy-or-construction` (~1.7x) never calls repair and
+> is untouched — it remains **the last material open row**.
+
 Campaign: [31-structural-parity-campaign.md](31-structural-parity-campaign.md). Predecessor:
 [38-00](38-00-address-sort-measurement.md). Background:
 [allocator-address-order-pathology.md](../docs/allocator-address-order-pathology.md),
