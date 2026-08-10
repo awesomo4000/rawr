@@ -181,6 +181,38 @@ needs.
 **does not establish that `wasm32-wasi` can build and run the C-backed differential test.** wasm32 may be
 added later as a *compile-only* target; it is not the execution vehicle.
 
+### What the runner does and does NOT require (read before installing anything)
+
+- **No Linux distro, VM, rootfs, or `debootstrap`.** `qemu-i386` is **user-mode** emulation: it runs one
+  foreign binary on the host kernel and translates syscalls. There is no guest system.
+- **No sysroot and no multilib** — because the binary is **statically linked musl**. That is the whole
+  reason musl was chosen. **Do not switch the target to `-gnu`**: a dynamically linked 32-bit binary would
+  need a 32-bit loader and libc present, which is where sysroot/multilib pain begins.
+- **No `binfmt_misc` registration.** Zig's `-fqemu` invokes `qemu-i386 <binary>` **explicitly**, so the
+  kernel never has to dispatch foreign binaries. This matters on **WSL2 specifically**, which already uses
+  `binfmt_misc` for Windows `.exe` interop — we sidestep that interaction entirely.
+- **Zig supplies the C toolchain.** It ships musl and compiles the vendored CRoaring itself;
+  `build.zig` threads `target` through to every artifact, so `-Dtarget=x86-linux-musl` reaches the C
+  compilation too. No system cross-compiler needed.
+
+**Known trap — package name vs binary name.** Debian/Ubuntu's `qemu-user-static` installs the binary as
+**`qemu-i386-static`**, but `-fqemu` looks for **`qemu-i386`**. Either install `qemu-user` instead, or
+symlink. **Cheapest first check after installing:**
+
+```sh
+qemu-i386 --version     # must resolve under this exact name
+```
+
+**Expected CRoaring behaviour on 32-bit (not a defect).** `vendor/roaring.h` sets `CROARING_IS_X64` only
+under `__x86_64__` / `_M_X64`; on `x86-linux-musl` **neither is defined**, so the SIMD/intrinsics block is
+skipped and CRoaring takes its **portable C path by design**. That path is less travelled than the x64
+one, which is exactly why **`difftest` — not unit tests alone — must be part of the preflight.**
+
+**Fallback if qemu proves impractical on WSL2:** `wasm32-wasi` + `wasmtime`. Zig compiles C to wasi too,
+so `difftest` is **not automatically disqualified** there — wasm was rejected as the *primary* vehicle
+only because it was **unproven for the C-backed test**, not because it is known broken. Try it before
+re-architecting anything.
+
 ### Execution host and preflight — OUTSTANDING, blocks `40-01`
 
 **Host (pinned): the Zen 4 / WSL2 machine.** It currently has **neither `qemu-i386` nor `zig` on `PATH`**,
