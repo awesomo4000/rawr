@@ -64,9 +64,28 @@ reconstruction in the repository** — my original survey filtered `src/bench*` 
 - **`src/bench_lazy_or_attribution.zig:170`** — `@ptrFromInt(@as(u64, tagged.addr) << 2)`, an independent
   reconstruction of the same encoding in diagnostic tooling.
 
-**PINNED: convert it to `usize`** — `@ptrFromInt(@as(usize, tagged.addr) << 2)`. Not excluded; the
-diagnostic stays on the 32-bit build surface. Any future duplicate of this decode is a latent 32-bit
-break, so **prefer routing new call sites through `TaggedPtr`'s accessors** rather than re-deriving it.
+**PINNED — centralize the decode rather than patching the copy.** Converting that one line to `usize`
+fixes today's break but leaves the *class* open: a third raw decode could appear and regress 32-bit
+silently, because `check-32` compiles the library and might not compile diagnostics.
+
+So: **add a single type-agnostic accessor on `TaggedPtr`** and route every raw-address reconstruction
+through it —
+
+```zig
+/// The decoded address, with the 2 tag bits removed. The ONLY place this shift lives.
+pub fn rawAddr(self: TaggedPtr) usize {
+    return @as(usize, self.addr) << 2;
+}
+```
+
+`getArray` / `getBitset` / `getRun` become `@ptrFromInt(self.rawAddr())`, and
+**`bench_lazy_or_attribution.zig:170` calls `rawAddr()`** instead of re-deriving the shift. **After this
+there is exactly one decode site in the repository**, so the regression cannot recur regardless of what
+`check-32` compiles.
+
+*(Fallback, only if centralizing proves impractical: convert the diagnostic to `usize` **and** add
+`x86-linux-musl` compilation of it to `check-32`. Centralizing is preferred — it removes the failure mode
+instead of widening the net that catches it.)*
 
 The remaining `@intFromPtr` use (`counting_allocator.zig`) is a width-agnostic comparison and is fine.
 
@@ -133,7 +152,16 @@ which `40-00` deliberately does not do. So it splits:
 | **`40-01`** | **execute both directions** under the pinned 32-bit runtime and compare. |
 
 Fixtures must be **byte-reproducible** so producer and consumer can be run on different hosts at
-different times.
+different times — and that requires **width-independent generation, which is easy to get wrong**:
+
+- **Never generate with `usize`-dependent operations.** `random().int(usize)`, `uintLessThan(usize, n)`,
+  or any length/index typed `usize` produce **different corpora on 32-bit and 64-bit**, silently making
+  the "same" fixture different on the two ends — which would look like a serialization bug.
+- **Pin: values are `u32`, and the generator uses only fixed-width PRNG calls** (`int(u32)`,
+  `uintLessThan(u32, n)`) with a pinned seed.
+- **Belt and braces: check in an expected hash (or the bytes) of the generated corpus**, asserted on both
+  ends, so any width-dependent drift fails loudly at generation time rather than being misdiagnosed as a
+  format defect downstream.
 
 ## Address space is a real limitation — document it
 
@@ -159,11 +187,21 @@ added later as a *compile-only* target; it is not the execution vehicle.
 **Host (pinned): the Zen 4 / WSL2 machine.** It currently has **neither `qemu-i386` nor `zig` on `PATH`**,
 so this is not a formality — it is real setup work that must land **before `40-01` is finalized**:
 
-1. **Install QEMU user-mode** (`qemu-user` / `qemu-user-static`) on that host.
-2. **Use the explicit Zig path** — do not assume `zig` resolves on `PATH` there.
-3. **Invoke builds with `-fqemu`**, so Zig runs the foreign-architecture test binaries under qemu-user
-   automatically rather than requiring hand-rolled invocation.
-4. **Preflight BOTH `zig build test` AND `zig build difftest`** under static `x86-linux-musl` + qemu.
+1. **Install QEMU user-mode** (`qemu-user` / `qemu-user-static`) — **still outstanding**; `qemu-i386` is
+   not present.
+2. **Zig is present but not on `PATH`** — discovered at **`/home/alr/.zvm/0.16.0/zig`** (0.16.0). Use that
+   explicit path.
+3. **Invoke with `-fqemu`**, so Zig runs foreign-architecture test binaries under qemu-user automatically
+   rather than requiring hand-rolled invocation.
+
+So the intended commands are exactly:
+
+```sh
+/home/alr/.zvm/0.16.0/zig build test     -Dtarget=x86-linux-musl -fqemu
+/home/alr/.zvm/0.16.0/zig build difftest -Dtarget=x86-linux-musl -fqemu
+```
+
+4. **Both must pass.**
 
 **If `difftest` cannot be made to run there, report it and re-pick the runner — do NOT silently reduce
 acceptance to unit tests only.** `difftest` is the reason the runner had to link C in the first place, so
@@ -227,17 +265,21 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
 - `TaggedPtr` made width-generic; **`zig build` succeeds for wasm32 and at least one of
   i386 / arm32 / riscv32**; 64-bit unaffected (byte-identical behaviour, board unmoved).
 - **Comptime alignment assertion** added for all container types.
-- **Fixture corpus + producer/consumer protocol** defined and byte-reproducible (`40-00`); **cross-width
-  round-trip executed in BOTH directions** (`40-01`), byte-identity + set equality.
+- **Fixture corpus + producer/consumer protocol** defined and byte-reproducible (`40-00`), generated with
+  **`u32` values and fixed-width PRNG calls only** — no `usize`-dependent operations — with a **checked-in
+  corpus hash** asserted on both ends; **cross-width round-trip executed in BOTH directions** (`40-01`),
+  byte-identity + set equality.
 - Full test suite **and `difftest` execute and pass** under **static `x86-linux-musl` / `qemu-i386`**,
   preflighted; if `difftest` cannot run there, that is reported and the runner re-picked — **not**
   silently downgraded to unit tests.
-- **`bench_lazy_or_attribution.zig:170` converted to `usize`** (pinned — not excluded).
-- **`zig build check-32` added** (pinned mechanism; **GitHub Actions explicitly out of scope**), covering
-  the compile-only matrix.
+- **Decode centralized:** `TaggedPtr.rawAddr()` added, the three getters and
+  `bench_lazy_or_attribution.zig:170` all routed through it — **exactly one decode site repository-wide**.
+- **`zig build check-32` added — required**, covering the compile-only **breadth matrix**
+  (**GitHub Actions explicitly out of scope**).
 - **`src/container.zig:7` comment corrected** from 8-byte to 4-byte alignment.
-- **Runner preflight completed on the WSL2 host** — qemu-user installed, explicit Zig path, `-fqemu`, and
-  **both `test` and `difftest` confirmed running**; `40-01` does not start until this passes.
+- **Runner preflight completed on the WSL2 host** — `qemu-user` installed (outstanding), Zig invoked at
+  **`/home/alr/.zvm/0.16.0/zig`** with **`-Dtarget=x86-linux-musl -fqemu`**, and **both `test` and
+  `difftest` confirmed running**; `40-01` does not start until this passes.
 - **64-bit focused smoke** (M4; clone / dense-AND / select / lazyOr+repair; ≤5%, five fresh processes)
   shows no regression.
 - Address-space limitation documented in the README / allocator guidance.
@@ -245,11 +287,11 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
 
 ## Chunk plan (confirm at review)
 
-- **`40-00`** — width-generic `TaggedPtr`; **comptime invariants** (`@compileError`); **all fixed-width
-  cleanup** including `bench_lazy_or_attribution.zig:170` (convert or explicitly exclude);
-  **compile-only 32-bit matrix** incl. the scalar-fallback target; **deterministic serialization fixtures
-  + producer/consumer protocol**; the chosen **build guard** (`zig build check-32` recommended); 64-bit
-  focused smoke. **All runnable on existing 64-bit hosts — no emulator.**
+- **`40-00`** — width-generic `TaggedPtr`; **comptime invariants** (`@compileError`); **centralized
+  `rawAddr()` decode** with `bench_lazy_or_attribution.zig:170` routed through it; the **compile-only
+  breadth matrix**; **deterministic width-independent serialization fixtures + producer/consumer
+  protocol**; **`zig build check-32` (required)**; corrected `container.zig:7` comment; 64-bit focused
+  smoke. **All runnable on existing 64-bit hosts — no emulator.**
 - **`40-01`** — **pinned runtime setup** (static `x86-linux-musl` under `qemu-i386`, preflighted for both
   `test` and `difftest`); **actual 32-bit unit + differential execution**; **bidirectional cross-width
   fixture exchange**; address-space limitation documented.
