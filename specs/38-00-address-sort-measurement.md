@@ -2,6 +2,36 @@
 
 # Spec 38-00: Address-sorted traversal — measurement
 
+> **Outcome (2026-08-10) — DONE. Repair NO-GO; descending-payload teardown is the win. No production
+> library code changed; no default or shipping threshold selected.**
+>
+> **Repair sorting REGRESSED on both hosts** — not marginal, a real regression:
+> M4 **8.595 → 10.491 ms (1.221x, +1.896 ms)**; Zen 4 **14.738 → 19.807 ms (1.344x, +5.069 ms)**.
+> *Open question before repair is written off: **which sort was used?** `smp-free-order.md` §4.3 measures
+> `std.sort.pdq` on `[]u8` slices at **86.98 ns/op** — at n≈16,364 that is **1.423 ms**, i.e. most of the
+> M4 regression could be sort cost alone. Radix on the same data is **14.68 ns/op ≈ 0.240 ms**. If the
+> reorder was pdq, repair deserves **one** retest with radix before the NO-GO is final.*
+>
+> **Descending payload-order teardown improves SMP steady-state reuse, AND SURVIVED THE MANDATORY
+> STAGE-3 NOISE CONTROL:** M4 shared noise **7.436 → 5.350 ms (0.719x, −2.086 ms)**; Zen 4 shared noise
+> **22.742 → 19.165 ms (0.843x, −3.577 ms)**. This confirms the **LIFO direction-inversion prediction**
+> (descending frees → ascending next-cycle allocations) and, because it holds under shared-allocator
+> noise, it is **not** a sole-allocator-client artifact.
+>
+> **M4 first-cycle shared-noise ranges OVERLAP ⇒ that cell is INCONCLUSIVE.** The win is established for
+> **steady state (repeated build/teardown cycles)** only — not for one-shot use.
+>
+> **Crossover:** clean diagnostic crossover at **64 containers on M4**, **1,024 on Zen 4**. Per the
+> pinned rule the conservative single value is **1,024**; both are reported, no shipping threshold
+> selected.
+>
+> **libc is MIXED: regresses on M4, improves on Zen 4** — confirming allocator-specific state
+> conditioning, and ruling out any unconditional default.
+>
+> Added benchmark worker, controller script, CRoaring reference helper, build integration, docs.
+> Verified: `zig build`, `zig build test`, `zig build difftest -Doptimize=ReleaseFast`, Windows x86_64
+> cross-build, full five-process M4 and Zen 4 matrices. **Uncommitted at time of report.**
+
 Toplevel: [38-address-sorted-traversal.md](38-address-sorted-traversal.md). Background:
 [allocator-address-order-pathology.md](../docs/allocator-address-order-pathology.md).
 
