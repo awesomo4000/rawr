@@ -173,9 +173,14 @@ than on 64-bit. **Document this as a known limitation**; do not present 32-bit a
 Compiling is cheap; **running** is the work, and leaving the runner open is not acceptable because
 **`difftest` compiles and runs vendored CRoaring (C)**.
 
-**PRIMARY (pinned): statically-linked `x86-linux-musl` under `qemu-i386`.** Static musl avoids a 32-bit
-sysroot; qemu-user gives a real 32-bit ABI; and C compiles and links normally, which is what `difftest`
-needs.
+**PRIMARY (pinned): statically-linked `x86-linux-musl`, executed NATIVELY — no emulator.** Verified on the
+actual Zen 4 / WSL2 host: the kernel runs static i386 binaries directly
+(`ELF 32-bit LSB executable, Intel 80386, statically linked` → `exit=0`). Static musl avoids a 32-bit
+sysroot, and C compiles and links normally, which is what `difftest` needs.
+
+**This still exercises everything the spec cares about** — the real 32-bit ABI, `usize` width, pointer
+layout, musl, and CRoaring's portable path — and it is *preferable* to emulation: faster, fewer moving
+parts, nothing to install.
 
 **Explicitly NOT assumed: wasm32.** The compile evidence in this spec is `wasm32-freestanding`, which
 **does not establish that `wasm32-wasi` can build and run the C-backed differential test.** wasm32 may be
@@ -183,135 +188,48 @@ added later as a *compile-only* target; it is not the execution vehicle.
 
 ### What the runner does and does NOT require (read before installing anything)
 
-- **No Linux distro, VM, rootfs, or `debootstrap`.** `qemu-i386` is **user-mode** emulation: it runs one
-  foreign binary on the host kernel and translates syscalls. There is no guest system.
+- **Nothing to install.** No QEMU, no Linux distro, no VM, no rootfs, no `debootstrap`.
 - **No sysroot and no multilib** — because the binary is **statically linked musl**. That is the whole
   reason musl was chosen. **Do not switch the target to `-gnu`**: a dynamically linked 32-bit binary would
   need a 32-bit loader and libc present, which is where sysroot/multilib pain begins.
-- **No `binfmt_misc` registration.** Zig's `-fqemu` invokes `qemu-i386 <binary>` **explicitly**, so the
-  kernel never has to dispatch foreign binaries. This matters on **WSL2 specifically**, which already uses
-  `binfmt_misc` for Windows `.exe` interop — we sidestep that interaction entirely.
-- **Zig supplies the C toolchain.** It ships musl and compiles the vendored CRoaring itself;
-  `build.zig` threads `target` through to every artifact, so `-Dtarget=x86-linux-musl` reaches the C
-  compilation too. No system cross-compiler needed.
+- **Zig supplies the C toolchain.** It ships musl and compiles the vendored CRoaring itself; `build.zig`
+  threads `target` through to every artifact, so `-Dtarget=x86-linux-musl` reaches the C compilation too.
+  No system cross-compiler needed.
 
-**Known trap — package name vs binary name.** Debian/Ubuntu's `qemu-user-static` installs the binary as
-**`qemu-i386-static`**, but `-fqemu` looks for **`qemu-i386`**. Either install `qemu-user` instead, or
-symlink. **Cheapest first check after installing:**
+**Do NOT pass `-fqemu` — it would not do what an earlier draft of this spec claimed.** Zig 0.16 treats
+`x86` targets as **natively executable on an `x86_64` Linux host**: its runner returns `.native` **before**
+considering QEMU, so `-fqemu` does not force `qemu-i386` for this host/target pair. Earlier text asserting
+that Zig would invoke `qemu-i386`, and the accompanying package-name / symlink / `binfmt_misc` discussion,
+was **wrong and has been removed**.
 
-```sh
-qemu-i386 --version     # must resolve under this exact name
-```
+**If native execution ever proves insufficient**, QEMU must be wired **explicitly** — a custom build step
+prefixing the test artifact with `qemu-i386`. **`-fqemu` will not do it on this host/target pair.**
 
 **Expected CRoaring behaviour on 32-bit (not a defect).** `vendor/roaring.h` sets `CROARING_IS_X64` only
 under `__x86_64__` / `_M_X64`; on `x86-linux-musl` **neither is defined**, so the SIMD/intrinsics block is
 skipped and CRoaring takes its **portable C path by design**. That path is less travelled than the x64
 one, which is exactly why **`difftest` — not unit tests alone — must be part of the preflight.**
 
-**Fallback if qemu proves impractical on WSL2:** `wasm32-wasi` + `wasmtime`. Zig compiles C to wasi too,
-so `difftest` is **not automatically disqualified** there — wasm was rejected as the *primary* vehicle
-only because it was **unproven for the C-backed test**, not because it is known broken. Try it before
-re-architecting anything.
+### Execution host and preflight — NOT blocked; runnable as soon as the fix lands
 
-### Execution host and preflight — OUTSTANDING, blocks `40-01`
-
-**Host (pinned): the Zen 4 / WSL2 machine.** It currently has **neither `qemu-i386` nor `zig` on `PATH`**,
-so this is not a formality — it is real setup work that must land **before `40-01` is finalized**:
-
-1. **Install QEMU user-mode** (`qemu-user` / `qemu-user-static`) — **still outstanding**; `qemu-i386` is
-   not present.
-2. **Zig is present but not on `PATH`** — discovered at **`/home/alr/.zvm/0.16.0/zig`** (0.16.0). Use that
-   explicit path.
-3. **Invoke with `-fqemu`**, so Zig runs foreign-architecture test binaries under qemu-user automatically
-   rather than requiring hand-rolled invocation.
-
-So the intended commands are exactly:
+**Host (pinned): the Zen 4 / WSL2 machine.** Zig is present but **not on `PATH`** — use the explicit path
+**`/home/alr/.zvm/0.16.0/zig`** (0.16.0). **Nothing else needs installing.**
 
 ```sh
-/home/alr/.zvm/0.16.0/zig build test     -Dtarget=x86-linux-musl -fqemu
-/home/alr/.zvm/0.16.0/zig build difftest -Dtarget=x86-linux-musl -fqemu
+/home/alr/.zvm/0.16.0/zig build test     -Dtarget=x86-linux-musl
+/home/alr/.zvm/0.16.0/zig build difftest -Dtarget=x86-linux-musl
 ```
 
-4. **Both must pass.**
+**Both must pass.** If `difftest` cannot be made to run, report it and re-pick the runner — **do NOT
+silently reduce acceptance to unit tests only.** `difftest` is the reason the vehicle had to link C at all,
+so losing it invalidates the choice rather than merely narrowing coverage.
 
-**If `difftest` cannot be made to run there, report it and re-pick the runner — do NOT silently reduce
-acceptance to unit tests only.** `difftest` is the reason the runner had to link C in the first place, so
-losing it would invalidate the choice of vehicle, not just narrow the coverage.
+**`40-01` is no longer blocked on tooling** — the earlier QEMU-installation blocker does not exist. It can
+preflight **immediately after the `TaggedPtr` fix lands**.
 
-**`40-01` is not ready until this preflight succeeds.**
-
-**Secondary compile-only matrix** (no execution required): `wasm32-freestanding`, `arm-linux-musleabi`,
-`riscv32-linux`, `x86-linux -mcpu=baseline`. These are breadth checks across pointer-width targets — **not**
-SIMD-lowering checks, since all of them are scalar (see above).
-
-## Build guard — note the repository currently has NO CI
-
-Verified: there is **no `.github/`, no `.gitlab-ci.yml`, no CI configuration of any kind** in this repo.
-
-**PINNED: add a local `zig build check-32` step** in `build.zig` that cross-compiles the compile-only
-matrix above. Works today with zero infrastructure, runnable by hand, and is exactly what a future CI job
-would invoke.
-
-### What `check-32` compiles — an in-tree API probe, NOT just the module
-
-**Zig is lazily analyzed: a module or static-library build does not instantiate every public API path**,
-so a guard that merely builds the library can pass while the broken code is never semantically analyzed.
-
-**This is not theoretical — it happened while authoring this spec.** The first attempt,
-`zig build-lib src/roaring.zig -target wasm32-freestanding`, **succeeded silently with the `TaggedPtr` bug
-present.** The error only appeared once a probe *referenced* `getArray`. A "module imports successfully"
-guard would therefore have shipped this very defect.
-
-**So `check-32` must compile an in-tree, no-I/O API probe for every matrix target**, referencing enough of
-the surface to force analysis:
-
-- **`RoaringBitmap`:** `init`, `add`, `addRange`, `remove`, `contains`, `cardinality`, `rank`, `select`,
-  `minimum`, `maximum`, `bitwiseAnd`, `bitwiseOr`, `lazyOr`, `repairAfterLazy`,
-  `repairAfterLazyWithOptions`, `clone`, `runOptimize`, `shrinkToFit`, `serialize`, `deserialize`,
-  `serializedSizeInBytes`, `deinit`.
-- **`Roaring64Bitmap`:** `init`, `add`, `contains`, `cardinality`, `deinit`.
-- **No file I/O**, so it builds for freestanding targets. Compile-only — it is never executed.
-
-**The probe must be SEMANTICALLY REACHABLE, or lazy analysis skips it anyway.** Calls sitting in an
-unreferenced helper are not analyzed — the same lazy-analysis rule that let the module-only build pass.
-**Pin the probe as an exported root function** and compile *that object* per target:
-
-```zig
-export fn rawrCheck32Api() void { ... }   // export forces analysis of every call inside
-```
-
-*(This is exactly why the authoring probe caught the bug: it used `export fn`. An unexported helper
-would have produced another false clean.)*
-
-**The serialization *fixture* executable stays separate**, because it needs file I/O and therefore cannot
-target freestanding.
-
-**Introducing GitHub Actions is EXPLICITLY EXCLUDED from this spec.** Bringing CI to a repository that has
-deliberately had none is its own decision and must not arrive as a side effect of a portability fix.
-
-The guard is **build-only** and independent of whether 32-bit *execution* is wired up — it costs seconds
-and would have caught this while it sat latent.
-
-## Out of scope
-
-- **Performance on 32-bit.** No board rows, no ratio gates, no allocator work. The campaign's parity
-  board remains 64-bit only.
-
-### 64-bit non-regression gate — defined, not vague
-
-"Canonical board unchanged" needs a host, rows and tolerance. On 64-bit this change is **identity by
-construction** (`usize == u64`, `Addr == u62`), which the comptime layout assertion above already
-machine-checks — so a full board run is not warranted. Pinned:
-
-- **Host:** M4 (the campaign's subject host).
-- **Rows:** a **focused smoke set** of the container-traversal-heavy rows most sensitive to `TaggedPtr`
-  decode — **`clone (dense)`, `bitwiseAnd (dense)`, `select (dense)`, `lazyOr+repair`**.
-- **Protocol/tolerance:** existing measurement policy — five fresh-process medians + full ranges,
-  **≤ 5% per row**, with the spec-28 layout exception (untouched-row movement is layout only if focused
-  timing is stable *and* disassembly is instruction-identical).
-- Anything beyond that smoke set is not required for a change that is provably a no-op at 64 bits.
-- Any change to the container model, tag scheme, or serialized format.
-- `SmpAllocator` behaviour (32-bit allocator characteristics are not investigated here).
+**Fallback if native execution proves insufficient:** `wasm32-wasi` + `wasmtime` (Zig compiles C to wasi,
+so `difftest` is not automatically disqualified), or explicit QEMU via a custom build step as described
+above.
 
 ## Also fix: the stale alignment comment
 
@@ -334,9 +252,9 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
   **`u32` values and fixed-width PRNG calls only** — no `usize`-dependent operations — with a **checked-in
   corpus hash** asserted on both ends; **cross-width round-trip executed in BOTH directions** (`40-01`),
   byte-identity + set equality.
-- Full test suite **and `difftest` execute and pass** under **static `x86-linux-musl` / `qemu-i386`**,
-  preflighted; if `difftest` cannot run there, that is reported and the runner re-picked — **not**
-  silently downgraded to unit tests.
+- Full test suite **and `difftest` execute and pass** under **static `x86-linux-musl`, natively** (no
+  emulator); if `difftest` cannot run there, that is reported and the runner re-picked — **not** silently
+  downgraded to unit tests.
 - **Decode centralized:** `TaggedPtr.rawAddr()` added, the three getters and
   `bench_lazy_or_attribution.zig:170` all routed through it — **exactly one decode site repository-wide**.
 - **`zig build check-32` added — required**, compiling an **in-tree, no-I/O API probe exported as a root
@@ -345,9 +263,9 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
   exercising the listed `RoaringBitmap` surface plus `Roaring64Bitmap`. **GitHub Actions explicitly out of
   scope.**
 - **`src/container.zig:7` comment corrected** from 8-byte to 4-byte alignment.
-- **Runner preflight completed on the WSL2 host** — `qemu-user` installed (outstanding), Zig invoked at
-  **`/home/alr/.zvm/0.16.0/zig`** with **`-Dtarget=x86-linux-musl -fqemu`**, and **both `test` and
-  `difftest` confirmed running**; `40-01` does not start until this passes.
+- **Runner preflight completed on the WSL2 host** — Zig invoked at **`/home/alr/.zvm/0.16.0/zig`** with
+  **`-Dtarget=x86-linux-musl`** (no `-fqemu`, no install), and **both `test` and `difftest` confirmed
+  running**.
 - **64-bit focused smoke** (M4; clone / dense-AND / select / lazyOr+repair; ≤5%, five fresh processes)
   shows no regression.
 - Address-space limitation documented in the README / allocator guidance.
@@ -360,9 +278,9 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
   breadth matrix**; **deterministic width-independent serialization fixtures + producer/consumer
   protocol**; **`zig build check-32` (required)**; corrected `container.zig:7` comment; 64-bit focused
   smoke. **All runnable on existing 64-bit hosts — no emulator.**
-- **`40-01`** — **pinned runtime setup** (static `x86-linux-musl` under `qemu-i386`, preflighted for both
+- **`40-01`** — **native 32-bit execution** (static `x86-linux-musl`, no emulator, preflighted for both
   `test` and `difftest`); **actual 32-bit unit + differential execution**; **bidirectional cross-width
-  fixture exchange**; address-space limitation documented.
+  fixture exchange**; address-space limitation documented. **Unblocked once the `TaggedPtr` fix lands.**
 
 ## Estimate
 
