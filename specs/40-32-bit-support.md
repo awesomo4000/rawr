@@ -58,9 +58,17 @@ A probe exercising the **full public API** — `add`, `addRange`, `remove`, `con
 `shrinkToFit`, `serialize`, `deserialize` — **compiled clean on wasm32, i386 and arm32**. A separate
 probe exercising **`Roaring64Bitmap`** (u64 *values* on a 32-bit target) also compiled clean.
 
-**`TaggedPtr` is the only compile blocker.** No other pointer-width assumption exists: the only other
-`@intFromPtr` use (`counting_allocator.zig`) is a width-agnostic comparison, and `TaggedPtr` is the only
-fixed-width `packed struct`.
+**`TaggedPtr` is the only compile blocker in the LIBRARY.** But it is **not the only fixed-width pointer
+reconstruction in the repository** — my original survey filtered `src/bench*` out and missed one:
+
+- **`src/bench_lazy_or_attribution.zig:170`** — `@ptrFromInt(@as(u64, tagged.addr) << 2)`, an independent
+  reconstruction of the same encoding in diagnostic tooling.
+
+It must be **either converted to `usize` or explicitly excluded from the 32-bit build surface** — decide
+and record which. Any future duplicate of this decode is a latent 32-bit break; consider whether the
+decode should live only behind `TaggedPtr`'s accessors.
+
+The remaining `@intFromPtr` use (`counting_allocator.zig`) is a width-agnostic comparison and is fine.
 
 ## What compiling does NOT prove
 
@@ -70,7 +78,10 @@ fixed-width `packed struct`.
   pointers are ≥4-byte aligned — but that must be *asserted*, not assumed (below).
 - Arithmetic that is fine at 64-bit `usize` may **overflow or truncate at 32-bit** in ways the type
   checker accepts (e.g. `@as(usize, x) * 4` in size computations).
-- SIMD paths use `@Vector(8, u16)` (128-bit) — valid on wasm32 SIMD128 and i386 SSE2, but unexercised.
+- SIMD paths use `@Vector(8, u16)` (128-bit). **Correction to an earlier draft: baseline i386 does NOT
+  guarantee SSE2** — SIMD lowering depends on target CPU features, and Zig will emit a scalar fallback
+  where they are absent. So 32-bit validation must include **an explicit scalar-fallback target**
+  (e.g. `x86-linux` with `-mcpu=baseline`) as well as a feature-bearing one, to exercise both lowerings.
 - **Nothing has been executed on a 32-bit target.**
 
 ## Alignment headroom shrinks — assert it at comptime
@@ -79,16 +90,27 @@ The 2 tag bits require **≥4-byte alignment**. On 64-bit, containers are 8-byte
 pointers), leaving a spare bit. On 32-bit, `@alignOf` drops to **4** — still sufficient, but **exactly at
 the limit with zero headroom**.
 
-Today this is only a **runtime** `std.debug.assert(raw & 0x3 == 0)`. Add a **comptime** assertion that
-each container type is at least 4-byte aligned, so a future field-layout change that drops alignment
-fails at compile time on 32-bit rather than corrupting pointers at runtime:
+Today this is only a **runtime** `std.debug.assert(raw & 0x3 == 0)`. Add **comptime invariants** so a
+future layout or target change fails at compile time rather than corrupting pointers at runtime — and use
+**descriptive `@compileError`**, not `std.debug.assert`, so the failure explains itself:
 
 ```zig
 comptime {
-    for (.{ ArrayContainer, BitsetContainer, RunContainer }) |T|
-        std.debug.assert(@alignOf(T) >= 4);
+    if (@bitSizeOf(TaggedPtr) != @bitSizeOf(usize))
+        @compileError("TaggedPtr must be exactly pointer-width");
+    if (@sizeOf(TaggedPtr) != @sizeOf(usize))
+        @compileError("TaggedPtr must be exactly pointer-sized");
+    if (@bitSizeOf(usize) < 4)
+        @compileError("target pointer width leaves no room for 2 tag bits");
+    for (.{ ArrayContainer, BitsetContainer, RunContainer }) |T| {
+        if (@alignOf(T) < 4)
+            @compileError(@typeName(T) ++ " must be >=4-byte aligned: TaggedPtr steals 2 low bits");
+    }
 }
 ```
+
+**Also assert 64-bit layout is unchanged** by this spec, since `usize == u64` and `Addr == u62` there —
+the representation is identical *by construction*, and that should be machine-checked rather than argued.
 
 ## Cross-width serialization must be proven, not assumed
 
@@ -96,9 +118,20 @@ The portable format looks width-independent — `serialize.zig` uses `usize` onl
 arithmetic**, and all stored fields are fixed-width (the `* 4` / `* 2` byte accounting confirms it). But
 this is exactly the kind of property that breaks silently.
 
-**Required test: cross-width round-trip.** Serialize on 64-bit → deserialize on 32-bit, **and the
-reverse**, asserting byte-identity and set equality. This is the highest-value new test in the spec and
-it is what makes 32-bit support *meaningful* rather than merely compiling.
+**Required test: cross-width round-trip** — serialize on 64-bit → deserialize on 32-bit **and the
+reverse**, asserting byte-identity and set equality. Highest-value new test in the spec; it is what makes
+32-bit support *meaningful* rather than merely compiling.
+
+**It CANNOT be completed in `40-00`** — a genuine 64→32→64 round trip requires **executing 32-bit code**,
+which `40-00` deliberately does not do. So it splits:
+
+| chunk | responsibility |
+|---|---|
+| **`40-00`** | build the **deterministic fixture corpus** (pinned seeds/shapes, incl. all three container types, empty, single-container, and chunk-boundary cases) and the **producer/consumer protocol** — file format, invocation, comparison rules. Prove the 64-bit→64-bit path with it. |
+| **`40-01`** | **execute both directions** under the pinned 32-bit runtime and compare. |
+
+Fixtures must be **byte-reproducible** so producer and consumer can be run on different hosts at
+different times.
 
 ## Address space is a real limitation — document it
 
@@ -106,28 +139,59 @@ A 32-bit process has ~2–4 GB usable. A worst-case dense bitmap is 65,536 conta
 payload** before overhead, so large bitmaps are feasible but **allocation failure is far more likely**
 than on 64-bit. **Document this as a known limitation**; do not present 32-bit as equivalent.
 
-## Test execution story — the real deliverable
+## Test execution — ONE pinned target and runner
 
-Compiling is cheap; **running** is the work. Pick and pin one:
+Compiling is cheap; **running** is the work, and leaving the runner open is not acceptable because
+**`difftest` compiles and runs vendored CRoaring (C)**.
 
-| option | notes |
-|---|---|
-| **`wasmtime` / `node` on wasm32-wasi** | likely the cheapest — no emulator, Zig targets wasi well |
-| **`qemu-user`** (i386 / arm / riscv32) | closest to a real 32-bit ABI; needs toolchain setup |
-| real 32-bit hardware | unnecessary |
+**PRIMARY (pinned): statically-linked `x86-linux-musl` under `qemu-i386`.** Static musl avoids a 32-bit
+sysroot; qemu-user gives a real 32-bit ABI; and C compiles and links normally, which is what `difftest`
+needs.
 
-Whichever is chosen, the **existing test suite plus `difftest` must run and pass** on it.
+**Explicitly NOT assumed: wasm32.** The compile evidence in this spec is `wasm32-freestanding`, which
+**does not establish that `wasm32-wasi` can build and run the C-backed differential test.** wasm32 may be
+added later as a *compile-only* target; it is not the execution vehicle.
 
-## CI guard
+**Preflight before committing to the plan:** confirm that **both `zig build test` AND `zig build difftest`**
+build and run under `qemu-i386` with static musl. If `difftest` cannot be made to run there, say so and
+re-pick — do not silently reduce the acceptance to unit tests only.
 
-A **cross-compile check costs seconds and needs no emulator** — it would have caught this before it sat
-latent. Add `zig build-obj`/`build-lib` for **wasm32 and one of i386/arm32** to CI as a build-only gate,
-independent of whether test *execution* on 32-bit is wired up.
+**Secondary compile-only matrix** (no execution required): `wasm32-freestanding`, `arm-linux-musleabi`,
+`riscv32-linux`, and `x86-linux -mcpu=baseline` (the scalar-fallback case).
+
+## Build guard — note the repository currently has NO CI
+
+Verified: there is **no `.github/`, no `.gitlab-ci.yml`, no CI configuration of any kind** in this repo.
+So "add it to CI" is not actionable as written. **Pick one and record it:**
+
+- **(RECOMMENDED) a local `zig build check-32` step** in `build.zig` that cross-compiles the
+  compile-only matrix above. Works today with zero infrastructure, is runnable by hand, and is exactly
+  what a future CI job would invoke.
+- **(alternative) introduce GitHub Actions** as part of this spec — a larger change that brings CI to a
+  repository that has deliberately had none, and should be a separate decision rather than a side effect
+  of a portability fix.
+
+Either way the guard is **build-only** and independent of whether 32-bit *execution* is wired up — it
+costs seconds and would have caught this while it sat latent.
 
 ## Out of scope
 
 - **Performance on 32-bit.** No board rows, no ratio gates, no allocator work. The campaign's parity
   board remains 64-bit only.
+
+### 64-bit non-regression gate — defined, not vague
+
+"Canonical board unchanged" needs a host, rows and tolerance. On 64-bit this change is **identity by
+construction** (`usize == u64`, `Addr == u62`), which the comptime layout assertion above already
+machine-checks — so a full board run is not warranted. Pinned:
+
+- **Host:** M4 (the campaign's subject host).
+- **Rows:** a **focused smoke set** of the container-traversal-heavy rows most sensitive to `TaggedPtr`
+  decode — **`clone (dense)`, `bitwiseAnd (dense)`, `select (dense)`, `lazyOr+repair`**.
+- **Protocol/tolerance:** existing measurement policy — five fresh-process medians + full ranges,
+  **≤ 5% per row**, with the spec-28 layout exception (untouched-row movement is layout only if focused
+  timing is stable *and* disassembly is instruction-identical).
+- Anything beyond that smoke set is not required for a change that is provably a no-op at 64 bits.
 - Any change to the container model, tag scheme, or serialized format.
 - `SmpAllocator` behaviour (32-bit allocator characteristics are not investigated here).
 
@@ -136,19 +200,30 @@ independent of whether test *execution* on 32-bit is wired up.
 - `TaggedPtr` made width-generic; **`zig build` succeeds for wasm32 and at least one of
   i386 / arm32 / riscv32**; 64-bit unaffected (byte-identical behaviour, board unmoved).
 - **Comptime alignment assertion** added for all container types.
-- **Cross-width serialization round-trip** test passing in both directions (byte-identity + set equality).
-- Full test suite **and `difftest` execute and pass on a 32-bit target** via the chosen execution story.
-- **CI cross-compile guard** added.
+- **Fixture corpus + producer/consumer protocol** defined and byte-reproducible (`40-00`); **cross-width
+  round-trip executed in BOTH directions** (`40-01`), byte-identity + set equality.
+- Full test suite **and `difftest` execute and pass** under **static `x86-linux-musl` / `qemu-i386`**,
+  preflighted; if `difftest` cannot run there, that is reported and the runner re-picked — **not**
+  silently downgraded to unit tests.
+- **`bench_lazy_or_attribution.zig:170` converted to `usize` or explicitly excluded** from the 32-bit
+  surface, with the choice recorded.
+- **Build guard added** via the chosen mechanism (`zig build check-32` recommended), covering the
+  compile-only matrix **including the scalar-fallback target**.
+- **64-bit focused smoke** (M4; clone / dense-AND / select / lazyOr+repair; ≤5%, five fresh processes)
+  shows no regression.
 - Address-space limitation documented in the README / allocator guidance.
 - `zig build test`, `ReleaseSafe`, `ReleaseFast` green on 64-bit; canonical board unchanged.
 
 ## Chunk plan (confirm at review)
 
-- **`40-00`** — the fix + comptime alignment assert + CI cross-compile guard + cross-width round-trip
-  test (runnable entirely on existing 64-bit hosts). Delivers "compiles everywhere, format proven
-  portable, regression-guarded" **without** needing an emulator.
-- **`40-01`** — 32-bit **test execution** (wasmtime or qemu-user), suite + `difftest` green, limitation
-  documented.
+- **`40-00`** — width-generic `TaggedPtr`; **comptime invariants** (`@compileError`); **all fixed-width
+  cleanup** including `bench_lazy_or_attribution.zig:170` (convert or explicitly exclude);
+  **compile-only 32-bit matrix** incl. the scalar-fallback target; **deterministic serialization fixtures
+  + producer/consumer protocol**; the chosen **build guard** (`zig build check-32` recommended); 64-bit
+  focused smoke. **All runnable on existing 64-bit hosts — no emulator.**
+- **`40-01`** — **pinned runtime setup** (static `x86-linux-musl` under `qemu-i386`, preflighted for both
+  `test` and `difftest`); **actual 32-bit unit + differential execution**; **bidirectional cross-width
+  fixture exchange**; address-space limitation documented.
 
 ## Estimate
 
