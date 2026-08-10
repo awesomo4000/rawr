@@ -83,9 +83,8 @@ pub fn rawAddr(self: TaggedPtr) usize {
 there is exactly one decode site in the repository**, so the regression cannot recur regardless of what
 `check-32` compiles.
 
-*(Fallback, only if centralizing proves impractical: convert the diagnostic to `usize` **and** add
-`x86-linux-musl` compilation of it to `check-32`. Centralizing is preferred — it removes the failure mode
-instead of widening the net that catches it.)*
+**No alternative path.** Centralization is the pinned approach — patching the copy while leaving a second
+decode site in the tree is not an accepted fallback.
 
 The remaining `@intFromPtr` use (`counting_allocator.zig`) is a width-agnostic comparison and is fine.
 
@@ -221,6 +220,29 @@ Verified: there is **no `.github/`, no `.gitlab-ci.yml`, no CI configuration of 
 matrix above. Works today with zero infrastructure, runnable by hand, and is exactly what a future CI job
 would invoke.
 
+### What `check-32` compiles — an in-tree API probe, NOT just the module
+
+**Zig is lazily analyzed: a module or static-library build does not instantiate every public API path**,
+so a guard that merely builds the library can pass while the broken code is never semantically analyzed.
+
+**This is not theoretical — it happened while authoring this spec.** The first attempt,
+`zig build-lib src/roaring.zig -target wasm32-freestanding`, **succeeded silently with the `TaggedPtr` bug
+present.** The error only appeared once a probe *referenced* `getArray`. A "module imports successfully"
+guard would therefore have shipped this very defect.
+
+**So `check-32` must compile an in-tree, no-I/O API probe for every matrix target**, referencing enough of
+the surface to force analysis:
+
+- **`RoaringBitmap`:** `init`, `add`, `addRange`, `remove`, `contains`, `cardinality`, `rank`, `select`,
+  `minimum`, `maximum`, `bitwiseAnd`, `bitwiseOr`, `lazyOr`, `repairAfterLazy`,
+  `repairAfterLazyWithOptions`, `clone`, `runOptimize`, `shrinkToFit`, `serialize`, `deserialize`,
+  `serializedSizeInBytes`, `deinit`.
+- **`Roaring64Bitmap`:** `init`, `add`, `contains`, `cardinality`, `deinit`.
+- **No file I/O**, so it builds for freestanding targets. Compile-only — it is never executed.
+
+**The serialization *fixture* executable stays separate**, because it needs file I/O and therefore cannot
+target freestanding.
+
 **Introducing GitHub Actions is EXPLICITLY EXCLUDED from this spec.** Bringing CI to a repository that has
 deliberately had none is its own decision and must not arrive as a side effect of a portability fix.
 
@@ -274,8 +296,10 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
   silently downgraded to unit tests.
 - **Decode centralized:** `TaggedPtr.rawAddr()` added, the three getters and
   `bench_lazy_or_attribution.zig:170` all routed through it — **exactly one decode site repository-wide**.
-- **`zig build check-32` added — required**, covering the compile-only **breadth matrix**
-  (**GitHub Actions explicitly out of scope**).
+- **`zig build check-32` added — required**, compiling an **in-tree, no-I/O API probe** (not merely the
+  module — Zig's lazy analysis makes a module-only guard shallow enough to have missed this very bug)
+  across the compile-only **breadth matrix**, exercising the listed `RoaringBitmap` surface plus
+  `Roaring64Bitmap`. **GitHub Actions explicitly out of scope.**
 - **`src/container.zig:7` comment corrected** from 8-byte to 4-byte alignment.
 - **Runner preflight completed on the WSL2 host** — `qemu-user` installed (outstanding), Zig invoked at
   **`/home/alr/.zvm/0.16.0/zig`** with **`-Dtarget=x86-linux-musl -fqemu`**, and **both `test` and
@@ -298,5 +322,6 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
 
 ## Estimate
 
-**S** for `40-00` — the fix is 4 lines and already verified; the round-trip test and CI guard are small.
+**S** for `40-00` — the fix is 4 lines and already verified; the fixture protocol and build guard are
+small.
 **M** for `40-01` — dominated by toolchain/runner setup, not by code.
