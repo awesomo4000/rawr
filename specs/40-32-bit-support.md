@@ -147,7 +147,7 @@ which `40-00` deliberately does not do. So it splits:
 
 | chunk | responsibility |
 |---|---|
-| **`40-00`** | build the **deterministic fixture corpus** (pinned seeds/shapes, incl. all three container types, empty, single-container, and chunk-boundary cases) and the **producer/consumer protocol** — file format, invocation, comparison rules. Prove the 64-bit→64-bit path with it. |
+| **`40-00`** | build the **deterministic fixture corpus** and the **producer/consumer protocol** — file format, invocation, comparison rules. Prove the 64-bit→64-bit path with it. Corpus must cover **both bitmap types**: (a) `RoaringBitmap` — all three container types, empty, single-container, chunk-boundary; (b) **`Roaring64Bitmap` — spanning MULTIPLE high-32-bit buckets**, plus empty and single-bucket, exercising `serialize`/`deserialize`. |
 | **`40-01`** | **execute both directions** under the pinned 32-bit runtime and compare. |
 
 Fixtures must be **byte-reproducible** so producer and consumer can be run on different hosts at
@@ -216,13 +216,17 @@ one, which is exactly why **`difftest` — not unit tests alone — must be part
 **`/home/alr/.zvm/0.16.0/zig`** (0.16.0). **Nothing else needs installing.**
 
 ```sh
-/home/alr/.zvm/0.16.0/zig build test     -Dtarget=x86-linux-musl
-/home/alr/.zvm/0.16.0/zig build difftest -Dtarget=x86-linux-musl
+/home/alr/.zvm/0.16.0/zig build test       -Dtarget=x86-linux-musl
+/home/alr/.zvm/0.16.0/zig build difftest   -Dtarget=x86-linux-musl
+/home/alr/.zvm/0.16.0/zig build test64     -Dtarget=x86-linux-musl
+/home/alr/.zvm/0.16.0/zig build difftest64 -Dtarget=x86-linux-musl
 ```
 
-**Both must pass.** If `difftest` cannot be made to run, report it and re-pick the runner — **do NOT
-silently reduce acceptance to unit tests only.** `difftest` is the reason the vehicle had to link C at all,
-so losing it invalidates the choice rather than merely narrowing coverage.
+**All four must pass.** **`test64` and `difftest64` are separate build steps** — `difftest` does **not**
+cover `Roaring64Bitmap`, and an earlier draft claimed 64-bit-value support while gating only the 32-bit
+paths. If any of them cannot be made to run, report it and re-pick the runner — **do NOT silently reduce
+acceptance to unit tests only.** The differential steps are the reason the vehicle had to link C at all, so
+losing them invalidates the choice rather than merely narrowing coverage.
 
 **`40-01` is no longer blocked on tooling** — the earlier QEMU-installation blocker does not exist. It can
 preflight **immediately after the `TaggedPtr` fix lands**.
@@ -250,11 +254,13 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
 - **Comptime alignment assertion** added for all container types.
 - **Fixture corpus + producer/consumer protocol** defined and byte-reproducible (`40-00`), generated with
   **`u32` values and fixed-width PRNG calls only** — no `usize`-dependent operations — with a **checked-in
-  corpus hash** asserted on both ends; **cross-width round-trip executed in BOTH directions** (`40-01`),
-  byte-identity + set equality.
-- Full test suite **and `difftest` execute and pass** under **static `x86-linux-musl`, natively** (no
-  emulator); if `difftest` cannot run there, that is reported and the runner re-picked — **not** silently
-  downgraded to unit tests.
+  corpus hash** asserted on both ends, covering **both `RoaringBitmap` and `Roaring64Bitmap` (the latter
+  spanning multiple high-32-bit buckets)**; **cross-width round-trip executed in BOTH directions**
+  (`40-01`), byte-identity + set equality.
+- **All four suites — `test`, `difftest`, `test64`, `difftest64` — execute and pass** under **static
+  `x86-linux-musl`, natively** (no emulator). `Roaring64Bitmap` is in the support claim, so its
+  **differential** step is required, not just its unit tests. If any cannot run there, that is reported
+  and the runner re-picked — **not** silently downgraded.
 - **Decode centralized:** `TaggedPtr.rawAddr()` added, the three getters and
   `bench_lazy_or_attribution.zig:170` all routed through it — **exactly one decode site repository-wide**.
 - **`zig build check-32` added — required**, compiling an **in-tree, no-I/O API probe exported as a root
@@ -286,4 +292,6 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
 
 **S** for `40-00` — the fix is 4 lines and already verified; the fixture protocol and build guard are
 small.
-**M** for `40-01` — dominated by toolchain/runner setup, not by code.
+**M** for `40-01` — **no longer dominated by runner setup** (native execution needs no install). The work
+is **runtime debugging of whatever 32-bit failures the four suites surface** (`test`, `difftest`, `test64`,
+`difftest64`) and the **bidirectional cross-width fixture exchange**, including the Roaring64 corpus.
