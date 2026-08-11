@@ -66,8 +66,9 @@ Using `40-00`'s corpus and protocol:
 - **Bidirectional cross-width round-trip** passes for both bitmap types: byte-identity + set equality;
   corpus hash agrees across widths.
 - Address-space limitation documented; supported targets and commands recorded.
-- 64-bit unaffected — board unchanged, `zig build test` / `difftest` / `ReleaseSafe` / `ReleaseFast`
-  green.
+- 64-bit unaffected — board unchanged, and **all four 64-bit suites green: `test`, `difftest`, `test64`,
+  `difftest64`** (runtime-discovered fixes in this chunk may touch `Roaring64Bitmap` code), plus
+  `ReleaseSafe` and `ReleaseFast`.
 
 ## Estimate
 

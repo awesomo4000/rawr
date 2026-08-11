@@ -125,9 +125,23 @@ warranted.
 
 - `TaggedPtr` width-generic; `bench_lazy_or_attribution.zig:170` routed through `rawAddr()`;
   `container.zig:7` comment corrected to 4-byte.
-- **Verified by search, not assertion:** an `rg` over the repository confirms **`rawAddr()` holds the only
-  address-shift decode** — e.g. no remaining `\.addr\s*(<<|\*)\s*(2|4)` outside it. Record the command
-  and its output.
+- **Verified by search, not assertion — with a command that actually matches.** A narrow pattern like
+  `\.addr\s*(<<|\*)\s*(2|4)` **does not work**: the real decode is `@as(usize, self.addr) << 2`, so a
+  `)` sits between `.addr` and `<<`. That pattern returns **zero matches against the current source** —
+  i.e. it would pass with the defect fully present. Use a **broad review command and read the output**:
+
+  ```sh
+  rg -n '\.addr\b|@ptrFromInt|rawAddr\(' src --glob '*.zig'
+  ```
+
+  **Record the command and its output**, and confirm by eye that **`rawAddr()` contains the only decode**.
+  Remaining `.addr` uses must be **encode or compare only**.
+
+  Known, acceptable hits at time of writing: `range_strategy_tests.zig:363` (**compare**);
+  `container.zig:38` and `bench_lazy_or_attribution.zig:164` (**encode** — `.addr = @truncate(raw >> 2)`).
+  Note `:164` is a *second copy of the encoding*, but `@truncate` is width-safe (`raw >> 2` truncated to
+  `Addr`), so it is **not** a 32-bit break and is permitted under the encode-only rule — routing it through
+  a shared init helper is optional tidying, not required here.
 - Comptime `@compileError` invariants in place.
 - **`zig build check-32` added**, compiling the **exported** probe across the breadth matrix, covering
   both listed surfaces including **both** Roaring64 deserialize paths.
