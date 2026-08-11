@@ -368,12 +368,13 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
 
 ## Chunk plan (confirm at review)
 
-- **`40-00`** — width-generic `TaggedPtr`; **comptime invariants** (`@compileError`); **centralized
-  `rawAddr()` decode** with `bench_lazy_or_attribution.zig:170` routed through it; the **compile-only
-  breadth matrix**; **deterministic width-independent serialization fixtures + producer/consumer
-  protocol**; **`zig build check-32` (required)**; corrected `container.zig:7` comment; 64-bit focused
-  smoke. **All runnable on existing 64-bit hosts — no emulator.**
-- **`40-01`** — **native 32-bit execution** (static `x86-linux-musl`, no emulator, preflighted for **all four suites** —
+- **[`40-00`](40-00-width-generic-tagged-ptr.md)** — width-generic `TaggedPtr`; **comptime invariants**
+  (`@compileError`); **centralized `rawAddr()` decode** with `bench_lazy_or_attribution.zig:170` routed
+  through it; the **compile-only breadth matrix**; **deterministic width-independent serialization
+  fixtures + producer/consumer protocol**; **`zig build check-32` (required)**; corrected
+  `container.zig:7` comment; 64-bit focused smoke. **All runnable on existing 64-bit hosts — no
+  emulator.**
+- **[`40-01`](40-01-native-32-bit-execution.md)** — **native 32-bit execution** (static `x86-linux-musl`, no emulator, preflighted for **all four suites** —
   `test`, `difftest`, `test64`, `difftest64`); **actual 32-bit unit + differential execution**; **bidirectional cross-width
   fixture exchange**; address-space limitation documented. **Unblocked once the `TaggedPtr` fix lands.**
 
