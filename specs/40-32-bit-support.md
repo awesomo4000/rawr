@@ -186,6 +186,10 @@ parts, nothing to install.
 **does not establish that `wasm32-wasi` can build and run the C-backed differential test.** wasm32 may be
 added later as a *compile-only* target; it is not the execution vehicle.
 
+**Secondary compile-only matrix** (no execution required): `wasm32-freestanding`, `arm-linux-musleabi`,
+`riscv32-linux`, `x86-linux -mcpu=baseline`. These are breadth checks across pointer-width targets — **not**
+SIMD-lowering checks, since all of them are scalar (see above).
+
 ### What the runner does and does NOT require (read before installing anything)
 
 - **Nothing to install.** No QEMU, no Linux distro, no VM, no rootfs, no `debootstrap`.
@@ -235,6 +239,81 @@ preflight **immediately after the `TaggedPtr` fix lands**.
 so `difftest` is not automatically disqualified), or explicit QEMU via a custom build step as described
 above.
 
+## Build guard — note the repository currently has NO CI
+
+Verified: there is **no `.github/`, no `.gitlab-ci.yml`, no CI configuration of any kind** in this repo.
+
+**PINNED: add a local `zig build check-32` step** in `build.zig` that cross-compiles the compile-only
+matrix above. Works today with zero infrastructure, runnable by hand, and is exactly what a future CI job
+would invoke.
+
+### What `check-32` compiles — an in-tree API probe, NOT just the module
+
+**Zig is lazily analyzed: a module or static-library build does not instantiate every public API path**,
+so a guard that merely builds the library can pass while the broken code is never semantically analyzed.
+
+**This is not theoretical — it happened while authoring this spec.** The first attempt,
+`zig build-lib src/roaring.zig -target wasm32-freestanding`, **succeeded silently with the `TaggedPtr` bug
+present.** The error only appeared once a probe *referenced* `getArray`. A "module imports successfully"
+guard would therefore have shipped this very defect.
+
+**So `check-32` must compile an in-tree, no-I/O API probe for every matrix target**, referencing enough of
+the surface to force analysis:
+
+- **`RoaringBitmap`:** `init`, `add`, `addRange`, `remove`, `contains`, `cardinality`, `rank`, `select`,
+  `minimum`, `maximum`, `bitwiseAnd`, `bitwiseOr`, `lazyOr`, `repairAfterLazy`,
+  `repairAfterLazyWithOptions`, `clone`, `runOptimize`, `shrinkToFit`, `serialize`, `deserialize`,
+  `serializedSizeInBytes`, `deinit`.
+- **`Roaring64Bitmap`** — not just `add`/`contains`/`cardinality`; instantiate the **positional, set
+  and serialization** paths too: `init`, `add`, `addRange`, `remove`, `contains`, `cardinality`,
+  **`rank`**, **`select`**, `minimum`, `maximum`, **`bitwiseAnd`**, **`bitwiseOr`**,
+  **`bitwiseDifference`**, `clone`, **`serializedSizeInBytes`**, **`serialize`**, `deinit`. These are
+  where `usize`/`u64` conflation would surface on a 32-bit target — e.g. `serializedSizeInBytes` returns
+  `!usize` and accumulates via `std.math.add(usize, ...)`, while `rank`/`select`/`cardinality` return
+  `u64`.
+- **No file I/O**, so it builds for freestanding targets. Compile-only — it is never executed.
+
+**The probe must be SEMANTICALLY REACHABLE, or lazy analysis skips it anyway.** Calls sitting in an
+unreferenced helper are not analyzed — the same lazy-analysis rule that let the module-only build pass.
+**Pin the probe as an exported root function** and compile *that object* per target:
+
+```zig
+export fn rawrCheck32Api() void { ... }   // export forces analysis of every call inside
+```
+
+*(This is exactly why the authoring probe caught the bug: it used `export fn`. An unexported helper
+would have produced another false clean.)*
+
+**The serialization *fixture* executable stays separate**, because it needs file I/O and therefore cannot
+target freestanding.
+
+**Introducing GitHub Actions is EXPLICITLY EXCLUDED from this spec.** Bringing CI to a repository that has
+deliberately had none is its own decision and must not arrive as a side effect of a portability fix.
+
+The guard is **build-only** and independent of whether 32-bit *execution* is wired up — it costs seconds
+and would have caught this while it sat latent.
+
+## Out of scope
+
+- **Performance on 32-bit.** No board rows, no ratio gates, no allocator work. The campaign's parity
+  board remains 64-bit only.
+
+### 64-bit non-regression gate — defined, not vague
+
+"Canonical board unchanged" needs a host, rows and tolerance. On 64-bit this change is **identity by
+construction** (`usize == u64`, `Addr == u62`), which the comptime layout assertion above already
+machine-checks — so a full board run is not warranted. Pinned:
+
+- **Host:** M4 (the campaign's subject host).
+- **Rows:** a **focused smoke set** of the container-traversal-heavy rows most sensitive to `TaggedPtr`
+  decode — **`clone (dense)`, `bitwiseAnd (dense)`, `select (dense)`, `lazyOr+repair`**.
+- **Protocol/tolerance:** existing measurement policy — five fresh-process medians + full ranges,
+  **≤ 5% per row**, with the spec-28 layout exception (untouched-row movement is layout only if focused
+  timing is stable *and* disassembly is instruction-identical).
+- Anything beyond that smoke set is not required for a change that is provably a no-op at 64 bits.
+- Any change to the container model, tag scheme, or serialized format.
+- `SmpAllocator` behaviour (32-bit allocator characteristics are not investigated here).
+
 ## Also fix: the stale alignment comment
 
 `src/container.zig:7` currently reads:
@@ -270,8 +349,8 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
   scope.**
 - **`src/container.zig:7` comment corrected** from 8-byte to 4-byte alignment.
 - **Runner preflight completed on the WSL2 host** — Zig invoked at **`/home/alr/.zvm/0.16.0/zig`** with
-  **`-Dtarget=x86-linux-musl`** (no `-fqemu`, no install), and **both `test` and `difftest` confirmed
-  running**.
+  **`-Dtarget=x86-linux-musl`** (no `-fqemu`, no install), and **all four suites — `test`, `difftest`,
+  `test64`, `difftest64` — confirmed running**.
 - **64-bit focused smoke** (M4; clone / dense-AND / select / lazyOr+repair; ≤5%, five fresh processes)
   shows no regression.
 - Address-space limitation documented in the README / allocator guidance.
@@ -284,8 +363,8 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
   breadth matrix**; **deterministic width-independent serialization fixtures + producer/consumer
   protocol**; **`zig build check-32` (required)**; corrected `container.zig:7` comment; 64-bit focused
   smoke. **All runnable on existing 64-bit hosts — no emulator.**
-- **`40-01`** — **native 32-bit execution** (static `x86-linux-musl`, no emulator, preflighted for both
-  `test` and `difftest`); **actual 32-bit unit + differential execution**; **bidirectional cross-width
+- **`40-01`** — **native 32-bit execution** (static `x86-linux-musl`, no emulator, preflighted for **all four suites** —
+  `test`, `difftest`, `test64`, `difftest64`); **actual 32-bit unit + differential execution**; **bidirectional cross-width
   fixture exchange**; address-space limitation documented. **Unblocked once the `TaggedPtr` fix lands.**
 
 ## Estimate
