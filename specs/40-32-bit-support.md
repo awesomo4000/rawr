@@ -156,8 +156,14 @@ different times — and that requires **width-independent generation, which is e
 - **Never generate with `usize`-dependent operations.** `random().int(usize)`, `uintLessThan(usize, n)`,
   or any length/index typed `usize` produce **different corpora on 32-bit and 64-bit**, silently making
   the "same" fixture different on the two ends — which would look like a serialization bug.
-- **Pin: values are `u32`, and the generator uses only fixed-width PRNG calls** (`int(u32)`,
-  `uintLessThan(u32, n)`) with a pinned seed.
+- **Pin the value width PER BITMAP TYPE** — "all values are `u32`" would contradict the
+  multiple-high-32-bit-bucket requirement for `Roaring64Bitmap`:
+  - **`RoaringBitmap`:** `u32` values.
+  - **`Roaring64Bitmap`:** **`u64` values built from fixed `u32` high/low halves** —
+    `(@as(u64, high) << 32) | low`, with `high` chosen to span **several distinct buckets**. Never a
+    single width-dependent draw.
+- **The generator uses only fixed-width PRNG calls** (`int(u32)`, `uintLessThan(u32, n)`) with a pinned
+  seed — **never** `int(usize)` / `uintLessThan(usize, …)`.
 - **Belt and braces: check in an expected hash (or the bytes) of the generated corpus**, asserted on both
   ends, so any width-dependent drift fails loudly at generation time rather than being misdiagnosed as a
   format defect downstream.
@@ -267,7 +273,10 @@ the surface to force analysis:
 - **`Roaring64Bitmap`** — not just `add`/`contains`/`cardinality`; instantiate the **positional, set
   and serialization** paths too: `init`, `add`, `addRange`, `remove`, `contains`, `cardinality`,
   **`rank`**, **`select`**, `minimum`, `maximum`, **`bitwiseAnd`**, **`bitwiseOr`**,
-  **`bitwiseDifference`**, `clone`, **`serializedSizeInBytes`**, **`serialize`**, `deinit`. These are
+  **`bitwiseDifference`**, `clone`, **`serializedSizeInBytes`**, **`serialize`**, **`deserialize`**,
+  **`deserializeSafe`**, `deinit`. **Both serialization directions must be analyzed** — an earlier draft
+  listed only `serialize`, leaving the deserialize implementation unanalyzed by the breadth matrix. These
+  are
   where `usize`/`u64` conflation would surface on a 32-bit target — e.g. `serializedSizeInBytes` returns
   `!usize` and accumulates via `std.math.add(usize, ...)`, while `rank`/`select`/`cardinality` return
   `u64`.
@@ -332,7 +341,8 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
   i386 / arm32 / riscv32**; 64-bit unaffected (byte-identical behaviour, board unmoved).
 - **Comptime alignment assertion** added for all container types.
 - **Fixture corpus + producer/consumer protocol** defined and byte-reproducible (`40-00`), generated with
-  **`u32` values and fixed-width PRNG calls only** — no `usize`-dependent operations — with a **checked-in
+  **fixed-width PRNG calls only and per-type value widths** (`u32` for `RoaringBitmap`; `u64` from fixed
+  `u32` high/low halves for `Roaring64Bitmap`) — no `usize`-dependent operations — with a **checked-in
   corpus hash** asserted on both ends, covering **both `RoaringBitmap` and `Roaring64Bitmap` (the latter
   spanning multiple high-32-bit buckets)**; **cross-width round-trip executed in BOTH directions**
   (`40-01`), byte-identity + set equality.
