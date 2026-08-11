@@ -18,15 +18,17 @@ pub const TaggedPtr = packed struct(usize) {
     /// Pointer bits minus the 2 tag bits: 62 on 64-bit, 30 on 32-bit.
     pub const Addr = std.meta.Int(.unsigned, @bitSizeOf(usize) - 2);
 
-    /// The decoded address, tag bits removed. The ONLY place this shift lives.
+    /// The decoded address, tag bits removed. Route ALL address decoding through this —
+    /// do not re-derive `.addr << 2` elsewhere.
     pub fn rawAddr(self: TaggedPtr) usize {
         return @as(usize, self.addr) << 2;
     }
 ```
 
 - `getArray` / `getBitset` / `getRun` become `@ptrFromInt(self.rawAddr())`.
-- **`src/bench_lazy_or_attribution.zig:170` routed through `rawAddr()`** — after this there is
-  **exactly one decode site repository-wide**, so the class of bug cannot recur.
+- **`src/bench_lazy_or_attribution.zig:170` routed through `rawAddr()`** — this removes **all current
+  duplicate decode sites**, leaving `rawAddr()` as the single one. It does **not** make recurrence
+  impossible: nothing stops someone writing `.addr << 2` again later. Hence the acceptance check below.
 - **Update the stale comment at `src/container.zig:7`**: it says pointers are "at least 8-byte aligned";
   the invariant is **≥4-byte**.
 
@@ -67,7 +69,13 @@ referenced `getArray`. A "module builds" guard would have shipped it.
 export fn rawrCheck32Api() void { ... }
 ```
 
-**Surface it must reference** (no file I/O, so it builds freestanding; compile-only, never executed):
+**Allocator — pin it, "no file I/O" is not sufficient.** `smp_allocator`, `page_allocator` and
+`c_allocator` can each fail to build or link on `wasm32-freestanding` for reasons unrelated to pointer
+width, which would make the guard fail for the wrong cause (or force dropping the freestanding target).
+**Use a `FixedBufferAllocator` over local or static storage** — no OS, no libc, no syscalls.
+
+**Surface it must reference** (no file I/O either, so it builds freestanding; compile-only, never
+executed):
 
 - **`RoaringBitmap`:** `init`, `add`, `addRange`, `remove`, `contains`, `cardinality`, `rank`, `select`,
   `minimum`, `maximum`, `bitwiseAnd`, `bitwiseOr`, `lazyOr`, `repairAfterLazy`,
@@ -115,14 +123,19 @@ warranted.
 
 ## Acceptance
 
-- `TaggedPtr` width-generic; **`rawAddr()` the only decode site**, with
-  `bench_lazy_or_attribution.zig:170` routed through it; `container.zig:7` comment corrected to 4-byte.
+- `TaggedPtr` width-generic; `bench_lazy_or_attribution.zig:170` routed through `rawAddr()`;
+  `container.zig:7` comment corrected to 4-byte.
+- **Verified by search, not assertion:** an `rg` over the repository confirms **`rawAddr()` holds the only
+  address-shift decode** — e.g. no remaining `\.addr\s*(<<|\*)\s*(2|4)` outside it. Record the command
+  and its output.
 - Comptime `@compileError` invariants in place.
 - **`zig build check-32` added**, compiling the **exported** probe across the breadth matrix, covering
   both listed surfaces including **both** Roaring64 deserialize paths.
 - Fixture corpus + protocol built, width-independent per the rules above, corpus hash checked in,
   **64→64 round-trip proven**.
-- 64-bit smoke shows no regression; `zig build test`, `difftest`, `ReleaseSafe`, `ReleaseFast` green.
+- 64-bit smoke shows no regression; **all four suites green on 64-bit — `test`, `difftest`, `test64`,
+  `difftest64`** (this chunk changes production code and `TaggedPtr` sits beneath `Roaring64Bitmap`, so the
+  64-suites are not optional here), plus `ReleaseSafe` and `ReleaseFast`.
 - **No 32-bit execution required in this chunk.**
 
 ## Estimate
