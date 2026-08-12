@@ -90,13 +90,38 @@ Require the token `` `Type.method` ``. This is the same failure the umbrella's s
 catch, and it is worth stating plainly that the first draft of this spec proposed exactly that vacuous
 check.
 
+**Matching must also be region-scoped, for the same reason one step later.** Searching all of `API.md`
+re-opens the hole once 41-01 adds prose: deleting a Quick Reference entry would still pass because
+`` `Type.method` `` appears in the prose elsewhere. The Quick Reference would then be unguarded exactly
+when it starts to matter.
+
+- **Delimit the Quick Reference** with explicit markers (e.g. HTML comments
+  `<!-- check-docs:begin -->` / `<!-- check-docs:end -->`) and **search only between them**.
+- Prose mentions outside the region are then irrelevant to the guard — which is correct, since the
+  region is what the guard claims to enforce.
+- **Negative control 1 must delete the token from inside the guarded region**, not merely from the
+  document; a control that removes a prose mention tests nothing.
+
+*(Rejected alternative: make the guard API-wide and treat Quick Reference completeness as manual
+acceptance. That trades a mechanical check for a human one in the exact place the mechanical check was
+introduced.)*
+
 **Manifests — note the two scopes are different sets, which is what an earlier draft got wrong:**
 
 1. **Stable root-export manifest** — the five types above **plus `ValidateError`**
    (`roaring.zig:17`, `pub const ValidateError = RoaringBitmap.ValidateError`). It is a stable public
-   export but **not** a struct with methods, so it belongs here and **not** in the reflection scope. In
-   the previous draft it was classified nowhere and would have tripped check 3 immediately.
-2. **Method-reflection scope** — the **five types only**. This is what `@typeInfo(...).decls` runs over.
+   export but **not** a struct with methods. In the previous draft it was classified nowhere and would
+   have tripped check 4 immediately.
+2. **Method-reflection scope — DERIVED from manifest 1, never written by hand.** Filter manifest 1 to
+   struct types at comptime; `ValidateError` drops out because it is not a struct. Two hand-maintained
+   lists would drift, and the drift is silent in the dangerous direction: a future public struct added to
+   the stable manifest but forgotten in the reflection scope would escape method documentation
+   **permanently**, with the guard green. Deriving makes that unrepresentable rather than merely
+   detectable.
+
+   *(A mechanical cross-check — verify every stable struct export also appears in the reflection scope —
+   is the acceptable fallback if derivation proves awkward in Zig 0.16. Prefer derivation: it removes the
+   failure mode instead of testing for it.)*
 3. **Internal-export manifest** — the **10** root-level internal exports in `roaring.zig`
    (`ArrayContainer`, `BitsetContainer`, `RunContainer`, `Container`, `TaggedPtr`, `container_ops`,
    `optimize`, `test_gen`, `roaring64_test_gen`, `roaring64_test_support`), each with a reason string.
@@ -149,8 +174,9 @@ which some allocators reward"* is usable; *"1.033x on M4"* rots.
   wins and the parity-status item is removed.)*
 - `zig build check-docs` passes, with an empty allow-list or a reasoned entry per exemption, and reports
   **all** misses rather than the first.
-- **Negative control 1:** remove one **type-qualified** entry from `API.md`; guard fails and names
-  `Type.method`.
+- **Negative control 1:** remove one **type-qualified** entry **from inside the delimited Quick
+  Reference region**; guard fails and names `Type.method`. Removing a prose mention outside the region
+  must **not** be what the control tests.
 - **Negative control 2:** add a `pub fn` to one of the five types without documenting it; guard fails and
   names it. This is the case that actually recurs.
 - **Negative control 3:** add a `pub` declaration to `roaring.zig` listed in neither the stable
@@ -177,9 +203,10 @@ which some allocators reward"* is usable; *"1.033x on M4"* rots.
 Pending review of this revision.
 
 - **41-00** — `check-docs` guard (run via `addRunArtifact`), the manifests, stability boundary in
-  `API.md`, and the **complete, populated type-qualified Quick Reference** — every `Type.method` entry
-  for all five types. Lands **first**; its first run produces the authoritative inventory, which 41-00
-  records. All three negative controls here.
+  `API.md`, the **complete, populated type-qualified Quick Reference** inside its delimiters — every
+  `Type.method` entry for all five types — **and the allowlist-only consumer-build helper from §5**,
+  which otherwise belongs to no chunk. Lands **first**; its first run produces the authoritative
+  inventory, which 41-00 records. All three negative controls here.
 
   **41-00 must land green**, which requires the Quick Reference to be *complete*, not scaffolded — a
   scaffold means `check-docs` fails on the commit that introduces it. Rejected alternative: temporary
