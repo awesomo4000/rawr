@@ -4,7 +4,8 @@
 
 Toplevel: [41-documentation-parity.md](41-documentation-parity.md).
 
-**Lands green.** No prose is written here — but the guarded region must be **complete** on this commit,
+**Lands green.** No **topical API prose** is written here (the stability boundary in §2 is prose, and
+belongs to this chunk) — but the guarded region must be **complete** on this commit,
 so `check-docs` passes the moment it exists. No production code changes.
 
 ## 1. The guard

@@ -184,7 +184,9 @@ which some allocators reward"* is usable; *"1.033x on M4"* rots.
   check — it is **not** type-qualified, unlike controls 1 and 2.)*
 - **Controls 1 and 2 must test type-qualified behaviour** — a bare-name control would pass under the
   vacuous scheme and prove nothing.
-- **Consumer-facing set unchanged, verified by a pinned reproducible procedure** — not a prior one-off.
+- **Consumer-facing set changes only by adding `img/rawr.png`** (per `41-02` §1.1 — the packaged README
+  embeds the logo and currently renders it broken). No other `.paths` change. **The allowlist-only
+  consumer check stays green**, verified by a pinned reproducible procedure — not a prior one-off.
   Add it as a repo helper (script or build step) so acceptance can be re-run:
   1. parse `.paths` from `build.zig.zon`;
   2. copy exactly those files into a scratch tree, preserving structure;
