@@ -373,7 +373,7 @@ test "init and deinit" {
 }
 
 test "compact header layout" {
-    try std.testing.expectEqual(@as(usize, 16), @sizeOf(RunContainer));
+    try std.testing.expectEqual(@sizeOf(usize) + 8, @sizeOf(RunContainer));
     try std.testing.expect(@alignOf(RunContainer) >= 4);
 }
 

@@ -65,6 +65,10 @@ pub const TaggedPtr = packed struct(usize) {
     pub fn getType(self: TaggedPtr) ContainerType {
         return self.tag;
     }
+
+    pub fn eql(self: TaggedPtr, other: TaggedPtr) bool {
+        return @as(usize, @bitCast(self)) == @as(usize, @bitCast(other));
+    }
 };
 
 comptime {

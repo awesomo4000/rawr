@@ -1201,7 +1201,7 @@ pub const RoaringBitmap = struct {
                 const result_tp = result.toTagged();
 
                 // Check if a new container was allocated (e.g., array converted to bitset)
-                const is_same = (@as(u64, @bitCast(result_tp)) == @as(u64, @bitCast(self.containers[i])));
+                const is_same = result_tp.eql(self.containers[i]);
                 if (!is_same) {
                     // New container allocated, free the old one
                     old_container.deinit(self.allocator);
@@ -1309,7 +1309,7 @@ pub const RoaringBitmap = struct {
                     Container.fromTagged(other.containers[j]),
                 );
                 const result_tp = result.toTagged();
-                if (@as(u64, @bitCast(result_tp)) != @as(u64, @bitCast(self.containers[i]))) {
+                if (!result_tp.eql(self.containers[i])) {
                     old_container.deinit(self.allocator);
                     self.containers[i] = result_tp;
                 }
@@ -1492,7 +1492,7 @@ pub const RoaringBitmap = struct {
                 const other_container = Container.fromTagged(other.containers[j]);
                 const diff = try ops.containerDifferenceInPlace(self.allocator, self_container, other_container);
                 const diff_tp = diff.toTagged();
-                const is_same = (@as(u64, @bitCast(diff_tp)) == @as(u64, @bitCast(self.containers[i])));
+                const is_same = diff_tp.eql(self.containers[i]);
 
                 if (diff.getCardinality() > 0) {
                     self.keys[write_idx] = key_a;
@@ -1565,7 +1565,7 @@ pub const RoaringBitmap = struct {
                 const other_container = Container.fromTagged(other.containers[j]);
                 const result = try ops.containerXorInPlace(self.allocator, old_container, other_container);
                 const result_tp = result.toTagged();
-                const is_same = (@as(u64, @bitCast(result_tp)) == @as(u64, @bitCast(self.containers[i])));
+                const is_same = result_tp.eql(self.containers[i]);
 
                 // Only keep non-empty results
                 if (result.getCardinality() > 0) {

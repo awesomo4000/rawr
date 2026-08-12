@@ -45,3 +45,34 @@ zig build check-cross-width-64
 For cross-width exchange, produce on one target, transfer the file without modification, and verify
 it with the other target. Repeat in the opposite direction. A corpus-hash mismatch indicates corpus
 generation drift; a set or byte mismatch indicates serialization incompatibility.
+
+## Native 32-bit validation
+
+The runtime-tested 32-bit target is static `x86-linux-musl`, executed natively on an x86_64 Linux
+kernel without an emulator. Zig 0.16.0 was invoked explicitly as follows:
+
+```sh
+/home/alr/.zvm/0.16.0/zig build test       -Dtarget=x86-linux-musl
+/home/alr/.zvm/0.16.0/zig build difftest   -Dtarget=x86-linux-musl
+/home/alr/.zvm/0.16.0/zig build test64     -Dtarget=x86-linux-musl
+/home/alr/.zvm/0.16.0/zig build difftest64 -Dtarget=x86-linux-musl
+```
+
+The fixture tool is built and run on that target with:
+
+```sh
+/home/alr/.zvm/0.16.0/zig build cross-width-fixture \
+    -Dtarget=x86-linux-musl --prefix zig-out/x86
+zig-out/x86/bin/cross_width_fixture produce fixture.bin
+zig-out/x86/bin/cross_width_fixture verify fixture.bin
+```
+
+The `wasm32-freestanding`, `arm-linux-musleabi`, and `riscv32-linux` targets are compile-checked by
+`zig build check-32` but are not runtime-tested by this protocol.
+
+### Address-space limitation
+
+A 32-bit process has roughly 2-4 GB of usable address space. A worst-case dense bitmap has 65,536
+containers of 8 KB each, or 512 MB of payload before top-level structures, allocator metadata, and
+other process memory. Large bitmaps are therefore feasible, but allocation failure is materially
+more likely than in a 64-bit process.

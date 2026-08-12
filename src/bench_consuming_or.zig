@@ -80,7 +80,7 @@ fn allocDelta(counting: *const CountingAllocator, before: u64) u64 {
 }
 
 fn taggedEqual(a: TaggedPtr, b: TaggedPtr) bool {
-    return @as(u64, @bitCast(a)) == @as(u64, @bitCast(b));
+    return a.eql(b);
 }
 
 fn unmatchedRightCount(left: *const RoaringBitmap, right: *const RoaringBitmap) u32 {

@@ -42,6 +42,18 @@ fn runProbe() !void {
     defer intersection.deinit();
     var unioned = try left.bitwiseOr(allocator, &right);
     defer unioned.deinit();
+    var in_place_or = try left.clone(allocator);
+    defer in_place_or.deinit();
+    try in_place_or.bitwiseOrInPlace(&right);
+    var consumed_right = try right.clone(allocator);
+    defer consumed_right.deinit();
+    try in_place_or.bitwiseOrInPlaceConsume(&consumed_right);
+    var in_place_difference = try left.clone(allocator);
+    defer in_place_difference.deinit();
+    try in_place_difference.bitwiseDifferenceInPlace(&right);
+    var in_place_xor = try left.clone(allocator);
+    defer in_place_xor.deinit();
+    try in_place_xor.bitwiseXorInPlace(&right);
     var lazy = try left.lazyOr(allocator, &right, true);
     defer lazy.deinit();
     try lazy.repairAfterLazy();

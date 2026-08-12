@@ -25,6 +25,16 @@ supported or tested by rawr's 64-bit serializer.
 
 See [API.md](API.md) for the full API reference.
 
+### 32-bit targets
+
+rawr is compile-checked on `wasm32-freestanding`, `x86-linux-musl`, `arm-linux-musleabi`, and
+`riscv32-linux`; `x86-linux-musl` is also exercised natively by the unit, differential, and
+cross-width serialization suites. Run the compile matrix with `zig build check-32`.
+
+A 32-bit process has roughly 2-4 GB of usable address space. A worst-case dense bitmap can require
+512 MB for container payloads alone, before bitmap, allocator, and process overhead, so allocation
+failure is substantially more likely than on 64-bit targets.
+
 ## Usage
 
 ```zig
