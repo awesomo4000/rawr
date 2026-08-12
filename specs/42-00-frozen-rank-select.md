@@ -33,6 +33,11 @@ immutable and validated thereafter, which is why queries are infallible (`contai
 
 ## 2. Delegate from `Frozen64Bitmap` (`src/frozen64.zig`)
 
+- **All five methods delegate** — `rank`, `select`, `getIndex`, **and `minimum`/`maximum`**. The latter
+  two are **not** covered by deleting the three helpers: they are iterator-based **inline** in
+  `frozen64.zig:61-79`, where `maximum` walks the entire final bucket keeping the last value seen. They
+  must be rewritten to call `FrozenBitmap`'s new methods too, or the structural gate fails on exactly
+  the worst offender.
 - **Delete** production `frozen32Rank`, `frozen32Select`, `frozen32GetIndex`.
 - The bucket-level loops stay — already cardinality-driven and correct. Only within-bucket work changes.
 - Observable behaviour unchanged.
@@ -64,19 +69,37 @@ every delegated method, so it is the natural home for the deletion's coverage �
 `rank`/`getIndex`/`select` **only at values that are present**, by iterating `toArrayAlloc`. Absence is
 tested for `contains` alone.
 
-Extend it to cover:
+Extend it to cover — **noting that `select` takes a rank, not a value**, so absent-value and
+absent-bucket probing does not apply to it:
 
-- **`rank`, `getIndex`, `select` at absent values**, not just `contains`.
+**Value-indexed — `rank` and `getIndex` only:**
+
+- **Absent values**, not just `contains`.
 - **Probes around high-32-bit bucket boundaries** — `(1 << 32) - 1`, `1 << 32`, `(2 << 32)`.
 - **A value in an absent bucket.** The fixture populates buckets 0, 1, and 3; **bucket 2 is a hole**, so
-  probing it exercises the `hi > target_hi` early-return branch in `rank`/`getIndex`/`select` that the
-  present-values loop never reaches.
+  probing it exercises the `hi > target_hi` early-return branch that the present-values loop never
+  reaches.
+
+**Rank-indexed — `select`:**
+
+- Ranks **immediately before, at, and immediately after each cumulative bucket boundary** — the
+  equivalent stress, since what varies for `select` is which bucket the running count lands in.
+- `select(cardinality)` → null.
 
 ## 5. Guard — extend `check-32`
 
 Instantiate **both** `FrozenBitmap` and `Frozen64Bitmap` in `tools/check_32_api.zig` and call their
 **full query surfaces** — not merely the five new `FrozenBitmap` methods, or the new `Frozen64Bitmap`
 **delegation paths** stay outside the guard.
+
+**The two take different byte sources — they are not interchangeable:**
+
+- `FrozenBitmap.init` consumes **portable serialized** bytes (`serialize` / `serializedSizeInBytes`).
+- `Frozen64Bitmap.view` consumes bytes from **`frozenSerialize`** (sized by `frozenSizeInBytes`) — rawr's
+  own frozen64 image, **not** the portable Roaring64 serialization.
+
+Feeding portable Roaring64 bytes to `view` is the easy mistake here, and since the probe is compile-only
+it would never surface at runtime.
 
 Per spec 40-01, the probe's enumerated surface **is** the guard boundary and omissions fail **silently**;
 that finding cost four real defects. This is not optional tidying.
