@@ -46,7 +46,7 @@ can compute each table's byte position and write in place — no `desc_buf`/`off
 
 Attribute the M4 1.14x among: **temporary-array allocation** (`desc_buf` + `offset_buf`
 alloc/free); **the copy** of each temp table into the output; and **the `std.Io.Writer.fixed`
-abstraction** itself (per-`writeAll` bounds/state vs a raw indexed store — Morty's open question,
+abstraction** itself (per-`writeAll` bounds/state vs a raw indexed store — an open question,
 a real suspect independent of the allocations).
 
 **Measure the SMP path — libc is a conditional control, not a routine column.** The target is

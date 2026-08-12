@@ -222,14 +222,14 @@ one, which is exactly why **`difftest` — not unit tests alone — must be part
 
 ### Execution host and preflight — NOT blocked; runnable as soon as the fix lands
 
-**Host (pinned): the Zen 4 / WSL2 machine.** Zig is present but **not on `PATH`** — use the explicit path
-**`/home/alr/.zvm/0.16.0/zig`** (0.16.0). **Nothing else needs installing.**
+**Host (pinned): the Zen 4 / WSL2 machine.** Zig 0.16.0 is present but **not on `PATH`** on that host;
+resolve its installation path before running the commands below. **Nothing else needs installing.**
 
 ```sh
-/home/alr/.zvm/0.16.0/zig build test       -Dtarget=x86-linux-musl
-/home/alr/.zvm/0.16.0/zig build difftest   -Dtarget=x86-linux-musl
-/home/alr/.zvm/0.16.0/zig build test64     -Dtarget=x86-linux-musl
-/home/alr/.zvm/0.16.0/zig build difftest64 -Dtarget=x86-linux-musl
+zig build test       -Dtarget=x86-linux-musl
+zig build difftest   -Dtarget=x86-linux-musl
+zig build test64     -Dtarget=x86-linux-musl
+zig build difftest64 -Dtarget=x86-linux-musl
 ```
 
 **All four must pass.** **`test64` and `difftest64` are separate build steps** — `difftest` does **not**
@@ -358,7 +358,7 @@ comment to say **4**, so it matches the new `@compileError` invariant rather tha
   exercising the listed `RoaringBitmap` surface plus `Roaring64Bitmap`. **GitHub Actions explicitly out of
   scope.**
 - **`src/container.zig:7` comment corrected** from 8-byte to 4-byte alignment.
-- **Runner preflight completed on the WSL2 host** — Zig invoked at **`/home/alr/.zvm/0.16.0/zig`** with
+- **Runner preflight completed on the WSL2 host** — Zig 0.16.0 invoked with
   **`-Dtarget=x86-linux-musl`** (no `-fqemu`, no install), and **all four suites — `test`, `difftest`,
   `test64`, `difftest64` — confirmed running**.
 - **64-bit focused smoke** (M4; clone / dense-AND / select / lazyOr+repair; ≤5%, five fresh processes)

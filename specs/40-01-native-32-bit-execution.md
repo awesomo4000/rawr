@@ -17,13 +17,14 @@ runner returns `.native` **before** considering QEMU, so `-fqemu` does not force
 host/target pair. If native execution ever proves insufficient, QEMU must be wired **explicitly** via a
 custom build step prefixing the artifact with `qemu-i386`; the flag will not do it.
 
-Zig is present but **not on `PATH`** — use the explicit path:
+Zig 0.16.0 is present but **not on `PATH`** on the pinned host; resolve its installation path before
+running these commands:
 
 ```sh
-/home/alr/.zvm/0.16.0/zig build test       -Dtarget=x86-linux-musl
-/home/alr/.zvm/0.16.0/zig build difftest   -Dtarget=x86-linux-musl
-/home/alr/.zvm/0.16.0/zig build test64     -Dtarget=x86-linux-musl
-/home/alr/.zvm/0.16.0/zig build difftest64 -Dtarget=x86-linux-musl
+zig build test       -Dtarget=x86-linux-musl
+zig build difftest   -Dtarget=x86-linux-musl
+zig build test64     -Dtarget=x86-linux-musl
+zig build difftest64 -Dtarget=x86-linux-musl
 ```
 
 **All four must pass.** `test64` and `difftest64` are **separate build steps** — `difftest` does **not**
@@ -62,7 +63,7 @@ Using `40-00`'s corpus and protocol:
 ## Acceptance
 
 - **All four suites — `test`, `difftest`, `test64`, `difftest64` — execute and pass** natively under
-  static `x86-linux-musl`, no emulator, at the explicit Zig path.
+  static `x86-linux-musl`, with no emulator.
 - **Bidirectional cross-width round-trip** passes for both bitmap types: byte-identity + set equality;
   corpus hash agrees across widths.
 - Address-space limitation documented; supported targets and commands recorded.

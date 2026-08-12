@@ -5,7 +5,7 @@
 Cleanup chunk. By the end of v1 (10-00 … 10-05) the 64-bit test code accumulated
 real duplication across the two harness executables (`validate_roaring64.zig`,
 `diff_test64.zig`) and the inline/property tests (`roaring64.zig`,
-`roaring64_property_tests.zig`). Morty already consolidated the **generator**
+`roaring64_property_tests.zig`). The generator was already consolidated
 into `roaring64_test_gen.zig`; this chunk finishes the job for the **oracle,
 assertion, and fixture helpers**. Pure test-code refactor — no behavior change to
 `Roaring64Bitmap`, no new features.
@@ -120,7 +120,7 @@ Moves here:
    `addTranslatedCImport` / `addBenchmarkPlatformShim` of its own — since it's
    imported *by* the harness root modules (not a standalone executable), it
    inherits their `c` import. Verify it resolves `@import("c")` through the
-   importing module (Morty's note: this works as long as only the harness roots
+   importing module (this works as long as only the harness roots
    import it).
 
 ## Acceptance

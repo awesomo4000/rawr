@@ -52,17 +52,16 @@ The runtime-tested 32-bit target is static `x86-linux-musl`, executed natively o
 kernel without an emulator. Zig 0.16.0 was invoked explicitly as follows:
 
 ```sh
-/home/alr/.zvm/0.16.0/zig build test       -Dtarget=x86-linux-musl
-/home/alr/.zvm/0.16.0/zig build difftest   -Dtarget=x86-linux-musl
-/home/alr/.zvm/0.16.0/zig build test64     -Dtarget=x86-linux-musl
-/home/alr/.zvm/0.16.0/zig build difftest64 -Dtarget=x86-linux-musl
+zig build test       -Dtarget=x86-linux-musl
+zig build difftest   -Dtarget=x86-linux-musl
+zig build test64     -Dtarget=x86-linux-musl
+zig build difftest64 -Dtarget=x86-linux-musl
 ```
 
 The fixture tool is built and run on that target with:
 
 ```sh
-/home/alr/.zvm/0.16.0/zig build cross-width-fixture \
-    -Dtarget=x86-linux-musl --prefix zig-out/x86
+zig build cross-width-fixture -Dtarget=x86-linux-musl --prefix zig-out/x86
 zig-out/x86/bin/cross_width_fixture produce fixture.bin
 zig-out/x86/bin/cross_width_fixture verify fixture.bin
 ```
