@@ -52,15 +52,14 @@ carrying the 64-bit value-range claim; the conversion pair `fromRoaring32`/`toRo
 
 ### 2.2 `README.md`
 
-- **Parity wording — measured, bounded, non-comparative.** rawr's own board is the honest source:
-  at/under the gate nearly everywhere on both hosts, with **lazy-OR construction (~1.7x on M4) the
-  one material open row**. State it as a measured status with its date and harness, not as a claim
-  about being close to or better than the C library. CRoaring is the reference implementation, not a
-  rival. Do **not** write "faster than", "beats", or "at full parity".
-- **Scope every parity statement to what was measured:** the canonical fresh-process harness, three
-  allocators, two host architectures. A reader on other hardware or a different allocator is outside
-  the measured set, and `repairAfterLazyWithOptions` is precisely a case where the answer changes with
-  the allocator.
+- **No performance claims in `README.md`.** No benchmark numbers, no ratios, no comparison against the
+  reference C library, no "fast"/"faster than"/"at parity" framing. A README benchmark claim is a
+  liability: it is read as universal while every number we hold is scoped to a specific harness, three
+  allocators, and two host architectures, and it goes stale silently on every subsequent commit. The
+  parity board lives in `docs/` and the specs, where its scope travels with it.
+- **Audit the existing text for claims already present** — the current README describes itself as
+  "high-performance" and has an `## Internals` section; check what is assertion versus description and
+  remove or neutralize the former as part of this chunk.
 - Refresh **Project structure** (line ~205) — `tools/` (the 32-bit probe and the cross-width fixture
   tool) is new and unlisted.
 - Confirm the **32-bit section** (added in spec 40) matches the final target list and commands.
@@ -84,26 +83,31 @@ omissions are invisible. The 14 functions above are what that costs over time.
 - **Allow-list escape hatch** for anything intentionally undocumented, with a required reason string.
   An empty allow-list is the goal; a populated one is at least explicit.
 
-## 3. Performance and ownership contracts to write down
+## 3. Behavioural contracts to write down (`API.md` only)
 
-These three carry contracts a signature does not convey:
+These three carry contracts a signature does not convey. **Describe the contract, not the benchmark** —
+no ratios or board numbers in `API.md` either. The distinction: *"freeing in descending order, which some
+allocators reward"* is a usable contract; *"1.033x on M4"* is a measurement that will rot.
 
-- **`repairAfterLazyWithOptions`** — opt-in descending free order. Report as **"at parity when
-  enabled"**, never "row closed". Measured inside the 1.10x gate on both hosts when enabled; the
-  default `repairAfterLazy` is unchanged and the canonical default row still sits at 1.170x (M4) /
-  1.271x (Zen 4). Default adoption was rejected **on measured merits** — the libc candidate landed at
-  1.154x, outside the gate. Say plainly that the benefit is **allocator-dependent** and that the
-  board measures only three allocators, so a caller supplying another is outside the measured set.
-- **`bitwiseOrInPlaceConsume`** — consumes the right operand. Document what the caller must not do
-  with it afterwards, and that this exists to cut clone demand.
-- **`removeRangeCopy`** — constructs only the surviving containers rather than cloning and freeing.
+- **`repairAfterLazyWithOptions`** — opt-in. State that the default `repairAfterLazy` is unchanged, that
+  the option changes free order only, that any benefit is **allocator-dependent**, and that a caller
+  should measure on their own allocator and workload rather than assume. Do not claim a speedup.
+- **`bitwiseOrInPlaceConsume`** — **ownership**, the important one. It consumes its right operand;
+  document precisely what the caller may and may not do with that operand afterwards. This is a
+  correctness contract, not a performance note.
+- **`removeRangeCopy`** — constructs only the surviving containers rather than cloning and discarding.
+  Describe the resulting semantics and allocation behaviour, not a timing.
 
-## 4. Known asymmetry — document, do not fix
+## 4. Frozen asymmetry — investigated, moved to spec 42
 
-`FrozenBitmap` exposes `cardinality`, `contains`, `isEmpty`, `iterator`; `Frozen64Bitmap` additionally
-has `rank`, `select`, `minimum`, `maximum`, `getIndex`, `view`. Whether that gap is deliberate is a
-**design question, not a docs question** — record the asymmetry as it stands. Adding methods is out of
-scope for this spec; if the gap is unintended it earns its own spec.
+The asymmetry is **not** extra capability in the 64-bit type. `Frozen64Bitmap` is layered on
+`FrozenBitmap` as expected; it has `rank`/`select`/`minimum`/`maximum`/`getIndex` only because
+`frozen64.zig` privately reimplements them by **linear iteration** over each 32-bit sub-view. See
+[spec 42](42-frozen-rank-select.md).
+
+For this spec that means: **do not document those five as peers of their `RoaringBitmap` namesakes.**
+They share names and semantics but not complexity. Either document the cost honestly or let spec 42 land
+first and document the result — `41-01` should state which it did.
 
 ## 5. Out of scope
 
