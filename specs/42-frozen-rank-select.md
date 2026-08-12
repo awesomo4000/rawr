@@ -150,5 +150,10 @@ Otherwise independent — 41 may proceed, noting the cost asymmetry per spec 41 
 
 ## 8. Chunking
 
-**Single chunk.** The implementations are small and modelled on existing `RoaringBitmap` code; the
-differential and negative-control coverage are the substantial part. **S/M.**
+**Single chunk — [42-00](42-00-frozen-rank-select.md), cleared and ready to implement.** The
+implementations are small and modelled on existing `RoaringBitmap` code; the differential and
+negative-control coverage are the substantial part. **S/M.**
+
+`42-00` additionally folds in the review note to extend the existing `Frozen64Bitmap` round-trip test
+(`roaring64.zig:2203`) with absent-value and bucket-boundary probes — it already exercises every
+delegated method, so it is the natural companion to the helper deletion.
