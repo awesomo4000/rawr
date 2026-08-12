@@ -27,8 +27,14 @@ pub const TaggedPtr = packed struct(usize) {
 
 - `getArray` / `getBitset` / `getRun` become `@ptrFromInt(self.rawAddr())`.
 - **`src/bench_lazy_or_attribution.zig:170` routed through `rawAddr()`** — this removes **all current
-  duplicate decode sites**, leaving `rawAddr()` as the single one. It does **not** make recurrence
-  impossible: nothing stops someone writing `.addr << 2` again later. Hence the acceptance check below.
+  duplicate decode sites**, leaving `rawAddr()` as the single one.
+- **Recurrence is caught mechanically — corrected after measurement.** This spec originally claimed
+  centralization "does not make recurrence impossible" and leaned on the manual audit for that job.
+  **Measured (see Verification record): `check-32` fails on a newly introduced `@as(u64, self.addr) << 2`
+  even with the struct left correctly width-generic**, because a `u64` will not coerce to `usize` /
+  `@ptrFromInt` on a 32-bit target. So every *width-breaking* recurrence is a hard compile error. What the
+  guard does **not** catch is a duplicated but *correct* `@as(usize, …) << 2` — untidy, not a 32-bit break.
+  The manual audit therefore polices duplication, not portability.
 - **Update the stale comment at `src/container.zig:7`**: it says pointers are "at least 8-byte aligned";
   the invariant is **≥4-byte**.
 
@@ -151,6 +157,47 @@ warranted.
   `difftest64`** (this chunk changes production code and `TaggedPtr` sits beneath `Roaring64Bitmap`, so the
   64-suites are not optional here), plus `ReleaseSafe` and `ReleaseFast`.
 - **No 32-bit execution required in this chunk.**
+
+## Verification record — implemented, reviewed, ACCEPTED
+
+Implementation delivered width-generic `TaggedPtr` with centralized decode and comptime layout checks
+(`src/container.zig`), the exported probe and five-target `check-32` matrix (`build.zig`,
+`tools/check_32_api.zig`), deterministic fixtures with pinned corpus hash `0x1e4d9768fabb6ac5`
+(`tools/cross_width_fixture.zig`), and the protocol doc (`docs/cross-width-fixtures.md`).
+
+**Reviewed independently, not accepted on report.** Sources were copied to a scratch tree and the guards
+were run against *deliberately reintroduced defects* — the umbrella's standing question, applied to the
+guard itself: *would this check fail if the defect were present?*
+
+| Control | Result |
+| --- | --- |
+| **A — original defect restored** (`packed struct(u64)`, `addr: u62`, `u64` decode) | **check-32 FAILS.** Both the coercion error *and* the `@compileError("TaggedPtr must be exactly pointer-width")` fire. |
+| **B — new duplicate `u64` decode site, struct left correct** | **check-32 FAILS.** Establishes the recurrence result recorded in §1. |
+| **C — module-only guard, defect present, comptime block removed** | `zig build-lib src/roaring.zig -target wasm32-freestanding` → **exit 0, silent.** Confirms empirically that the probe requirement in §3 was load-bearing; a "module builds" guard would have shipped the bug. |
+| **D — corpus drift**, one fixture value changed | **FAILS** with `corpus hash mismatch expected=0x1e4d9768fabb6ac5 actual=0x2b1505eb2a91fa48` → `UnexpectedCorpusHash`. |
+| Restored tree | `check-32` and `check-cross-width-64` both clean. |
+
+Control C is the one worth keeping: the justification for the exported probe was previously an argument,
+and is now a measurement.
+
+**Decode audit** (broad command per Acceptance) returns exactly one decode — `container.zig:47` inside
+`rawAddr()`. All remaining hits are encode (`container.zig:41`, `bench_lazy_or_attribution.zig:164`) or
+compare (`range_strategy_tests.zig:363`), as predicted. One additional hit,
+`bench_lazy_or_residency.zig:325` (`@ptrFromInt(address)`, a volatile byte probe), is **not** a tag decode
+— audited and cleared. Probe surface covers every function listed in §3, including both `Roaring64Bitmap`
+deserialize paths. Error output shows the probe forcing analysis through real call paths
+(`referenced by: select: src/bitmap.zig:1025`), not just touching signatures.
+
+**Nit, no action required:** in `generate64`, the per-bucket `0` and `maxInt(u32)` values are appended
+*after* the random draws and are not dedup-checked against them, so a colliding draw yields a duplicate
+entry. Generation stays deterministic and `add` is idempotent, so corpus and hash are unaffected.
+
+**Not yet satisfied at review time:** changes were uncommitted. Reported suites (all four × `ReleaseSafe`
+/ `ReleaseFast`) and the M4 smoke (clone +0.26%, dense AND +0.35%, select −0.08%, lazyOr+repair −0.26%,
+ranges overlapping, inside the 5% gate) are accepted as reported — consistent with identity-by-
+construction at 64 bits.
+
+**40-01 is unblocked.**
 
 ## Estimate
 
