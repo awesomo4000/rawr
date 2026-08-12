@@ -2200,6 +2200,28 @@ test "Roaring64Bitmap statistics reports container mix" {
     try std.testing.expectEqual(bm.maximum().?, stats.max_value);
 }
 
+fn expectFrozen64U64(operation: []const u8, input: u64, expected: u64, actual: u64) !void {
+    if (expected == actual) return;
+    std.debug.print("frozen64 differential failed: case=round-trip operation={s} input={d} expected={d} actual={d}\n", .{
+        operation,
+        input,
+        expected,
+        actual,
+    });
+    return error.Frozen64DifferentialMismatch;
+}
+
+fn expectFrozen64OptionalU64(operation: []const u8, input: u64, expected: ?u64, actual: ?u64) !void {
+    if (expected == actual) return;
+    std.debug.print("frozen64 differential failed: case=round-trip operation={s} input={d} expected={?d} actual={?d}\n", .{
+        operation,
+        input,
+        expected,
+        actual,
+    });
+    return error.Frozen64DifferentialMismatch;
+}
+
 test "Roaring64Bitmap frozen64 round-trip read-only operations" {
     const allocator = std.testing.allocator;
     var bm = try Roaring64Bitmap.init(allocator);
@@ -2237,6 +2259,24 @@ test "Roaring64Bitmap frozen64 round-trip read-only operations" {
     }
     try std.testing.expectEqual(@as(?u64, null), it.next());
     try std.testing.expectEqual(@as(?u64, null), frozen.select(@intCast(values.len)));
+
+    const absent_probes = [_]u64{
+        (@as(u64, 1) << 32) - 1,
+        @as(u64, 1) << 32,
+        @as(u64, 2) << 32,
+        (@as(u64, 3) << 32) - 1,
+    };
+    for (absent_probes) |probe| {
+        try expectFrozen64U64("rank", probe, bm.rank(probe), frozen.rank(probe));
+        try expectFrozen64OptionalU64("getIndex", probe, bm.getIndex(probe), frozen.getIndex(probe));
+    }
+
+    const bucket_boundaries = [_]u64{ 1, 3 };
+    for (bucket_boundaries) |boundary| {
+        for ([_]u64{ boundary - 1, boundary, boundary + 1 }) |rank| {
+            try expectFrozen64OptionalU64("select", rank, bm.select(rank), frozen.select(rank));
+        }
+    }
 }
 
 test "Roaring64Bitmap serialize round-trips empty bitmap" {

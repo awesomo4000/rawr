@@ -208,6 +208,81 @@ pub const FrozenBitmap = struct {
         return self.containerContains(idx, low);
     }
 
+    /// Count values less than or equal to `value`.
+    /// Scans preceding container descriptors, then probes the target container.
+    pub fn rank(self: *const Self, value: u32) u64 {
+        const target_key: u16 = @truncate(value >> 16);
+        const target_low: u16 = @truncate(value);
+
+        var total: u64 = 0;
+        for (0..self.size) |idx| {
+            const key = self.getKey(idx);
+            if (key < target_key) {
+                total += self.getCardinality(idx);
+            } else if (key == target_key) {
+                return total + self.containerRank(idx, target_low);
+            } else {
+                return total;
+            }
+        }
+        return total;
+    }
+
+    /// Return the 0-based position of `value`, or null if absent.
+    /// Scans preceding container descriptors, then probes the target container.
+    pub fn getIndex(self: *const Self, value: u32) ?u64 {
+        const target_key: u16 = @truncate(value >> 16);
+        const target_low: u16 = @truncate(value);
+
+        var total: u64 = 0;
+        for (0..self.size) |idx| {
+            const key = self.getKey(idx);
+            if (key < target_key) {
+                total += self.getCardinality(idx);
+            } else if (key == target_key) {
+                const local = self.containerGetIndex(idx, target_low) orelse return null;
+                return total + local;
+            } else {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /// Return the k-th smallest value, 0-based, or null if out of range.
+    /// Scans container cardinalities, then selects within the target container.
+    pub fn select(self: *const Self, k: u64) ?u32 {
+        if (k > std.math.maxInt(u32)) return null;
+        var remaining: u32 = @intCast(k);
+
+        for (0..self.size) |idx| {
+            const card = self.getCardinality(idx);
+            if (remaining < card) {
+                const low = self.containerSelect(idx, remaining) orelse return null;
+                return (@as(u32, self.getKey(idx)) << 16) | low;
+            }
+            remaining -= card;
+        }
+        return null;
+    }
+
+    /// Get the minimum value, or null if empty.
+    /// Array and run containers use a direct read; bitsets scan up to 1,024 words.
+    pub fn minimum(self: *const Self) ?u32 {
+        if (self.size == 0) return null;
+        const low = self.containerMinimum(0) orelse return null;
+        return (@as(u32, self.getKey(0)) << 16) | low;
+    }
+
+    /// Get the maximum value, or null if empty.
+    /// Array and run containers use a direct read; bitsets scan up to 1,024 words.
+    pub fn maximum(self: *const Self) ?u32 {
+        if (self.size == 0) return null;
+        const idx: usize = self.size - 1;
+        const low = self.containerMaximum(idx) orelse return null;
+        return (@as(u32, self.getKey(idx)) << 16) | low;
+    }
+
     /// Check if value is in container at index.
     fn containerContains(self: *const Self, idx: usize, low: u16) bool {
         const data_offset = self.getContainerDataOffset(idx);
@@ -229,6 +304,184 @@ pub const FrozenBitmap = struct {
             // Array container: binary search
             return self.binarySearchArray(data_offset, card, low);
         }
+    }
+
+    fn containerRank(self: *const Self, idx: usize, low: u16) u32 {
+        const data_offset = self.getContainerDataOffset(idx);
+        const card = self.getCardinality(idx);
+
+        if (self.isRunContainer(idx)) {
+            const n_runs = std.mem.readInt(u16, self.data[data_offset..][0..2], .little);
+            var count: u32 = 0;
+            for (0..n_runs) |run_idx| {
+                const run_offset = data_offset + 2 + run_idx * 4;
+                const start = std.mem.readInt(u16, self.data[run_offset..][0..2], .little);
+                const length = std.mem.readInt(u16, self.data[run_offset + 2 ..][0..2], .little);
+                if (low < start) return count;
+
+                const end = start +| length;
+                if (low <= end) return count + @as(u32, low - start) + 1;
+                count += @as(u32, length) + 1;
+            }
+            return count;
+        }
+
+        if (card > ArrayContainer.MAX_CARDINALITY) {
+            const word_idx: usize = low >> 6;
+            const bit: u6 = @truncate(low);
+            var count: u32 = 0;
+            for (0..word_idx) |idx_word| {
+                count += @popCount(self.readBitsetWord(data_offset, idx_word));
+            }
+            const mask = if (bit == 63)
+                ~@as(u64, 0)
+            else
+                (@as(u64, 1) << (bit + 1)) - 1;
+            return count + @popCount(self.readBitsetWord(data_offset, word_idx) & mask);
+        }
+
+        var lo: u32 = 0;
+        var hi = card;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (self.readArrayValue(data_offset, mid) <= low) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    fn containerGetIndex(self: *const Self, idx: usize, value: u16) ?u32 {
+        const data_offset = self.getContainerDataOffset(idx);
+        const card = self.getCardinality(idx);
+
+        if (self.isRunContainer(idx)) {
+            const n_runs = std.mem.readInt(u16, self.data[data_offset..][0..2], .little);
+            var prior: u32 = 0;
+            for (0..n_runs) |run_idx| {
+                const run_offset = data_offset + 2 + run_idx * 4;
+                const start = std.mem.readInt(u16, self.data[run_offset..][0..2], .little);
+                const length = std.mem.readInt(u16, self.data[run_offset + 2 ..][0..2], .little);
+                if (value < start) return null;
+                if (value <= start +| length) return prior + @as(u32, value - start);
+                prior += @as(u32, length) + 1;
+            }
+            return null;
+        }
+
+        if (card > ArrayContainer.MAX_CARDINALITY) {
+            const word_idx: usize = value >> 6;
+            const bit: u6 = @truncate(value);
+            const word = self.readBitsetWord(data_offset, word_idx);
+            if (word & (@as(u64, 1) << bit) == 0) return null;
+            return self.containerRank(idx, value) - 1;
+        }
+
+        var lo: u32 = 0;
+        var hi = card;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const current = self.readArrayValue(data_offset, mid);
+            if (current < value) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo < card and self.readArrayValue(data_offset, lo) == value) return lo;
+        return null;
+    }
+
+    fn containerSelect(self: *const Self, idx: usize, k: u32) ?u16 {
+        const data_offset = self.getContainerDataOffset(idx);
+        const card = self.getCardinality(idx);
+        if (k >= card) return null;
+
+        if (self.isRunContainer(idx)) {
+            const n_runs = std.mem.readInt(u16, self.data[data_offset..][0..2], .little);
+            var remaining = k;
+            for (0..n_runs) |run_idx| {
+                const run_offset = data_offset + 2 + run_idx * 4;
+                const start = std.mem.readInt(u16, self.data[run_offset..][0..2], .little);
+                const length = std.mem.readInt(u16, self.data[run_offset + 2 ..][0..2], .little);
+                const run_size = @as(u32, length) + 1;
+                if (remaining < run_size) return start + @as(u16, @intCast(remaining));
+                remaining -= run_size;
+            }
+            return null;
+        }
+
+        if (card > ArrayContainer.MAX_CARDINALITY) {
+            var remaining = k;
+            for (0..BitsetContainer.NUM_WORDS) |word_idx| {
+                var word = self.readBitsetWord(data_offset, word_idx);
+                const word_card: u32 = @popCount(word);
+                if (remaining >= word_card) {
+                    remaining -= word_card;
+                    continue;
+                }
+                while (remaining > 0) : (remaining -= 1) word &= word - 1;
+                return @intCast(word_idx * 64 + @ctz(word));
+            }
+            return null;
+        }
+
+        return self.readArrayValue(data_offset, k);
+    }
+
+    fn containerMinimum(self: *const Self, idx: usize) ?u16 {
+        const data_offset = self.getContainerDataOffset(idx);
+        const card = self.getCardinality(idx);
+
+        if (self.isRunContainer(idx)) {
+            const n_runs = std.mem.readInt(u16, self.data[data_offset..][0..2], .little);
+            if (n_runs == 0) return null;
+            return std.mem.readInt(u16, self.data[data_offset + 2 ..][0..2], .little);
+        }
+        if (card > ArrayContainer.MAX_CARDINALITY) {
+            for (0..BitsetContainer.NUM_WORDS) |word_idx| {
+                const word = self.readBitsetWord(data_offset, word_idx);
+                if (word != 0) return @intCast(word_idx * 64 + @ctz(word));
+            }
+            return null;
+        }
+        return self.readArrayValue(data_offset, 0);
+    }
+
+    fn containerMaximum(self: *const Self, idx: usize) ?u16 {
+        const data_offset = self.getContainerDataOffset(idx);
+        const card = self.getCardinality(idx);
+
+        if (self.isRunContainer(idx)) {
+            const n_runs = std.mem.readInt(u16, self.data[data_offset..][0..2], .little);
+            if (n_runs == 0) return null;
+            const run_offset = data_offset + 2 + (@as(usize, n_runs) - 1) * 4;
+            const start = std.mem.readInt(u16, self.data[run_offset..][0..2], .little);
+            const length = std.mem.readInt(u16, self.data[run_offset + 2 ..][0..2], .little);
+            return start +| length;
+        }
+        if (card > ArrayContainer.MAX_CARDINALITY) {
+            var word_idx: usize = BitsetContainer.NUM_WORDS;
+            while (word_idx > 0) {
+                word_idx -= 1;
+                const word = self.readBitsetWord(data_offset, word_idx);
+                if (word != 0) return @intCast(word_idx * 64 + 63 - @clz(word));
+            }
+            return null;
+        }
+        return self.readArrayValue(data_offset, card - 1);
+    }
+
+    fn readArrayValue(self: *const Self, data_offset: usize, idx: u32) u16 {
+        const offset = data_offset + @as(usize, idx) * 2;
+        return std.mem.readInt(u16, self.data[offset..][0..2], .little);
+    }
+
+    fn readBitsetWord(self: *const Self, data_offset: usize, word_idx: usize) u64 {
+        const offset = data_offset + word_idx * 8;
+        return std.mem.readInt(u64, self.data[offset..][0..8], .little);
     }
 
     fn binarySearchArray(self: *const Self, data_offset: usize, card: u32, value: u16) bool {
@@ -506,6 +759,152 @@ fn buildRunSerialized(allocator: std.mem.Allocator) ![]u8 {
     return bm.serialize(allocator);
 }
 
+fn linearMinimum(frozen: *const FrozenBitmap) ?u32 {
+    var iter = frozen.iterator();
+    return iter.next();
+}
+
+fn linearMaximum(frozen: *const FrozenBitmap) ?u32 {
+    var iter = frozen.iterator();
+    var result: ?u32 = null;
+    while (iter.next()) |value| result = value;
+    return result;
+}
+
+fn linearRank(frozen: *const FrozenBitmap, value: u32) u64 {
+    var count: u64 = 0;
+    var iter = frozen.iterator();
+    while (iter.next()) |current| {
+        if (current > value) break;
+        count += 1;
+    }
+    return count;
+}
+
+fn linearGetIndex(frozen: *const FrozenBitmap, value: u32) ?u64 {
+    var index: u64 = 0;
+    var iter = frozen.iterator();
+    while (iter.next()) |current| {
+        if (current == value) return index;
+        if (current > value) return null;
+        index += 1;
+    }
+    return null;
+}
+
+fn linearSelect(frozen: *const FrozenBitmap, rank: u64) ?u32 {
+    var index: u64 = 0;
+    var iter = frozen.iterator();
+    while (iter.next()) |current| {
+        if (index == rank) return current;
+        index += 1;
+    }
+    return null;
+}
+
+const ExpectedContainerType = enum { array, bitset, run };
+
+fn frozenContainerType(frozen: *const FrozenBitmap, idx: usize) ExpectedContainerType {
+    if (frozen.isRunContainer(idx)) return .run;
+    if (frozen.getCardinality(idx) > ArrayContainer.MAX_CARDINALITY) return .bitset;
+    return .array;
+}
+
+fn expectCaseU64(case_name: []const u8, operation: []const u8, input: u64, expected: u64, actual: u64) !void {
+    if (expected == actual) return;
+    std.debug.print("frozen differential failed: case={s} operation={s} input={d} expected={d} actual={d}\n", .{
+        case_name,
+        operation,
+        input,
+        expected,
+        actual,
+    });
+    return error.FrozenDifferentialMismatch;
+}
+
+fn expectCaseOptionalU32(
+    case_name: []const u8,
+    operation: []const u8,
+    input: u64,
+    expected: ?u32,
+    actual: ?u32,
+) !void {
+    if (expected == actual) return;
+    std.debug.print("frozen differential failed: case={s} operation={s} input={d} expected={?d} actual={?d}\n", .{
+        case_name,
+        operation,
+        input,
+        expected,
+        actual,
+    });
+    return error.FrozenDifferentialMismatch;
+}
+
+fn expectCaseOptionalU64(
+    case_name: []const u8,
+    operation: []const u8,
+    input: u64,
+    expected: ?u64,
+    actual: ?u64,
+) !void {
+    if (expected == actual) return;
+    std.debug.print("frozen differential failed: case={s} operation={s} input={d} expected={?d} actual={?d}\n", .{
+        case_name,
+        operation,
+        input,
+        expected,
+        actual,
+    });
+    return error.FrozenDifferentialMismatch;
+}
+
+fn expectFrozenQueryAgreement(
+    allocator: std.mem.Allocator,
+    case_name: []const u8,
+    expected_type: ?ExpectedContainerType,
+    bitmap: *const RoaringBitmap,
+    probes: []const u32,
+) !void {
+    const serialized = try bitmap.serialize(allocator);
+    defer allocator.free(serialized);
+    var frozen = try FrozenBitmap.init(serialized);
+    defer frozen.deinit();
+
+    if (expected_type) |expected| {
+        for (0..frozen.size) |idx| {
+            const actual = frozenContainerType(&frozen, idx);
+            if (actual != expected) {
+                std.debug.print("frozen differential failed: case={s} container={d} expected-type={s} actual-type={s}\n", .{
+                    case_name,
+                    idx,
+                    @tagName(expected),
+                    @tagName(actual),
+                });
+                return error.FrozenDifferentialMismatch;
+            }
+        }
+    }
+
+    try expectCaseOptionalU32(case_name, "minimum/bitmap", 0, bitmap.minimum(), frozen.minimum());
+    try expectCaseOptionalU32(case_name, "minimum/linear", 0, linearMinimum(&frozen), frozen.minimum());
+    try expectCaseOptionalU32(case_name, "maximum/bitmap", 0, bitmap.maximum(), frozen.maximum());
+    try expectCaseOptionalU32(case_name, "maximum/linear", 0, linearMaximum(&frozen), frozen.maximum());
+
+    for (probes) |probe| {
+        try expectCaseU64(case_name, "rank/bitmap", probe, bitmap.rank(probe), frozen.rank(probe));
+        try expectCaseU64(case_name, "rank/linear", probe, linearRank(&frozen, probe), frozen.rank(probe));
+        try expectCaseOptionalU64(case_name, "getIndex/bitmap", probe, bitmap.getIndex(probe), frozen.getIndex(probe));
+        try expectCaseOptionalU64(case_name, "getIndex/linear", probe, linearGetIndex(&frozen, probe), frozen.getIndex(probe));
+    }
+
+    const card = bitmap.cardinality();
+    var rank: u64 = 0;
+    while (rank <= card) : (rank += 1) {
+        try expectCaseOptionalU32(case_name, "select/bitmap", rank, bitmap.select(rank), frozen.select(rank));
+        try expectCaseOptionalU32(case_name, "select/linear", rank, linearSelect(&frozen, rank), frozen.select(rank));
+    }
+}
+
 test "FrozenBitmap from empty bitmap" {
     const allocator = std.testing.allocator;
 
@@ -635,6 +1034,66 @@ test "FrozenBitmap iterator" {
         idx += 1;
     }
     try std.testing.expectEqual(values.len, idx);
+}
+
+test "FrozenBitmap positional queries match bitmap and linear oracle" {
+    const allocator = std.testing.allocator;
+
+    var empty = try RoaringBitmap.init(allocator);
+    defer empty.deinit();
+    try expectFrozenQueryAgreement(allocator, "empty", null, &empty, &.{ 0, 1, std.math.maxInt(u32) });
+
+    var array = try RoaringBitmap.init(allocator);
+    defer array.deinit();
+    for ([_]u32{ 10, 20, 30, 65_535 }) |value| _ = try array.add(value);
+    try expectFrozenQueryAgreement(allocator, "single-array", .array, &array, &.{ 0, 9, 10, 11, 20, 21, 65_535, 65_536 });
+
+    var bitset = try RoaringBitmap.init(allocator);
+    defer bitset.deinit();
+    var value: u32 = 0;
+    while (value < 10_000) : (value += 2) _ = try bitset.add(value);
+    try expectFrozenQueryAgreement(allocator, "single-bitset", .bitset, &bitset, &.{ 0, 1, 5_000, 9_998, 9_999, 10_000 });
+
+    var run = try RoaringBitmap.init(allocator);
+    defer run.deinit();
+    _ = try run.addRange(100, 200);
+    _ = try run.runOptimize();
+    try expectFrozenQueryAgreement(allocator, "single-run", .run, &run, &.{ 0, 99, 100, 150, 200, 201, 65_535 });
+
+    var boundary_runs = try RoaringBitmap.init(allocator);
+    defer boundary_runs.deinit();
+    _ = try boundary_runs.addRange(65_530, 65_540);
+    _ = try boundary_runs.runOptimize();
+    try expectFrozenQueryAgreement(allocator, "run-container-boundary", .run, &boundary_runs, &.{
+        65_529,
+        65_530,
+        65_535,
+        65_536,
+        65_540,
+        65_541,
+    });
+
+    var disjoint_runs = try RoaringBitmap.init(allocator);
+    defer disjoint_runs.deinit();
+    _ = try disjoint_runs.addRange(10, 20);
+    _ = try disjoint_runs.addRange(100, 130);
+    _ = try disjoint_runs.addRange(1_000, 1_020);
+    _ = try disjoint_runs.runOptimize();
+    try expectFrozenQueryAgreement(allocator, "multiple-disjoint-runs", .run, &disjoint_runs, &.{
+        0,
+        9,
+        10,
+        20,
+        21,
+        99,
+        100,
+        130,
+        131,
+        999,
+        1_000,
+        1_020,
+        1_021,
+    });
 }
 
 test "FrozenBitmap rejects truncated array container data" {

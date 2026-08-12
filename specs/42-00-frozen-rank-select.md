@@ -126,7 +126,7 @@ that finding cost four real defects. This is not optional tidying.
 
 ## Verification record — implemented, reviewed, ACCEPTED
 
-Changed: `src/frozen.zig` (+459), `src/frozen64.zig` (−42 net), `src/roaring64.zig` (+18),
+Changed: `src/frozen.zig` (+459), `src/frozen64.zig` (+6/−42, −36 net), `src/roaring64.zig` (+40),
 `tools/check_32_api.zig` (+31). **No mutable-bitmap or benchmark path touched**, so the board exemption
 holds and no canonical run was required.
 
@@ -154,10 +154,9 @@ and the fixture's bucket-2 hole now exercises it.
 surfaces called. Oracles (`linearMinimum`/`Maximum`/`Rank`/`GetIndex`/`Select`, `frozen.zig:762–795`) are
 non-`pub` and referenced only from the differential — test-only in substance.
 
-**Nit, follow-up not blocker:** the §4 extensions in `roaring64.zig` use plain `expectEqual` rather than
-the case-labelled helpers used in `frozen.zig`. Control H therefore reported only `expected 3, found 14`
-across ten probes, with no indication which one failed. The differential itself labels correctly; worth
-aligning the extension if that test grows.
+**Post-review diagnostic follow-up resolved:** the §4 extensions now use labelled Frozen64 comparison
+helpers for `rank`, `getIndex`, and `select`. A future boundary failure reports the operation, input,
+expected value, and actual value rather than only `expected X, found Y` across the probe loop.
 
 **Coverage note:** `bucket_boundaries = { 1, 3 }` are the cumulative counts after buckets 0 and 1. The
 third cumulative boundary (14, the total) is covered separately by the existing

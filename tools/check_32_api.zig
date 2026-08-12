@@ -10,6 +10,8 @@ const rawr = @import("rawr");
 
 const RoaringBitmap = rawr.RoaringBitmap;
 const Roaring64Bitmap = rawr.Roaring64Bitmap;
+const FrozenBitmap = rawr.FrozenBitmap;
+const Frozen64Bitmap = rawr.Frozen64Bitmap;
 
 var probe_storage: [2 * 1024 * 1024]u8 align(64) = undefined;
 var probe_sink: u64 = 0;
@@ -70,6 +72,18 @@ fn runProbe() !void {
     defer allocator.free(bytes);
     var decoded = try RoaringBitmap.deserialize(allocator, bytes);
     defer decoded.deinit();
+    var frozen = try FrozenBitmap.init(bytes);
+    defer frozen.deinit();
+    _ = frozen.isEmpty();
+    _ = frozen.contains(10);
+    probe_sink +%= frozen.cardinality();
+    probe_sink +%= frozen.rank(20);
+    _ = frozen.getIndex(10);
+    _ = frozen.select(0);
+    _ = frozen.minimum();
+    _ = frozen.maximum();
+    var frozen_iter = frozen.iterator();
+    _ = frozen_iter.next();
 
     var left64 = try Roaring64Bitmap.init(allocator);
     defer left64.deinit();
@@ -103,4 +117,21 @@ fn runProbe() !void {
     defer decoded64.deinit();
     var decoded_safe64 = try Roaring64Bitmap.deserializeSafe(allocator, bytes64);
     defer decoded_safe64.deinit();
+
+    const frozen_size64 = try clone64.frozenSizeInBytes();
+    const frozen_bytes64 = try allocator.alloc(u8, frozen_size64);
+    defer allocator.free(frozen_bytes64);
+    try clone64.frozenSerialize(frozen_bytes64);
+    var frozen64 = try Frozen64Bitmap.view(frozen_bytes64);
+    defer frozen64.deinit();
+    _ = frozen64.isEmpty();
+    _ = frozen64.contains((@as(u64, 1) << 32) | 1);
+    probe_sink +%= frozen64.cardinality();
+    probe_sink +%= frozen64.rank((@as(u64, 2) << 32) | 20);
+    _ = frozen64.getIndex((@as(u64, 2) << 32) | 10);
+    _ = frozen64.select(0);
+    _ = frozen64.minimum();
+    _ = frozen64.maximum();
+    var frozen_iter64 = frozen64.iterator();
+    _ = frozen_iter64.next();
 }

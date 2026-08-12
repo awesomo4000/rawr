@@ -61,8 +61,7 @@ pub const Frozen64Bitmap = struct {
     pub fn minimum(self: *const Self) ?u64 {
         if (self.size == 0) return null;
         const sub = self.subView(0);
-        var it = sub.iterator();
-        const low = it.next() orelse return null;
+        const low = sub.minimum() orelse return null;
         return combine(self.getHi(0), low);
     }
 
@@ -70,12 +69,8 @@ pub const Frozen64Bitmap = struct {
         if (self.size == 0) return null;
         const idx: usize = @intCast(self.size - 1);
         const sub = self.subView(idx);
-        var it = sub.iterator();
-        var last: ?u32 = null;
-        while (it.next()) |value| {
-            last = value;
-        }
-        return combine(self.getHi(idx), last orelse return null);
+        const low = sub.maximum() orelse return null;
+        return combine(self.getHi(idx), low);
     }
 
     pub fn rank(self: *const Self, value: u64) u64 {
@@ -89,7 +84,7 @@ pub const Frozen64Bitmap = struct {
             if (hi < target_hi) {
                 total += sub.cardinality();
             } else if (hi == target_hi) {
-                return total + frozen32Rank(&sub, target_low);
+                return total + sub.rank(target_low);
             } else {
                 return total;
             }
@@ -108,7 +103,7 @@ pub const Frozen64Bitmap = struct {
             if (hi < target_hi) {
                 total += sub.cardinality();
             } else if (hi == target_hi) {
-                const local = frozen32GetIndex(&sub, target_low) orelse return null;
+                const local = sub.getIndex(target_low) orelse return null;
                 return total + local;
             } else {
                 return null;
@@ -123,7 +118,7 @@ pub const Frozen64Bitmap = struct {
             const sub = self.subView(idx);
             const card = sub.cardinality();
             if (k - prior < card) {
-                const low = frozen32Select(&sub, k - prior) orelse return null;
+                const low = sub.select(k - prior) orelse return null;
                 return combine(self.getHi(idx), low);
             }
             prior += card;
@@ -224,37 +219,6 @@ pub const Frozen64Bitmap = struct {
 
     fn subView(self: *const Self, idx: usize) FrozenBitmap {
         return FrozenBitmap.init(self.data[self.getOffset(idx)..self.subEnd(idx)]) catch unreachable;
-    }
-
-    fn frozen32Rank(sub: *const FrozenBitmap, value: u32) u64 {
-        var count: u64 = 0;
-        var it = sub.iterator();
-        while (it.next()) |current| {
-            if (current > value) break;
-            count += 1;
-        }
-        return count;
-    }
-
-    fn frozen32GetIndex(sub: *const FrozenBitmap, value: u32) ?u64 {
-        var count: u64 = 0;
-        var it = sub.iterator();
-        while (it.next()) |current| {
-            if (current == value) return count;
-            if (current > value) return null;
-            count += 1;
-        }
-        return null;
-    }
-
-    fn frozen32Select(sub: *const FrozenBitmap, target_rank: u64) ?u32 {
-        var count: u64 = 0;
-        var it = sub.iterator();
-        while (it.next()) |current| {
-            if (count == target_rank) return current;
-            count += 1;
-        }
-        return null;
     }
 
     inline fn highBits(value: u64) u32 {
