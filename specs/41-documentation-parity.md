@@ -54,8 +54,13 @@ lists.
   - **lines 148–153** — the allocator table's **`Fastest` / `Fast` / `Good`** Speed column, and the
     "Recommended allocators, **fastest to most flexible**" lead-in
   - Keep the allocator guidance itself — it is genuinely useful — but re-cast the column as
-    *characteristics/trade-offs* rather than a speed ranking, and keep the pointer to
-    `docs/parity-measurement.md` for anyone who wants numbers.
+    *characteristics/trade-offs* rather than a speed ranking.
+  - **Remove the relative link to `docs/parity-measurement.md` (line 144).** `docs/` is **not** in
+    `.paths`, so for a consumer who received only the package the link is **broken** — it resolves to
+    nothing. Removal is cleanest and consistent with the no-claims direction; an absolute GitHub URL or
+    adding the file to `.paths` would also work but both re-introduce measurements into the shipped set.
+    *(An earlier draft required retaining this link while also asserting consumers receive only
+    README/API/license — those cannot both hold.)*
   - *(An earlier draft claimed the README calls the library "high-performance". It does not — that phrase
     is in `src/roaring.zig`'s doc comment. Out of scope here.)*
 - **Refresh the bitmap-types table (line ~92)** — it lists only `RoaringBitmap`, `OwnedBitmap`,
@@ -85,17 +90,26 @@ Require the token `` `Type.method` ``. This is the same failure the umbrella's s
 catch, and it is worth stating plainly that the first draft of this spec proposed exactly that vacuous
 check.
 
-**Three manifests, all explicit:**
+**Manifests — note the two scopes are different sets, which is what an earlier draft got wrong:**
 
-1. **Stable-type manifest** — the five types above.
-2. **Internal-export manifest** — the **10** root-level internal exports in `roaring.zig`
+1. **Stable root-export manifest** — the five types above **plus `ValidateError`**
+   (`roaring.zig:17`, `pub const ValidateError = RoaringBitmap.ValidateError`). It is a stable public
+   export but **not** a struct with methods, so it belongs here and **not** in the reflection scope. In
+   the previous draft it was classified nowhere and would have tripped check 3 immediately.
+2. **Method-reflection scope** — the **five types only**. This is what `@typeInfo(...).decls` runs over.
+3. **Internal-export manifest** — the **10** root-level internal exports in `roaring.zig`
    (`ArrayContainer`, `BitsetContainer`, `RunContainer`, `Container`, `TaggedPtr`, `container_ops`,
    `optimize`, `test_gen`, `roaring64_test_gen`, `roaring64_test_support`), each with a reason string.
    *(An earlier draft said eleven.)*
-3. **Root-declaration classification check** — every `pub` declaration in `roaring.zig` must appear in
-   manifest 1 or manifest 2. A newly exported type that lands in neither **fails the guard**. Without
+4. **Root-declaration classification check** — every `pub` declaration in `roaring.zig` must appear in
+   manifest 1 or manifest 3. A newly exported type that lands in neither **fails the guard**. Without
    this, adding a public type silently escapes documentation requirements — the 40-01 failure mode
    exactly.
+
+**The build step must RUN the checker.** Wire it with **`b.addRunArtifact`** — a step that merely
+compiles the executable would pass without ever reading `API.md`, which is a guard that cannot fail for
+the reason it exists. (`check-32` is compile-only *by design* because compilation **is** its test;
+`check-docs` is the opposite case.)
 
 **Accepted limits:** token presence cannot distinguish documentation from a passing mention. That is
 fine — it catches *omission*, the failure actually observed. No prose analysis. An **allow-list with
@@ -139,21 +153,42 @@ which some allocators reward"* is usable; *"1.033x on M4"* rots.
   `Type.method`.
 - **Negative control 2:** add a `pub fn` to one of the five types without documenting it; guard fails and
   names it. This is the case that actually recurs.
-- **Negative control 3:** add a `pub` type to `roaring.zig` listed in neither manifest; guard fails.
-- Both controls must test **type-qualified** behaviour — a bare-name control would pass under the
+- **Negative control 3:** add a `pub` declaration to `roaring.zig` listed in neither the stable
+  root-export manifest nor the internal-export manifest; guard fails. *(This one is a classification
+  check — it is **not** type-qualified, unlike controls 1 and 2.)*
+- **Controls 1 and 2 must test type-qualified behaviour** — a bare-name control would pass under the
   vacuous scheme and prove nothing.
-- Consumer-facing set unchanged; a consumer build against an allowlist-only tree still succeeds.
-- No production code changed; all four 64-bit suites remain green.
+- **Consumer-facing set unchanged, verified by a pinned reproducible procedure** — not a prior one-off.
+  Add it as a repo helper (script or build step) so acceptance can be re-run:
+  1. parse `.paths` from `build.zig.zon`;
+  2. copy exactly those files into a scratch tree, preserving structure;
+  3. build a throwaway consumer with a `.path` dependency on that tree, importing `rawr` and calling a
+     handful of public methods;
+  4. require a successful build **and** run.
+
+  This is what proved the current allowlist self-contained (the shipped set builds even though
+  `build.zig` references `tools/`, `vendor/`, and `src/bench_*.zig`, because a consumer never reaches
+  those steps). Note step 3 needs a package fingerprint; take the value Zig reports on first failure.
+- No production code changed; **all four suites green — `test`, `difftest`, `test64`, `difftest64`** —
+  plus `ReleaseSafe` and `ReleaseFast`.
 
 ## 6. Chunking sketch
 
 Pending review of this revision.
 
-- **41-00** — `check-docs` guard, three manifests, stability boundary in `API.md`, per-type Quick
-  Reference scaffolding. Lands **first** so its first run produces the authoritative inventory for 41-01.
-  All three negative controls here.
-- **41-01** — `API.md` content: `Roaring64Bitmap` section, everything the guard reports, §3 contracts.
-  Ends with the allow-list empty.
+- **41-00** — `check-docs` guard (run via `addRunArtifact`), the manifests, stability boundary in
+  `API.md`, and the **complete, populated type-qualified Quick Reference** — every `Type.method` entry
+  for all five types. Lands **first**; its first run produces the authoritative inventory, which 41-00
+  records. All three negative controls here.
+
+  **41-00 must land green**, which requires the Quick Reference to be *complete*, not scaffolded — a
+  scaffold means `check-docs` fails on the commit that introduces it. Rejected alternative: temporary
+  allow-list entries removed by 41-01. Populating the table is barely more work, keeps every committed
+  chunk green, and the guard protects the full method inventory from the moment it exists rather than
+  after 41-01.
+- **41-01** — `API.md` **prose**: `Roaring64Bitmap` section, the topical write-ups, §3 contracts. The
+  Quick Reference already satisfies the guard, so this chunk adds explanation, not coverage. Ends with
+  the allow-list empty.
 - **41-02** — `README.md`: claim removal, both stale inventories, 32-bit verification.
 
 ## 7. Estimate
