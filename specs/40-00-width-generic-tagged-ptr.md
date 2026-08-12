@@ -80,13 +80,18 @@ export fn rawrCheck32Api() void { ... }
 width, which would make the guard fail for the wrong cause (or force dropping the freestanding target).
 **Use a `FixedBufferAllocator` over local or static storage** — no OS, no libc, no syscalls.
 
+**This list is the guard's entire coverage — proven in `40-01`.** An unlisted function is unguarded on
+32-bit, and it fails *silently*. The list below was incomplete: it omitted the in-place operations, and
+`40-01` found four real 32-bit defects hiding there. **Adding public API means adding it to the probe.**
+
 **Surface it must reference** (no file I/O either, so it builds freestanding; compile-only, never
 executed):
 
 - **`RoaringBitmap`:** `init`, `add`, `addRange`, `remove`, `contains`, `cardinality`, `rank`, `select`,
   `minimum`, `maximum`, `bitwiseAnd`, `bitwiseOr`, `lazyOr`, `repairAfterLazy`,
   `repairAfterLazyWithOptions`, `clone`, `runOptimize`, `shrinkToFit`, `serialize`, `deserialize`,
-  `serializedSizeInBytes`, `deinit`.
+  `serializedSizeInBytes`, `deinit`, **`bitwiseOrInPlace`, `bitwiseOrInPlaceConsume`,
+  `bitwiseDifferenceInPlace`, `bitwiseXorInPlace`** (added in `40-01` — omitting them hid four defects).
 - **`Roaring64Bitmap`:** `init`, `add`, `addRange`, `remove`, `contains`, `cardinality`, `rank`,
   `select`, `minimum`, `maximum`, `bitwiseAnd`, `bitwiseOr`, `bitwiseDifference`, `clone`,
   `serializedSizeInBytes`, `serialize`, **`deserialize`**, **`deserializeSafe`**, `deinit` —

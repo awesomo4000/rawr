@@ -70,6 +70,48 @@ Using `40-00`'s corpus and protocol:
   `difftest64`** (runtime-discovered fixes in this chunk may touch `Roaring64Bitmap` code), plus
   `ReleaseSafe` and `ReleaseFast`.
 
+## Verification record — implemented, reviewed, ACCEPTED
+
+All four suites pass natively under static `x86-linux-musl` on the Zen 4 / WSL2 host, no emulator, as
+specified. Cross-width exchange passed in both directions.
+
+**Independently reproduced, not accepted on report:** building the fixture tool on an aarch64 host and
+running `produce` yields SHA-256
+`813ba1bc467ff67ef6849357f9ac5c7b88d049b42aed8460ceb85f26cbadb171` — **byte-identical to the i386
+fixture**, on a third architecture neither side of the original exchange used. `verify` also passes.
+This is the strongest available evidence that serialization is genuinely width- and
+endianness-neutral rather than coincidentally matching between two hosts.
+
+### Runtime findings — the guard was sound, the *surface list* was not
+
+Execution surfaced five defects `40-00` did not: four whole-struct `@as(u64, @bitCast(tp))` `TaggedPtr`
+identity comparisons (`bitmap.zig` ×4, `bench_consuming_or.zig` ×1, now `TaggedPtr.eql`) and one 64-bit-only
+`RunContainer` size assertion (now `@sizeOf(usize) + 8`, still pinning 16 bytes on 64-bit and preserving the
+spec-32 header result).
+
+Two controls establish where the gap actually was:
+
+| Control | Result |
+| --- | --- |
+| **E — revert one `@bitCast` compare, current probe** | **check-32 FAILS**: `@bitCast size mismatch: destination type 'u64' has 64 bits but source type 'container.TaggedPtr' has 32 bits`. |
+| **F — same defect, `40-00`-era probe (in-place ops removed)** | **compiles clean, exit 0.** |
+
+**So `check-32`'s coverage is exactly the surface the probe enumerates, and nothing more.** The mechanism
+was never weak; the §3 list in `40-00` omitted the in-place operations, so four real defects sat in
+unguarded code. The probe now covers `bitwiseOrInPlace`, `bitwiseOrInPlaceConsume`,
+`bitwiseDifferenceInPlace`, and `bitwiseXorInPlace`.
+
+**Standing maintenance rule, adopted:** *adding public API means adding it to the probe.* An unlisted
+function is unguarded on 32-bit, and the failure mode is silence — exactly the lazy-analysis behaviour
+control C in `40-00` demonstrated.
+
+**Second audit-command miss, recorded honestly.** `40-00`'s acceptance command
+(`rg -n '\.addr\b|@ptrFromInt|rawAddr\('`) **could not have found these** — they never touch `.addr`, they
+`@bitCast` the whole struct. That command had already been corrected once, for a pattern that matched
+nothing. Both misses share a cause: a hand-written pattern encodes what its author expected the defect to
+look like. The compile matrix, which requires no such guess, found all four. **Weight the executable guard
+over the text search**; the audit remains useful for duplication, not for portability.
+
 ## Estimate
 
 **M** — **not** dominated by runner setup (native execution needs no install). The work is **runtime
