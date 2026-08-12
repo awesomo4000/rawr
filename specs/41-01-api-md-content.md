@@ -8,10 +8,17 @@ Toplevel: [41-documentation-parity.md](41-documentation-parity.md). Gated on:
 **Coverage is already satisfied** — `41-00` populated the guarded Quick Reference, so `check-docs` is
 green going in. This chunk adds **explanation**, not coverage. No production code changes.
 
-## 1. Work list
+## 1. Work list — a **prose-gap inventory**, maintained here
 
-**The authoritative list is `41-00`'s recorded first-run inventory**, not the counts below. Those came
-from bare-name matching and are a floor.
+**Do not take `41-00`'s method inventory as this chunk's work list.** That record is Quick Reference
+*token coverage* — with no type-qualified tokens in `API.md` today, it lists essentially every method
+across the five types (~150 entries). Writing prose for all of them is not the goal, and the guard
+**cannot verify prose by design**.
+
+This chunk maintains its own **prose-gap inventory**: the known gaps below, **plus a manual per-type
+prose audit** of `API.md` to catch anything they miss. The audit is the authority here, because no
+mechanical check exists for what this chunk delivers — bare-name matching produced the list below and is
+a floor, not a total.
 
 **`Roaring64Bitmap` — needs a section of its own.** `API.md` mentions it six times in passing and gives
 it **no section**, while `OwnedBitmap`, `FrozenBitmap`, and `Frozen64Bitmap` each have one — for the type
@@ -61,7 +68,10 @@ trade-offs rather than issue an avoid-directive the board does not support.
 
 ## Acceptance
 
-- Every function in `41-00`'s recorded inventory documented in prose, in its topical section.
+- Every entry in **this chunk's prose-gap inventory** (§1 gaps + the manual per-type audit) documented in
+  prose, in its topical section. **Not** every entry in `41-00`'s method inventory.
+- The manual per-type prose audit performed and its result recorded — it is the only check covering this
+  chunk's deliverable.
 - `Roaring64Bitmap` section present and peer to the other type sections.
 - §2 contracts stated, with **no ratios or board numbers anywhere in `API.md`**.
 - Allocator Guide neutralized per §3 — no "Fast", no avoid-directive.

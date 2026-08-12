@@ -66,12 +66,30 @@ Both constraints exist because each alone is vacuous:
 
 **No prose.** Topical write-ups, the `Roaring64Bitmap` section, and the behavioural contracts are 41-01.
 
-## 3. Record the authoritative inventory
+## 3. Record the **method inventory** — and only that
 
-The guard's first run **is** the real inventory. The toplevel's list of 19 came from bare-name matching
-and is a **floor** — expect more under type-qualified rules, since a name documented for one type
-currently satisfies the search for all of them. **Record the first run's full output**; it is the work
-list `41-01` executes against.
+Record the guard's first-run output as the **complete reflected method inventory for Quick Reference
+coverage**. Since `API.md` currently contains **no** type-qualified tokens, that first run reports
+essentially **every** method across the five types — on the order of 150 entries. It is the work list for
+**this chunk's table**, and nothing else.
+
+**It is explicitly NOT a prose work list.** An earlier draft called it "the authoritative inventory" and
+had `41-01` write prose for every entry — which would have meant ~150 write-ups instead of the ~19 real
+prose gaps, from a guard that **cannot verify prose by design**. `41-01` maintains its own focused
+prose-gap inventory; see that chunk.
+
+## 3.1 Accepted limit — reflection covers `pub fn` only
+
+`@typeInfo(...).decls` filtered to `.fn` does **not** cover public **nested types and constants** that
+appear in signatures — verified present: `Roaring64Bitmap.BulkContext` (`roaring64.zig:54`),
+`Roaring64Bitmap.Statistics` (`roaring64.zig:65`), `Roaring64Bitmap.ValidateError` (`roaring64.zig:49`),
+`RoaringBitmap.RepairAfterLazyOptions` (`bitmap.zig:1710`), `RoaringBitmap.ValidateError`
+(`bitmap.zig:44`).
+
+This is an **accepted limit, stated so it is not mistaken for coverage**: `check-docs` guards *methods*,
+not the *complete public API*. Say so in the guard's own output or header, so a future reader does not
+infer a guarantee the tool never made. Extending reflection to nested declarations is a possible later
+change, not part of this chunk.
 
 ## 4. Package-consumer helper
 
@@ -95,7 +113,9 @@ Step 3 needs a package fingerprint; take the value Zig reports on first failure.
 - Reflection scope **derived** from the stable root manifest; `ValidateError` and all 10 internal
   exports classified.
 - Quick Reference complete inside its delimiters; stability boundary documented.
-- First-run inventory recorded.
+- **Method inventory** (first-run output) recorded, and labelled as Quick-Reference coverage — **not** a
+  prose work list.
+- §3.1 limit stated in the guard's output/header: it guards methods, not the complete public API.
 - **Negative control 1:** delete one `` `Type.method` `` **from inside the delimited region**; guard
   fails and names it. Deleting a prose mention outside the region must **not** be what this control
   tests.

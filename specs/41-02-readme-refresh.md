@@ -30,6 +30,18 @@ resolves to nothing. Removal is cleanest and consistent with the no-claims direc
 URL or adding the file to `.paths` would also work, but both re-introduce measurements into the shipped
 set.
 
+### 1.1 The logo — add it to `.paths`
+
+`README.md:5` embeds `<img src="img/rawr.png" ...>`, and `img/` is **not** in `.paths`, so the packaged
+README currently renders with a broken image.
+
+**Add `img/rawr.png` to `.paths`.** The shipped README should keep its logo, it is one small file, and it
+is presentation rather than a measurement — unlike `docs/parity-measurement.md`, which is excluded on
+purpose.
+
+*(This is the one `.paths` change in spec 41. Re-run the `41-00` package-consumer helper afterwards to
+confirm the allowlist still builds.)*
+
 *(Not in scope: the "high-performance" phrasing lives in `src/roaring.zig`'s doc comment, not the
 README.)*
 
@@ -57,8 +69,10 @@ absolute or user-specific paths remain.
 ## Acceptance
 
 - All five §1 claim sites removed or neutralized; allocator guidance retained as characteristics.
-- `docs/parity-measurement.md` link removed; **no relative link from `README.md` to a path outside
-  `.paths`**.
+- `docs/parity-measurement.md` link removed; **no relative documentation link from `README.md` to a path
+  outside `.paths`**. *(Scoped to documentation links. An earlier draft said "no relative link", which
+  would have failed instantly on the `img/rawr.png` logo — a presentation asset, handled by §1.1 instead.)*
+- `img/rawr.png` added to `.paths`; the `41-00` consumer helper re-run and still green.
 - Bitmap-types table includes `Roaring64Bitmap` and `Frozen64Bitmap`.
 - Project structure refreshed; line-count/file-count claim removed.
 - 32-bit section verified against `check-32`.
