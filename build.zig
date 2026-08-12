@@ -49,6 +49,9 @@ pub fn build(b: *std.Build) void {
     const test64_step = b.step("test64", "Run Roaring64 unit tests");
     test64_step.dependOn(&run_roaring64_tests.step);
 
+    addCheck32Step(b);
+    addCrossWidthFixtureSteps(b, lib_mod, target);
+
     // Benchmark executable (always ReleaseFast, including the library)
     const bench_lib_mod = b.createModule(.{
         .root_source_file = b.path("src/roaring.zig"),
@@ -922,6 +925,93 @@ pub fn build(b: *std.Build) void {
         "git", "archive", "--format=tar.gz", "--prefix=rawr/", "HEAD", "-o", "rawr.tar.gz",
     });
     tarball_step.dependOn(&tarball_cmd.step);
+}
+
+fn addCheck32Step(b: *std.Build) void {
+    const step = b.step("check-32", "Compile the public API probe for supported 32-bit targets");
+    const targets = [_]struct {
+        name: []const u8,
+        query: std.Target.Query,
+    }{
+        .{
+            .name = "wasm32-freestanding",
+            .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding },
+        },
+        .{
+            .name = "x86-linux-musl",
+            .query = .{ .cpu_arch = .x86, .os_tag = .linux, .abi = .musl },
+        },
+        .{
+            .name = "arm-linux-musleabi",
+            .query = .{ .cpu_arch = .arm, .os_tag = .linux, .abi = .musleabi },
+        },
+        .{
+            .name = "riscv32-linux",
+            .query = .{ .cpu_arch = .riscv32, .os_tag = .linux },
+        },
+        .{
+            .name = "x86-linux-baseline",
+            .query = .{ .cpu_arch = .x86, .cpu_model = .baseline, .os_tag = .linux },
+        },
+    };
+
+    for (targets) |entry| {
+        const resolved = b.resolveTargetQuery(entry.query);
+        const rawr_mod = b.createModule(.{
+            .root_source_file = b.path("src/roaring.zig"),
+            .target = resolved,
+            .optimize = .ReleaseSafe,
+        });
+        const probe_mod = b.createModule(.{
+            .root_source_file = b.path("tools/check_32_api.zig"),
+            .target = resolved,
+            .optimize = .ReleaseSafe,
+        });
+        probe_mod.addImport("rawr", rawr_mod);
+
+        const object = b.addObject(.{
+            .name = b.fmt("rawr-check-32-{s}", .{entry.name}),
+            .root_module = probe_mod,
+        });
+        step.dependOn(&object.step);
+    }
+}
+
+fn addCrossWidthFixtureSteps(
+    b: *std.Build,
+    rawr_mod: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+) void {
+    const fixture_mod = b.createModule(.{
+        .root_source_file = b.path("tools/cross_width_fixture.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+    });
+    fixture_mod.addImport("rawr", rawr_mod);
+
+    const fixture_exe = b.addExecutable(.{
+        .name = "cross_width_fixture",
+        .root_module = fixture_mod,
+    });
+    const fixture_step = b.step(
+        "cross-width-fixture",
+        "Build the deterministic cross-width serialization fixture tool",
+    );
+    fixture_step.dependOn(&b.addInstallArtifact(fixture_exe, .{}).step);
+
+    const produce = b.addRunArtifact(fixture_exe);
+    produce.addArg("produce");
+    const fixture_file = produce.addOutputFileArg("rawr-cross-width.bin");
+
+    const verify = b.addRunArtifact(fixture_exe);
+    verify.addArg("verify");
+    verify.addFileArg(fixture_file);
+
+    const check_step = b.step(
+        "check-cross-width-64",
+        "Produce and verify serialization fixtures on the host target",
+    );
+    check_step.dependOn(&verify.step);
 }
 
 fn addBenchmarkPlatformShim(b: *std.Build, mod: *std.Build.Module, target: std.Build.ResolvedTarget) void {

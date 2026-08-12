@@ -6,10 +6,13 @@ const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
 const RunContainer = @import("run_container.zig").RunContainer;
 
 /// Tagged pointer encoding for containers.
-/// Low 2 bits encode the container type (pointers are at least 8-byte aligned).
-pub const TaggedPtr = packed struct(u64) {
+/// Low 2 bits encode the container type (pointers are at least 4-byte aligned).
+pub const TaggedPtr = packed struct(usize) {
     tag: ContainerType,
-    addr: u62,
+    addr: Addr,
+
+    /// Pointer bits minus the 2 tag bits: 62 on 64-bit, 30 on 32-bit.
+    pub const Addr = std.meta.Int(.unsigned, @bitSizeOf(usize) - 2);
 
     pub const ContainerType = enum(u2) {
         array = 0b00,
@@ -39,25 +42,43 @@ pub const TaggedPtr = packed struct(u64) {
         };
     }
 
+    /// Decode the pointer address without its two tag bits.
+    pub fn rawAddr(self: TaggedPtr) usize {
+        return @as(usize, self.addr) << 2;
+    }
+
     pub fn getArray(self: TaggedPtr) *ArrayContainer {
         std.debug.assert(self.tag == .array);
-        return @ptrFromInt(@as(u64, self.addr) << 2);
+        return @ptrFromInt(self.rawAddr());
     }
 
     pub fn getBitset(self: TaggedPtr) *BitsetContainer {
         std.debug.assert(self.tag == .bitset);
-        return @ptrFromInt(@as(u64, self.addr) << 2);
+        return @ptrFromInt(self.rawAddr());
     }
 
     pub fn getRun(self: TaggedPtr) *RunContainer {
         std.debug.assert(self.tag == .run);
-        return @ptrFromInt(@as(u64, self.addr) << 2);
+        return @ptrFromInt(self.rawAddr());
     }
 
     pub fn getType(self: TaggedPtr) ContainerType {
         return self.tag;
     }
 };
+
+comptime {
+    if (@bitSizeOf(TaggedPtr) != @bitSizeOf(usize))
+        @compileError("TaggedPtr must be exactly pointer-width");
+    if (@sizeOf(TaggedPtr) != @sizeOf(usize))
+        @compileError("TaggedPtr must be exactly pointer-sized");
+    if (@bitSizeOf(usize) < 4)
+        @compileError("target pointer width leaves no room for 2 tag bits");
+    for (.{ ArrayContainer, BitsetContainer, RunContainer }) |T| {
+        if (@alignOf(T) < 4)
+            @compileError(@typeName(T) ++ " must be >=4-byte aligned: TaggedPtr steals 2 low bits");
+    }
+}
 
 /// Unified container handle for polymorphic operations.
 pub const Container = union(TaggedPtr.ContainerType) {

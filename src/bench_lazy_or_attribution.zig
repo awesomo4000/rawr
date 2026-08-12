@@ -167,7 +167,7 @@ fn transientTagged(words: *align(64) [BitsetContainer.NUM_WORDS]u64) TaggedPtr {
 
 fn transientWords(tagged: TaggedPtr) *align(64) [BitsetContainer.NUM_WORDS]u64 {
     std.debug.assert(tagged.tag == .reserved);
-    return @ptrFromInt(@as(u64, tagged.addr) << 2);
+    return @ptrFromInt(tagged.rawAddr());
 }
 
 fn freeTransientWords(allocator: std.mem.Allocator, words: *align(64) [BitsetContainer.NUM_WORDS]u64) void {
