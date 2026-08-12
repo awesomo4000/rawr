@@ -65,7 +65,9 @@ Both constraints exist because each alone is vacuous:
 - **State the stability boundary** — the public API versus the 10 internal exports that "may change
   without notice". The guard needs this definition; a reader of `roaring.zig` currently gets no guidance.
 
-**No prose.** Topical write-ups, the `Roaring64Bitmap` section, and the behavioural contracts are 41-01.
+**No topical API prose.** Topical write-ups, the `Roaring64Bitmap` section, and the behavioural contracts
+are 41-01. The stability boundary above is the one piece of prose this chunk owns — the guard needs that
+definition to exist.
 
 ## 3. Record the **method inventory** — and only that
 
