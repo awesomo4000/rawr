@@ -198,25 +198,16 @@ which some allocators reward"* is usable; *"1.033x on M4"* rots.
 - No production code changed; **all four suites green — `test`, `difftest`, `test64`, `difftest64`** —
   plus `ReleaseSafe` and `ReleaseFast`.
 
-## 6. Chunking sketch
+## 6. Chunking — cleared, three chunks
 
-Pending review of this revision.
+- **[41-00](41-00-check-docs-guard.md)** — guard, manifests, guarded Quick Reference, consumer helper.
+- **[41-01](41-01-api-md-content.md)** — `API.md` prose, `Roaring64Bitmap` section, contracts, Allocator
+  Guide neutralization.
+- **[41-02](41-02-readme-refresh.md)** — `README.md` claims and stale inventories. Independent; may land
+  in any order.
 
-- **41-00** — `check-docs` guard (run via `addRunArtifact`), the manifests, stability boundary in
-  `API.md`, the **complete, populated type-qualified Quick Reference** inside its delimiters — every
-  `Type.method` entry for all five types — **and the allowlist-only consumer-build helper from §5**,
-  which otherwise belongs to no chunk. Lands **first**; its first run produces the authoritative
-  inventory, which 41-00 records. All three negative controls here.
-
-  **41-00 must land green**, which requires the Quick Reference to be *complete*, not scaffolded — a
-  scaffold means `check-docs` fails on the commit that introduces it. Rejected alternative: temporary
-  allow-list entries removed by 41-01. Populating the table is barely more work, keeps every committed
-  chunk green, and the guard protects the full method inventory from the moment it exists rather than
-  after 41-01.
-- **41-01** — `API.md` **prose**: `Roaring64Bitmap` section, the topical write-ups, §3 contracts. The
-  Quick Reference already satisfies the guard, so this chunk adds explanation, not coverage. Ends with
-  the allow-list empty.
-- **41-02** — `README.md`: claim removal, both stale inventories, 32-bit verification.
+Each chunk stands alone with its own pass/fail; the rationale that shaped them (green-on-landing,
+guard-first inventory, helper ownership) now lives in the chunks themselves.
 
 ## 7. Estimate
 
