@@ -124,6 +124,45 @@ that finding cost four real defects. This is not optional tidying.
 - **No mutable-bitmap or benchmark path changed; no canonical board run required.** If any such path is
   touched, that exemption is void: pin the host, use the five-process protocol, state a tolerance.
 
+## Verification record — implemented, reviewed, ACCEPTED
+
+Changed: `src/frozen.zig` (+459), `src/frozen64.zig` (−42 net), `src/roaring64.zig` (+18),
+`tools/check_32_api.zig` (+31). **No mutable-bitmap or benchmark path touched**, so the board exemption
+holds and no canonical run was required.
+
+**Structural gate — verified by reading, as specified.** `frozen64.zig` retains `Iterator` only in the
+iterator type itself; `minimum`/`maximum` now call `sub.minimum()`/`sub.maximum()` and the three linear
+helpers are gone. `FrozenBitmap`'s five methods scan container descriptors and probe one container:
+run-aware rank walks run pairs, bitset rank uses `@popCount` over preceding words plus a masked final
+word, arrays binary-search. All reads go through `std.mem.readInt` on validated offsets — **no
+pointer-casting of serialized bytes**, and all five stayed **infallible**.
+
+**Independent negative controls** (distinct from the implementer's seeded `rank` off-by-one, which
+reported `single-array`, `rank/bitmap`, input `0`):
+
+| Control | Result |
+| --- | --- |
+| **G — `select` bucket accounting**, `remaining < card` → `<= card` | **FAILS, fully labelled:** `case=run-container-boundary operation=select/bitmap input=6 expected=65536 actual=null`. |
+| **H — `Frozen64` absent-bucket branch**, `else return total` → accumulate cardinality | **FAILS** in the extended round-trip test. This is the §4 hole probe specifically, and it fires. |
+| Restored | `test` green. |
+
+Control H is the one that mattered: the absent-bucket early-return had **no coverage before this chunk**,
+and the fixture's bucket-2 hole now exercises it.
+
+**Probe byte sources correct** — `FrozenBitmap.init(bytes)` from portable `serialize`;
+`Frozen64Bitmap.view(frozen_bytes64)` from `frozenSerialize`/`frozenSizeInBytes`. Both full query
+surfaces called. Oracles (`linearMinimum`/`Maximum`/`Rank`/`GetIndex`/`Select`, `frozen.zig:762–795`) are
+non-`pub` and referenced only from the differential — test-only in substance.
+
+**Nit, follow-up not blocker:** the §4 extensions in `roaring64.zig` use plain `expectEqual` rather than
+the case-labelled helpers used in `frozen.zig`. Control H therefore reported only `expected 3, found 14`
+across ten probes, with no indication which one failed. The differential itself labels correctly; worth
+aligning the extension if that test grows.
+
+**Coverage note:** `bucket_boundaries = { 1, 3 }` are the cumulative counts after buckets 0 and 1. The
+third cumulative boundary (14, the total) is covered separately by the existing
+`select(values.len)` → null assertion, so the intent of §4 is met.
+
 ## Estimate
 
 **S/M** — implementations are small and modelled on existing code; the differential and negative-control
