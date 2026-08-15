@@ -13,7 +13,7 @@ rawr's stable public API is:
 
 The module root also exposes container internals for rawr's own benchmarks,
 validation, and differential tooling. Those internal exports are not part of the
-stable API and may change.
+stable API and may change without notice.
 
 ## Bitmap Types
 
@@ -402,46 +402,191 @@ format. The backing bytes must remain alive for the lifetime of the view.
 
 ## Quick Reference
 
-```text
-PUBLIC TYPES      RoaringBitmap, Roaring64Bitmap, OwnedBitmap, FrozenBitmap,
-                  Frozen64Bitmap, ValidateError
+The guarded region below inventories direct public methods on rawr's five stable
+bitmap types. Nested public types and constants are outside this guard's scope.
 
-CONSTRUCT         init, fromSorted, fromSlice, fromSliceOwned
-                  deserialize, deserializeSafe, deserializeFromReader
-                  deserializeOwned, deserializeSafeOwned
+<!-- check-docs:begin -->
 
-MUTATE            add, addMany, addRange, remove, removeMany, removeRange
+### `RoaringBitmap`
 
-QUERY             contains, cardinality, isEmpty, minimum, maximum, validate
+- `RoaringBitmap.init`
+- `RoaringBitmap.initCapacity`
+- `RoaringBitmap.deinit`
+- `RoaringBitmap.clone`
+- `RoaringBitmap.validate`
+- `RoaringBitmap.ensureTotalCapacity`
+- `RoaringBitmap.clearRetainingCapacity`
+- `RoaringBitmap.shrinkToFit`
+- `RoaringBitmap.contains`
+- `RoaringBitmap.rangeCardinality`
+- `RoaringBitmap.containsRange`
+- `RoaringBitmap.intersectsRange`
+- `RoaringBitmap.add`
+- `RoaringBitmap.addMany`
+- `RoaringBitmap.addRange`
+- `RoaringBitmap.removeRange`
+- `RoaringBitmap.removeRangeCopy`
+- `RoaringBitmap.fromSorted`
+- `RoaringBitmap.fromSlice`
+- `RoaringBitmap.remove`
+- `RoaringBitmap.removeMany`
+- `RoaringBitmap.cardinality`
+- `RoaringBitmap.toArrayAlloc`
+- `RoaringBitmap.toArray`
+- `RoaringBitmap.isEmpty`
+- `RoaringBitmap.minimum`
+- `RoaringBitmap.maximum`
+- `RoaringBitmap.bitwiseOr`
+- `RoaringBitmap.bitwiseAnd`
+- `RoaringBitmap.andCardinality`
+- `RoaringBitmap.orCardinality`
+- `RoaringBitmap.xorCardinality`
+- `RoaringBitmap.differenceCardinality`
+- `RoaringBitmap.jaccardIndex`
+- `RoaringBitmap.rank`
+- `RoaringBitmap.getIndex`
+- `RoaringBitmap.select`
+- `RoaringBitmap.rankMany`
+- `RoaringBitmap.intersects`
+- `RoaringBitmap.bitwiseDifference`
+- `RoaringBitmap.bitwiseXor`
+- `RoaringBitmap.orMany`
+- `RoaringBitmap.orManyHeap`
+- `RoaringBitmap.xorMany`
+- `RoaringBitmap.lazyOr`
+- `RoaringBitmap.lazyXor`
+- `RoaringBitmap.flip`
+- `RoaringBitmap.bitwiseOrInPlace`
+- `RoaringBitmap.bitwiseOrInPlaceConsume`
+- `RoaringBitmap.bitwiseAndInPlace`
+- `RoaringBitmap.bitwiseDifferenceInPlace`
+- `RoaringBitmap.bitwiseXorInPlace`
+- `RoaringBitmap.lazyOrInPlace`
+- `RoaringBitmap.lazyXorInPlace`
+- `RoaringBitmap.flipInplace`
+- `RoaringBitmap.runOptimize`
+- `RoaringBitmap.repairAfterLazy`
+- `RoaringBitmap.repairAfterLazyWithOptions`
+- `RoaringBitmap.isSubsetOf`
+- `RoaringBitmap.isStrictSubsetOf`
+- `RoaringBitmap.equals`
+- `RoaringBitmap.iterator`
+- `RoaringBitmap.serializedSizeInBytes`
+- `RoaringBitmap.serialize`
+- `RoaringBitmap.serializeToWriter`
+- `RoaringBitmap.deserialize`
+- `RoaringBitmap.deserializeSafe`
+- `RoaringBitmap.deserializeFromReader`
+- `RoaringBitmap.deserializeOwned`
+- `RoaringBitmap.deserializeSafeOwned`
+- `RoaringBitmap.bitwiseAndOwned`
+- `RoaringBitmap.bitwiseOrOwned`
+- `RoaringBitmap.bitwiseDifferenceOwned`
+- `RoaringBitmap.flipOwned`
+- `RoaringBitmap.fromSliceOwned`
+- `RoaringBitmap.orManyOwned`
+- `RoaringBitmap.xorManyOwned`
 
-POSITIONAL        rank, select, getIndex, rankMany
+### `Roaring64Bitmap`
 
-RANGES            flip, flipInplace, rangeCardinality, containsRange,
-                  intersectsRange
+- `Roaring64Bitmap.init`
+- `Roaring64Bitmap.initCapacity`
+- `Roaring64Bitmap.deinit`
+- `Roaring64Bitmap.clearRetainingCapacity`
+- `Roaring64Bitmap.clone`
+- `Roaring64Bitmap.fromRange`
+- `Roaring64Bitmap.fromSortedSlice`
+- `Roaring64Bitmap.fromSlice`
+- `Roaring64Bitmap.fromRoaring32`
+- `Roaring64Bitmap.toRoaring32`
+- `Roaring64Bitmap.isEmpty`
+- `Roaring64Bitmap.cardinality`
+- `Roaring64Bitmap.add`
+- `Roaring64Bitmap.addMany`
+- `Roaring64Bitmap.contains`
+- `Roaring64Bitmap.remove`
+- `Roaring64Bitmap.addBulk`
+- `Roaring64Bitmap.containsBulk`
+- `Roaring64Bitmap.removeBulk`
+- `Roaring64Bitmap.minimum`
+- `Roaring64Bitmap.maximum`
+- `Roaring64Bitmap.toArrayAlloc`
+- `Roaring64Bitmap.toArray`
+- `Roaring64Bitmap.iterator`
+- `Roaring64Bitmap.bitwiseOr`
+- `Roaring64Bitmap.bitwiseAnd`
+- `Roaring64Bitmap.bitwiseXor`
+- `Roaring64Bitmap.bitwiseDifference`
+- `Roaring64Bitmap.andCardinality`
+- `Roaring64Bitmap.orCardinality`
+- `Roaring64Bitmap.xorCardinality`
+- `Roaring64Bitmap.differenceCardinality`
+- `Roaring64Bitmap.jaccardIndex`
+- `Roaring64Bitmap.intersects`
+- `Roaring64Bitmap.isSubsetOf`
+- `Roaring64Bitmap.isStrictSubsetOf`
+- `Roaring64Bitmap.equals`
+- `Roaring64Bitmap.bitwiseOrInPlace`
+- `Roaring64Bitmap.bitwiseAndInPlace`
+- `Roaring64Bitmap.bitwiseXorInPlace`
+- `Roaring64Bitmap.bitwiseDifferenceInPlace`
+- `Roaring64Bitmap.rank`
+- `Roaring64Bitmap.getIndex`
+- `Roaring64Bitmap.select`
+- `Roaring64Bitmap.addRange`
+- `Roaring64Bitmap.removeRange`
+- `Roaring64Bitmap.rangeCardinality`
+- `Roaring64Bitmap.containsRange`
+- `Roaring64Bitmap.intersectsRange`
+- `Roaring64Bitmap.flip`
+- `Roaring64Bitmap.flipInPlace`
+- `Roaring64Bitmap.runOptimize`
+- `Roaring64Bitmap.shrinkToFit`
+- `Roaring64Bitmap.validate`
+- `Roaring64Bitmap.statistics`
+- `Roaring64Bitmap.serializedSizeInBytes`
+- `Roaring64Bitmap.frozenSizeInBytes`
+- `Roaring64Bitmap.frozenSerialize`
+- `Roaring64Bitmap.serialize`
+- `Roaring64Bitmap.serializeToWriter`
+- `Roaring64Bitmap.deserialize`
+- `Roaring64Bitmap.deserializeSafe`
+- `Roaring64Bitmap.ensureTotalCapacity`
 
-SET OPS           bitwiseAnd, bitwiseOr, bitwiseXor, bitwiseDifference
-                  bitwiseAndInPlace, bitwiseOrInPlace, bitwiseXorInPlace,
-                  bitwiseDifferenceInPlace
-                  bitwiseAndOwned, bitwiseOrOwned, bitwiseDifferenceOwned,
-                  flipOwned
+### `OwnedBitmap`
 
-N-WAY             orMany, orManyHeap, xorMany, orManyOwned, xorManyOwned
+- `OwnedBitmap.deinit`
+- `OwnedBitmap.contains`
+- `OwnedBitmap.asBitmap`
+- `OwnedBitmap.cardinality`
+- `OwnedBitmap.iterator`
+- `OwnedBitmap.serialize`
 
-LAZY              lazyOr, lazyXor, lazyOrInPlace, lazyXorInPlace,
-                  repairAfterLazy
+### `FrozenBitmap`
 
-ANALYTICS         andCardinality, orCardinality, xorCardinality,
-                  differenceCardinality, jaccardIndex, intersects
+- `FrozenBitmap.init`
+- `FrozenBitmap.deinit`
+- `FrozenBitmap.isEmpty`
+- `FrozenBitmap.contains`
+- `FrozenBitmap.rank`
+- `FrozenBitmap.getIndex`
+- `FrozenBitmap.select`
+- `FrozenBitmap.minimum`
+- `FrozenBitmap.maximum`
+- `FrozenBitmap.cardinality`
+- `FrozenBitmap.iterator`
 
-COMPARE           equals, isSubsetOf, isStrictSubsetOf
+### `Frozen64Bitmap`
 
-EXTRACT           iterator, toArray, toArrayAlloc
-
-SERIALIZE         serialize, serializeToWriter, serializedSizeInBytes
-
-OPTIMIZE          runOptimize
-
-OWNED             asBitmap, contains, cardinality, iterator, serialize, deinit
-
-FROZEN            init, contains, cardinality, isEmpty, iterator, deinit
-```
+- `Frozen64Bitmap.view`
+- `Frozen64Bitmap.deinit`
+- `Frozen64Bitmap.isEmpty`
+- `Frozen64Bitmap.contains`
+- `Frozen64Bitmap.cardinality`
+- `Frozen64Bitmap.minimum`
+- `Frozen64Bitmap.maximum`
+- `Frozen64Bitmap.rank`
+- `Frozen64Bitmap.getIndex`
+- `Frozen64Bitmap.select`
+- `Frozen64Bitmap.iterator`
+<!-- check-docs:end -->

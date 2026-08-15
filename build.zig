@@ -50,6 +50,8 @@ pub fn build(b: *std.Build) void {
     test64_step.dependOn(&run_roaring64_tests.step);
 
     addCheck32Step(b);
+    addCheckDocsStep(b);
+    addCheckPackageStep(b);
     addCrossWidthFixtureSteps(b, lib_mod, target);
 
     // Benchmark executable (always ReleaseFast, including the library)
@@ -975,6 +977,45 @@ fn addCheck32Step(b: *std.Build) void {
         });
         step.dependOn(&object.step);
     }
+}
+
+fn addCheckDocsStep(b: *std.Build) void {
+    const rawr_mod = b.createModule(.{
+        .root_source_file = b.path("src/roaring.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    const check_mod = b.createModule(.{
+        .root_source_file = b.path("check_docs.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    check_mod.addImport("rawr", rawr_mod);
+
+    const check_exe = b.addExecutable(.{
+        .name = "check_docs",
+        .root_module = check_mod,
+    });
+    const run_check = b.addRunArtifact(check_exe);
+    const step = b.step("check-docs", "Check stable public method documentation coverage");
+    step.dependOn(&run_check.step);
+}
+
+fn addCheckPackageStep(b: *std.Build) void {
+    const check_mod = b.createModule(.{
+        .root_source_file = b.path("check_package.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    const check_exe = b.addExecutable(.{
+        .name = "check_package",
+        .root_module = check_mod,
+    });
+    const run_check = b.addRunArtifact(check_exe);
+    run_check.addArg(b.graph.zig_exe);
+
+    const step = b.step("check-package", "Build and run an allowlist-only package consumer");
+    step.dependOn(&run_check.step);
 }
 
 fn addCrossWidthFixtureSteps(
