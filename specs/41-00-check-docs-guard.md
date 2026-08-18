@@ -130,6 +130,37 @@ Step 3 needs a package fingerprint; take the value Zig reports on first failure.
 - No production code changed; **all four suites green — `test`, `difftest`, `test64`, `difftest64`** —
   plus `ReleaseSafe` and `ReleaseFast`. `check-32` still passes.
 
+## Verification record — implemented, reviewed, ACCEPTED (`0b8e67d`)
+
+`check_docs.zig` (167 lines) and `check_package.zig` (102 lines) added; `API.md` Quick Reference replaced
+with the delimited per-type region; both steps wired via `addRunArtifact`. No `src/` change.
+
+**Reflection scope genuinely derived**, not a second list:
+`if (@typeInfo(entry.value) != .@"struct") continue;` over `stable_exports` — `ValidateError` drops out
+structurally. Allow-list empty, with comptime enforcement that reason strings are non-empty.
+
+**Controls run independently, in a scratch tree:**
+
+| Control | Result |
+| --- | --- |
+| **R — region scoping** (own design): token deleted from inside the region **and the identical token added to prose outside it** | **FAILS**, `check-docs: missing \`FrozenBitmap.rank\``, while `grep` confirms the token is present in the document. This is the exact case that would have passed silently under the original whole-document design. |
+| **B** — new `pub fn` on a reflected type, undocumented | **FAILS**: `missing \`FrozenBitmap.brandNewUndocumented\``. |
+| **C** — new `pub` root export in neither manifest | **FAILS**: `unclassified root export \`SneakyNewType\``. |
+| Restored | `check-docs: OK (168 direct public methods…)`, `check-package: OK (32 allowlisted files)`. |
+
+**Method inventory: 168** — `RoaringBitmap` 77, `Roaring64Bitmap` 63, `OwnedBitmap` 6, `FrozenBitmap` 11,
+`Frozen64Bitmap` 11. Recorded as **Quick Reference coverage, not a prose work list** (§3).
+
+**§3.1 limit surfaced in three places** — file doc comment, success output, and the prose above the
+region — so a passing check cannot be read as "the complete public API is documented".
+
+Verified the old flat `PUBLIC TYPES` block was **replaced, not left alongside** the new region.
+`check-package` still reports 32 files; the logo addition belongs to `41-02`.
+
+**Nit, cosmetic:** `check_docs.zig` and `check_package.zig` sit at the repo root while
+`check_32_api.zig` and `cross_width_fixture.zig` live in `tools/`. Root placement avoids
+`@embedFile("../API.md")`, so there is a reason for it; move only if uniformity is wanted.
+
 ## Estimate
 
 **S/M** — the checker is small; populating the complete Quick Reference is the bulk.
