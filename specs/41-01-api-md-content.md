@@ -79,6 +79,28 @@ trade-offs rather than issue an avoid-directive the board does not support.
   region; if a Quick Reference entry changes, the region stays complete.
 - No production code changed; **all four suites green — `test`, `difftest`, `test64`, `difftest64`.**
 
+## Verification record — implemented, reviewed, ACCEPTED
+
+`API.md` +145 lines. Complete `Roaring64Bitmap` section added; the §1 gaps documented in their topical
+sections; §2 contracts stated with **no ratios or board numbers anywhere**; Allocator Guide neutralized —
+the "Fast" label and the `c_allocator` **avoid-directive** are both gone, replaced by lifetime/linkage
+characteristics.
+
+**The manual prose audit earned its place in the spec.** It found something no mechanical check could:
+**`Roaring64Bitmap.fromRange` is half-open**, while `addRange` beside it is inclusive both ends.
+Confirmed in source — `if (step == 0 or max <= min) return result;`, `addRange(min, max - 1)`, and
+`while (value < max)`. So `API.md`'s blanket footgun heading "Ranges Are Inclusive" was **outright wrong**
+once that constructor existed. Now retitled "Mutation And Query Ranges Are Inclusive" with the exception
+called out at the footgun (line ~54), at the method (line ~410), and in the summary (line ~442). Also
+documented `BulkContext` ownership — one of the nested types §3.1 of `41-00` explicitly places outside
+guard scope, which is precisely why the audit was made the authority for this chunk.
+
+**Guard still live after prose landed** — the condition region-scoping was built for. Deleting
+`` `Roaring64Bitmap.statistics` `` from inside the region fails (`check-docs: missing …`) even though the
+name now appears throughout the new prose. Verified independently.
+
+`check-docs: OK (168 direct public methods…)`, `check-32` green. No `src/` change.
+
 ## Estimate
 
 **M** — the `Roaring64Bitmap` section is the bulk.

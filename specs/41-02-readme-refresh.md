@@ -79,6 +79,33 @@ absolute or user-specific paths remain.
 - **No performance claim remains in `README.md`** — verify by reading, and record the check.
 - No production code changed; **all four suites green — `test`, `difftest`, `test64`, `difftest64`.**
 
+## Verification record — implemented, reviewed, ACCEPTED
+
+`README.md` reworked; `build.zig.zon` gains `img/rawr.png`.
+
+**Performance-claim scan clean, verified independently:**
+`rg -ni 'faster|fastest|high-performance|1\.3-1\.8|slower|\bFast\b|\bGood\b' README.md API.md` returns
+**nothing**. All five sites are gone — the "Faster" claim, the `1.3-1.8x` figure, the
+"fastest to most flexible" lead-in, the `Fastest`/`Fast`/`Good` column, and the broken
+`docs/parity-measurement.md` link. The allocator table survives re-cast as lifetime/linkage
+characteristics, which keeps the genuinely useful part.
+
+Bitmap-types table now includes **both** `Roaring64Bitmap` and `Frozen64Bitmap`. Project structure lists
+`roaring64.zig`, `frozen64.zig`, `range_ops.zig`, `array_simd.zig`, and both new `tools/` entries; the
+"~9400 lines across 18 source files" claim is gone.
+
+**Two corrections beyond the spec, both real:**
+
+- The 32-bit target list said **four** targets; `check-32` builds **five**. `x86-linux-baseline` added,
+  so the README now matches the guard rather than contradicting it.
+- Range wording narrowed to "**Mutation and query** range APIs are inclusive", with
+  `Roaring64Bitmap.fromRange` named as the half-open exception — the same defect `41-01` fixed in
+  `API.md`, which would otherwise have stayed wrong in the more-read document.
+
+`img/rawr.png` in `.paths`; **`check-package: OK (33 allowlisted files)`** — up from 32, consumer builds
+and runs, so the packaged README keeps its logo. No relative documentation link now points outside
+`.paths`. No `src/` change.
+
 ## Estimate
 
 **S** — needs care rather than volume.
