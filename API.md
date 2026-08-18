@@ -20,6 +20,7 @@ stable API and may change without notice.
 | Type | Use When | Notes |
 |---|---|---|
 | `RoaringBitmap` | You need mutation or in-place operations | Call `deinit()` when done. |
+| `Roaring64Bitmap` | Values may exceed `u32` | Uses sorted high-32 buckets containing 32-bit bitmaps. |
 | `OwnedBitmap` | You need a read-only result and bulk-free lifetime | Returned by `*Owned` helpers. Use `asBitmap()` for the full read-only API. |
 | `FrozenBitmap` | You have serialized bytes and want zero-copy lookup | Backing bytes must outlive the view. |
 | `Frozen64Bitmap` | You have rawr frozen64 bytes and want zero-copy lookup | rawr-native format, not CRoaring frozen interop. |
@@ -38,9 +39,9 @@ defer frozen.deinit();
 
 ## Footguns
 
-### Ranges Are Inclusive
+### Mutation And Query Ranges Are Inclusive
 
-All range APIs use inclusive endpoints:
+Mutation and query range APIs use inclusive endpoints:
 
 ```zig
 _ = try bm.addRange(0, 100);       // adds 101 values: 0 through 100
@@ -49,7 +50,9 @@ const n = bm.rangeCardinality(0, 100);
 ```
 
 This applies to `addRange`, `removeRange`, `flip`, `flipInplace`,
-`rangeCardinality`, `containsRange`, and `intersectsRange`.
+`flipInPlace`, `rangeCardinality`, `containsRange`, and `intersectsRange`.
+`Roaring64Bitmap.fromRange` is the exception: it is a stepped constructor over
+the half-open range `[min, max)`.
 
 ### Use `deserializeSafe` For Untrusted Bytes
 
@@ -116,7 +119,13 @@ defer sorted.deinit();
 
 var arbitrary = try RoaringBitmap.fromSlice(allocator, mutable_values);
 defer arbitrary.deinit();
+
+var copy = try bm.clone(other_allocator);
+defer copy.deinit();
 ```
+
+`clone` creates an independent deep copy using the allocator passed to it. The
+source and clone can be mutated and deinited independently.
 
 Owned construction helpers:
 
@@ -173,7 +182,14 @@ _ = try bm.addRange(lo, hi);       // inclusive
 _ = try bm.remove(value);
 try bm.removeMany(values);
 _ = try bm.removeRange(lo, hi);    // inclusive
+
+var without_range = try bm.removeRangeCopy(allocator, lo, hi);
+defer without_range.deinit();
 ```
+
+`removeRangeCopy` leaves the source unchanged and constructs an independently
+owned result from only the surviving containers instead of cloning containers
+that the range removal would immediately discard.
 
 ## Queries
 
@@ -237,6 +253,19 @@ try a.bitwiseXorInPlace(&b);
 try a.bitwiseDifferenceInPlace(&b);
 ```
 
+`bitwiseOrInPlaceConsume` can move right-only containers instead of cloning
+them. Both operands must be distinct and use the exact same allocator handle.
+On success, the right operand is a valid empty bitmap that retains its top-level
+capacity; it may be reused or deinited normally, but its previous contents have
+been consumed. Allocator mismatch and aliased operands fail before mutation. On
+allocation failure, the right operand is unchanged and the left remains valid,
+but the left may already contain unions completed for earlier matching chunks.
+
+```zig
+try a.bitwiseOrInPlaceConsume(&b);
+// b is now empty and valid; a contains the union.
+```
+
 Owned two-way operations:
 
 ```zig
@@ -277,6 +306,20 @@ try a.repairAfterLazy();
 try a.lazyXorInPlace(&b);
 try a.repairAfterLazy();
 ```
+
+`repairAfterLazyWithOptions` has the same semantic result as
+`repairAfterLazy`, with an opt-in that changes only the order in which transient
+bitsets are freed:
+
+```zig
+try a.repairAfterLazyWithOptions(.{
+    .allocator_benefits_from_descending_free_order = true,
+});
+```
+
+The default repair path is unchanged. The effect of descending free order is
+allocator- and workload-dependent, so callers should enable it only after
+measuring their allocator and workload.
 
 ## Analytics And Comparison
 
@@ -335,6 +378,83 @@ const converted = try bm.runOptimize();
 `runOptimize` converts containers to run-length encoding where it saves space.
 It does not change the represented values.
 
+## `Roaring64Bitmap`
+
+`Roaring64Bitmap` partitions `u64` values by their high 32 bits. Each sorted
+high-key bucket contains a `RoaringBitmap` for the low 32 bits. It supports the
+same mutation, query, positional, set, comparison, range, iteration, and
+optimization families as `RoaringBitmap`, using `u64` values.
+
+Construction and conversion:
+
+```zig
+var bm64 = try Roaring64Bitmap.init(allocator);
+defer bm64.deinit();
+
+var reserved = try Roaring64Bitmap.initCapacity(allocator, expected_buckets);
+defer reserved.deinit();
+
+var stepped = try Roaring64Bitmap.fromRange(allocator, min, max, step);
+defer stepped.deinit();
+
+var sorted = try Roaring64Bitmap.fromSortedSlice(allocator, sorted_values);
+defer sorted.deinit();
+
+var arbitrary = try Roaring64Bitmap.fromSlice(allocator, mutable_values);
+defer arbitrary.deinit();
+
+var copy = try bm64.clone(other_allocator);
+defer copy.deinit();
+```
+
+`fromRange` covers the stepped half-open range `[min, max)`; `step == 0` or
+`max <= min` produces an empty bitmap. `fromSortedSlice` requires ascending
+input and accepts adjacent duplicates. `fromSlice` accepts arbitrary values but
+sorts and deduplicates its mutable input slice in place. `clone` is a deep copy
+using the supplied allocator.
+
+`fromRoaring32` clones a 32-bit bitmap into high-key bucket zero.
+`toRoaring32` returns an independently allocated 32-bit bitmap when every value
+fits in `u32`, or `null` when a nonzero high-key bucket is present.
+
+```zig
+var widened = try Roaring64Bitmap.fromRoaring32(allocator, &bm);
+defer widened.deinit();
+
+if (try widened.toRoaring32(allocator)) |narrowed_value| {
+    var narrowed = narrowed_value;
+    defer narrowed.deinit();
+}
+```
+
+For repeated operations with locality in the high 32 bits, initialize a
+`BulkContext` and pass it to `addBulk`, `containsBulk`, or `removeBulk`. Keep a
+context associated with one bitmap; it caches a bucket position and refreshes
+itself when that bitmap mutates.
+
+```zig
+var bulk = Roaring64Bitmap.BulkContext.init();
+try bm64.addBulk(&bulk, value);
+const present = bm64.containsBulk(&bulk, value);
+try bm64.removeBulk(&bulk, value);
+```
+
+`addRange`, `removeRange`, range queries, `flip`, and `flipInPlace` use inclusive
+endpoints. The 64-bit mutating range methods do not return added or removed
+counts because a range can contain more values than fit in `u64`.
+
+```zig
+try bm64.addRange(lo, hi);
+try bm64.flipInPlace(lo, hi);
+const count = bm64.rangeCardinality(lo, hi);
+```
+
+`statistics` reports bucket count, cardinality, minimum and maximum values, and
+the container mix across all buckets. Its byte fields describe rawr allocation
+bytes. Portable serialization uses CRoaring's roaring64 format as described in
+[Serialization](#serialization); `frozenSerialize` instead produces the
+rawr-native image consumed by `Frozen64Bitmap`.
+
 ## `OwnedBitmap`
 
 ```zig
@@ -359,10 +479,19 @@ defer frozen.deinit();
 frozen.contains(value)
 frozen.cardinality()
 frozen.isEmpty()
+frozen.minimum()
+frozen.maximum()
+frozen.rank(value)
+frozen.select(rank)
+frozen.getIndex(value)
 frozen.iterator()
 ```
 
 The serialized bytes must remain alive for the lifetime of the `FrozenBitmap`.
+`rank`, `select`, and `getIndex` scan container descriptors and then probe one
+container; the frozen descriptor table does not store prefix sums. `minimum`
+and `maximum` read array and run endpoints directly, while a bitset container
+may require scanning up to 1,024 words.
 
 ## `Frozen64Bitmap`
 
@@ -394,11 +523,11 @@ format. The backing bytes must remain alive for the lifetime of the view.
 
 | Allocator | Use When |
 |---|---|
-| `OwnedBitmap` helpers | Fast temporary read-only results. |
-| `std.heap.smp_allocator` | Long-lived mutable bitmaps. |
-| `std.heap.ArenaAllocator` | Batch operations with bulk-free lifetime. |
-| `std.heap.FixedBufferAllocator` | Hot paths with known memory bounds. |
-| `std.heap.c_allocator` | Avoid for rawr's many small allocations. |
+| `OwnedBitmap` helpers | Read-only results whose arena-backed storage should be released in one `deinit`. |
+| `std.heap.smp_allocator` | General-purpose mutable bitmaps with independently managed lifetimes. |
+| `std.heap.ArenaAllocator` | Groups of bitmaps or operations that share a bulk-free lifetime. |
+| `std.heap.FixedBufferAllocator` | Workloads with a known memory bound and caller-provided storage. |
+| `std.heap.c_allocator` | Applications that require libc-backed allocation and link libc. |
 
 ## Quick Reference
 

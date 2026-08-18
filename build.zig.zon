@@ -10,6 +10,7 @@
         "LICENSE",
         "README.md",
         "THIRD_PARTY_NOTICES.md",
+        "img/rawr.png",
         "build.zig",
         "build.zig.zon",
         "src/array_container.zig",

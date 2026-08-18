@@ -27,9 +27,11 @@ See [API.md](API.md) for the full API reference.
 
 ### 32-bit targets
 
-rawr is compile-checked on `wasm32-freestanding`, `x86-linux-musl`, `arm-linux-musleabi`, and
-`riscv32-linux`; `x86-linux-musl` is also exercised natively by the unit, differential, and
-cross-width serialization suites. Run the compile matrix with `zig build check-32`.
+rawr is compile-checked on `wasm32-freestanding`, `x86-linux-musl`,
+`arm-linux-musleabi`, `riscv32-linux`, and `x86-linux-baseline`;
+`x86-linux-musl` is also exercised natively by the unit, differential, and
+cross-width serialization suites. Run the compile matrix with
+`zig build check-32`.
 
 A 32-bit process has roughly 2-4 GB of usable address space. A worst-case dense bitmap can require
 512 MB for container payloads alone, before bitmap, allocator, and process overhead, so allocation
@@ -87,21 +89,23 @@ var safe = try RoaringBitmap.deserializeSafe(std.heap.smp_allocator, bytes);
 defer safe.deinit();
 ```
 
-Range APIs are inclusive. `addRange(100, 200)` adds 101 values.
+Mutation and query range APIs are inclusive. `addRange(100, 200)` adds 101
+values; `Roaring64Bitmap.fromRange` is a half-open stepped constructor.
 
 ### Bitmap types
 
 | Type | Use when |
 |------|----------|
 | `RoaringBitmap` | You need mutation, in-place set operations, or long-lived ownership. |
+| `Roaring64Bitmap` | Values may exceed `u32`. |
 | `OwnedBitmap` | You want an arena-backed read-only result that frees in one call. |
 | `FrozenBitmap` | You have serialized bytes and want zero-copy lookup. |
+| `Frozen64Bitmap` | You have a rawr-native frozen64 image and want zero-copy lookup. |
 
-### OwnedBitmap (recommended for read-heavy patterns)
+### OwnedBitmap (arena-backed read-only results)
 
 `OwnedBitmap` uses arena allocation internally — all container memory is freed
-in one operation. Faster for deserialize and set operations, but no individual
-`remove()`.
+in one operation. It exposes read-only access and has no individual `remove()`.
 
 ```zig
 const OwnedBitmap = rawr.OwnedBitmap;
@@ -138,22 +142,20 @@ var it = frozen.iterator();
 
 ## Allocator guidance
 
-Allocator effects are operation-dependent. On measured container-heavy
-operations, `std.heap.c_allocator` was roughly 1.3-1.8x slower than alternatives,
-while some allocation-heavy operations favored libc. See
-[`docs/parity-measurement.md`](docs/parity-measurement.md) for current results.
+Allocator choice controls ownership, lifetime, memory bounds, and whether libc
+must be linked. Match those properties to the application rather than assuming
+one allocator fits every operation.
 
-Recommended allocators, fastest to most flexible:
+| Allocator or API | Characteristics | Use when |
+|---|---|---|
+| `OwnedBitmap` API | Arena-backed read-only ownership with one `deinit` | Results share a single lifetime. |
+| `std.heap.ArenaAllocator` | Allocations are released together | Multiple mutable bitmaps share a bulk-free lifetime. |
+| `std.heap.smp_allocator` | General-purpose Zig allocator with independent frees | Mutable bitmaps have independent lifetimes. |
+| `std.heap.FixedBufferAllocator` | Uses caller-provided storage with a fixed bound | The maximum memory budget is known. |
+| `std.heap.c_allocator` | Uses libc allocation and requires libc linkage | C interoperability or an application already standardized on libc allocation. |
 
-| Allocator | Speed | Use when |
-|-----------|-------|----------|
-| `OwnedBitmap` API | Fastest | Deserialize → query → discard |
-| `ArenaAllocator` | Fast | Bounded lifetime, bulk free |
-| `smp_allocator` | Good | Long-lived mutable bitmaps |
-| `c_allocator` | Workload-dependent | Interop or workloads where measurement favors libc |
-
-For hot loops with bounded lifetime (evaluation rounds, request handling),
-pre-allocate a `FixedBufferAllocator` and reuse it across iterations.
+A `FixedBufferAllocator` can be reset and reused when repeated work has a known
+memory bound and common lifetime.
 
 ## Building
 
@@ -183,8 +185,7 @@ Run benchmarks (results saved to `misc/`):
 
 ## Internals
 
-~9400 lines of Zig across 18 source files. Three container types per the
-Roaring spec:
+rawr implements the three container types defined by the Roaring format:
 
 - **Array containers** — sorted u16 arrays for sparse chunks (<4096 values)
 - **Bitset containers** — 8KB bitmaps for dense chunks, SIMD via `@Vector(8, u64)`
@@ -204,28 +205,43 @@ Key implementation details:
 
 ## Project structure
 
+Main files and source families:
+
 ```
+check_docs.zig       # API.md public-method and export guard
+check_package.zig    # allowlist-only downstream package check
 src/
+  roaring.zig         # public module root
   bitmap.zig          # RoaringBitmap, OwnedBitmap (public API)
+  roaring64.zig       # Roaring64Bitmap
+  frozen.zig          # FrozenBitmap zero-copy view
+  frozen64.zig        # Frozen64Bitmap rawr-native zero-copy view
   bitmap_tests.zig    # unit tests for bitmap.zig
   array_container.zig # sorted u16 array container
-  bitset_container.zig# 8KB bitset container (SIMD)
+  array_kernels.zig   # array-operation kernel selection
+  array_simd.zig      # architecture-specific array kernels
+  bitset_container.zig # 8KB bitset container
   run_container.zig   # run-length encoded container
   container.zig       # tagged union over container types
   container_ops.zig   # cross-container set operations (9 type pairs)
+  range_ops.zig       # mutation and query range implementations
   serialize.zig       # RoaringFormatSpec serialize/deserialize
-  frozen.zig          # FrozenBitmap (zero-copy)
   optimize.zig        # runOptimize, container type conversions
   compare.zig         # isSubsetOf, equals
   format.zig          # format constants
-  roaring.zig         # public module root
-  bench.zig           # standalone benchmarks
-  bench_croaring.zig  # CRoaring comparison benchmarks
-  bench_allocators.zig# allocator matrix experiment
-  validate_croaring.zig# CRoaring interop validation
-  property_tests.zig  # randomized property tests
+  *_tests.zig         # unit, range, property, and 64-bit suites
+  roaring64_test_*.zig # 64-bit generators and shared test support
+  test_gen.zig        # 32-bit deterministic test generation
+  diff_test*.zig      # CRoaring differential tests
+  validate_*.zig      # CRoaring interoperability validation
+  bench*.zig          # benchmark and diagnostic executables
 tools/
-  croaring_wrapper.h  # rawr-owned translate-c adapter for development tools
+  check_32_api.zig    # compile-only public API reachability probe
+  cross_width_fixture.zig # deterministic 32/64-bit serialization fixture
+  croaring_wrapper.h  # rawr-owned translate-c adapter
+  croaring_*.{c,h}    # CRoaring diagnostic adapters
+  bench_*.{c,h}       # platform measurement helpers
+  parse-*.awk         # profiler output parsers
 vendor/
   roaring.c, roaring.h # CRoaring amalgamation (for benchmarks/validation only)
   LICENSE-CRoaring     # upstream Apache-2.0/MIT license text
