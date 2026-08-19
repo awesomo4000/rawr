@@ -54,6 +54,8 @@ pub const ParityRow = enum {
     lazy_or_construction,
     lazy_or_construction_batched,
     lazy_or_construction_batched_sorted,
+    lazy_or_construction_slotted,
+    lazy_or_construction_slotted_fused,
     lazy_or_repair_only,
     or_many,
     or_many_heap,
@@ -95,6 +97,8 @@ const LazyConstructionArm = enum {
     baseline,
     batched_unsorted,
     batched_sorted,
+    slotted,
+    slotted_fused,
 };
 
 const LazyContext = enum {
@@ -534,6 +538,8 @@ fn timeRawrLazyOrConstructionWithAllocator(
         .baseline => a.lazyOr(result_allocator, b, true),
         .batched_unsorted => rawr.lazy_construction.batchedUnsorted(a, result_allocator, b, true),
         .batched_sorted => rawr.lazy_construction.batchedSorted(a, result_allocator, b, true),
+        .slotted => rawr.lazy_construction.slotted(a, result_allocator, b, true),
+        .slotted_fused => rawr.lazy_construction.slottedFused(a, result_allocator, b, true),
     } catch unreachable;
     const elapsed = bench_time.monotonicNanos() - start;
     std.mem.doNotOptimizeAway(&result);
@@ -1289,6 +1295,8 @@ pub fn parityTiming(row: ParityRow) ParityTiming {
         .lazy_or_construction,
         .lazy_or_construction_batched,
         .lazy_or_construction_batched_sorted,
+        .lazy_or_construction_slotted,
+        .lazy_or_construction_slotted_fused,
         .lazy_or_repair_only,
         => .internal,
         else => .external,
@@ -1336,6 +1344,8 @@ pub fn parityPrepare(row: ParityRow, implementation: ParityImplementation) void 
         .lazy_or_construction,
         .lazy_or_construction_batched,
         .lazy_or_construction_batched_sorted,
+        .lazy_or_construction_slotted,
+        .lazy_or_construction_slotted_fused,
         .lazy_or_repair_only,
         => initSparseFor(implementation),
         .dense_and, .dense_or, .rank, .select, .rank_many, .flip, .clone, .remove_range => initDenseFor(implementation),
@@ -1355,6 +1365,34 @@ pub const ParityRawrSparseInputs = struct {
     right: *const RoaringBitmap,
 };
 
+const LazySourceRecord = struct {
+    destination: usize,
+    source_a: usize,
+    source_b: usize,
+};
+
+const LazySourcePayload = struct {
+    address: usize,
+    kind: enum { array, bitset, run },
+    bytes: u64,
+};
+
+const LazySourceTravel = struct {
+    source_a: u128,
+    source_b: u128,
+    interleaved: u128,
+};
+
+const LazySourceDiagnostics = struct {
+    eligible_pairs: usize,
+    arrays: u64,
+    bitsets: u64,
+    runs: u64,
+    payload_bytes: u64,
+    key_order: LazySourceTravel,
+    destination_order: LazySourceTravel,
+};
+
 /// Benchmark-only access to the exact sparse corpus used by the canonical
 /// parity worker. Call parityPrepare(.lazy_or_repair, .rawr) first.
 pub fn parityRawrSparseInputs() ParityRawrSparseInputs {
@@ -1362,6 +1400,141 @@ pub fn parityRawrSparseInputs() ParityRawrSparseInputs {
         .left = &rawr_sparse_a.?,
         .right = &rawr_sparse_b.?,
     };
+}
+
+pub fn parityPrintLazyConstructionSourceTravel(kind: ParityAllocator) !void {
+    const diagnostics = switch (kind) {
+        .smp => try collectLazyConstructionSourceTravel(std.heap.smp_allocator),
+        .libc => try collectLazyConstructionSourceTravel(libc_allocator),
+        else => return error.InvalidAllocatorVariant,
+    };
+    bench_time.print(
+        "DIAG\tlazy-or-construction-source-travel\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n",
+        .{
+            @tagName(kind),
+            diagnostics.eligible_pairs,
+            diagnostics.arrays,
+            diagnostics.bitsets,
+            diagnostics.runs,
+            diagnostics.payload_bytes,
+            diagnostics.key_order.source_a,
+            diagnostics.destination_order.source_a,
+            diagnostics.key_order.source_b,
+            diagnostics.destination_order.source_b,
+            diagnostics.key_order.interleaved,
+            diagnostics.destination_order.interleaved,
+        },
+    );
+}
+
+fn collectLazyConstructionSourceTravel(comptime result_allocator: std.mem.Allocator) !LazySourceDiagnostics {
+    const left = &rawr_sparse_a.?;
+    const right = &rawr_sparse_b.?;
+    var result = try rawr.lazy_construction.slottedFused(left, result_allocator, right, true);
+    defer result.deinit();
+
+    const records = try std.heap.page_allocator.alloc(LazySourceRecord, @min(left.size, right.size));
+    defer std.heap.page_allocator.free(records);
+
+    var diagnostics = LazySourceDiagnostics{
+        .eligible_pairs = 0,
+        .arrays = 0,
+        .bitsets = 0,
+        .runs = 0,
+        .payload_bytes = 0,
+        .key_order = undefined,
+        .destination_order = undefined,
+    };
+    var i: usize = 0;
+    var j: usize = 0;
+    var slot: usize = 0;
+    while (i < left.size and j < right.size) {
+        const key_a = left.keys[i];
+        const key_b = right.keys[j];
+        if (key_a < key_b) {
+            i += 1;
+        } else if (key_a > key_b) {
+            j += 1;
+        } else {
+            while (result.keys[slot] < key_a) slot += 1;
+            if (result.keys[slot] != key_a or result.containers[slot].getType() != .bitset) {
+                return error.LazyConstructionDiagnosticMismatch;
+            }
+            const source_a = lazySourcePayload(left.containers[i]);
+            const source_b = lazySourcePayload(right.containers[j]);
+            addLazySourceInventory(&diagnostics, source_a);
+            addLazySourceInventory(&diagnostics, source_b);
+            records[diagnostics.eligible_pairs] = .{
+                .destination = @intFromPtr(result.containers[slot].getBitset().words),
+                .source_a = source_a.address,
+                .source_b = source_b.address,
+            };
+            diagnostics.eligible_pairs += 1;
+            i += 1;
+            j += 1;
+        }
+    }
+
+    const populated = records[0..diagnostics.eligible_pairs];
+    diagnostics.key_order = lazySourceTravel(populated);
+    std.mem.sortUnstable(LazySourceRecord, populated, {}, lazySourceRecordLessThan);
+    diagnostics.destination_order = lazySourceTravel(populated);
+    return diagnostics;
+}
+
+fn lazySourcePayload(tp: rawr.TaggedPtr) LazySourcePayload {
+    return switch (rawr.Container.fromTagged(tp)) {
+        .array => |container| .{
+            .address = @intFromPtr(container.values.ptr),
+            .kind = .array,
+            .bytes = @as(u64, container.cardinality) * @sizeOf(u16),
+        },
+        .bitset => |container| .{
+            .address = @intFromPtr(container.words),
+            .kind = .bitset,
+            .bytes = rawr.BitsetContainer.SIZE_BYTES,
+        },
+        .run => |container| .{
+            .address = @intFromPtr(container.runs),
+            .kind = .run,
+            .bytes = @as(u64, container.n_runs) * @sizeOf(rawr.RunContainer.RunPair),
+        },
+        .reserved => unreachable,
+    };
+}
+
+fn addLazySourceInventory(diagnostics: *LazySourceDiagnostics, payload: LazySourcePayload) void {
+    switch (payload.kind) {
+        .array => diagnostics.arrays += 1,
+        .bitset => diagnostics.bitsets += 1,
+        .run => diagnostics.runs += 1,
+    }
+    diagnostics.payload_bytes += payload.bytes;
+}
+
+fn lazySourceTravel(records: []const LazySourceRecord) LazySourceTravel {
+    var result = LazySourceTravel{ .source_a = 0, .source_b = 0, .interleaved = 0 };
+    var previous_a: ?usize = null;
+    var previous_b: ?usize = null;
+    var previous_interleaved: ?usize = null;
+    for (records) |record| {
+        addLazySourceDelta(&result.source_a, &previous_a, record.source_a);
+        addLazySourceDelta(&result.source_b, &previous_b, record.source_b);
+        addLazySourceDelta(&result.interleaved, &previous_interleaved, record.source_a);
+        addLazySourceDelta(&result.interleaved, &previous_interleaved, record.source_b);
+    }
+    return result;
+}
+
+fn addLazySourceDelta(total: *u128, previous: *?usize, address: usize) void {
+    if (previous.*) |value| {
+        total.* += if (address >= value) address - value else value - address;
+    }
+    previous.* = address;
+}
+
+fn lazySourceRecordLessThan(_: void, lhs: LazySourceRecord, rhs: LazySourceRecord) bool {
+    return lhs.destination < rhs.destination;
 }
 
 fn initContainsFor(implementation: ParityImplementation) void {
@@ -1532,6 +1705,8 @@ noinline fn parityRunRawr(row: ParityRow, allocator_kind: ParityAllocator) u64 {
         .lazy_or_construction => return runRawrLazyPhase(allocator_kind, .construction),
         .lazy_or_construction_batched => return runRawrLazyConstruction(allocator_kind, .batched_unsorted),
         .lazy_or_construction_batched_sorted => return runRawrLazyConstruction(allocator_kind, .batched_sorted),
+        .lazy_or_construction_slotted => return runRawrLazyConstruction(allocator_kind, .slotted),
+        .lazy_or_construction_slotted_fused => return runRawrLazyConstruction(allocator_kind, .slotted_fused),
         .lazy_or_repair_only => return runRawrLazyPhase(allocator_kind, .repair),
         .or_many => runRawrAllocator(allocator_kind, benchRawrOrManyWithAllocator),
         .or_many_heap => runRawrAllocator(allocator_kind, benchRawrOrManyHeapWithAllocator),
@@ -1601,6 +1776,8 @@ noinline fn parityRunCRoaring(row: ParityRow) u64 {
         .lazy_or_construction,
         .lazy_or_construction_batched,
         .lazy_or_construction_batched_sorted,
+        .lazy_or_construction_slotted,
+        .lazy_or_construction_slotted_fused,
         => return timeCRoaringLazyOrSparse(.construction),
         .lazy_or_repair_only => return timeCRoaringLazyOrSparse(.repair),
         .or_many => benchCRoaringOrMany(),
@@ -1817,6 +1994,8 @@ fn makeRawrResult(row: ParityRow, result_allocator: std.mem.Allocator) !RoaringB
         .lazy_or_construction,
         .lazy_or_construction_batched,
         .lazy_or_construction_batched_sorted,
+        .lazy_or_construction_slotted,
+        .lazy_or_construction_slotted_fused,
         .lazy_or_repair_only,
         => result: {
             var result = switch (row) {
@@ -1827,6 +2006,18 @@ fn makeRawrResult(row: ParityRow, result_allocator: std.mem.Allocator) !RoaringB
                     true,
                 ),
                 .lazy_or_construction_batched_sorted => try rawr.lazy_construction.batchedSorted(
+                    &rawr_sparse_a.?,
+                    result_allocator,
+                    &rawr_sparse_b.?,
+                    true,
+                ),
+                .lazy_or_construction_slotted => try rawr.lazy_construction.slotted(
+                    &rawr_sparse_a.?,
+                    result_allocator,
+                    &rawr_sparse_b.?,
+                    true,
+                ),
+                .lazy_or_construction_slotted_fused => try rawr.lazy_construction.slottedFused(
                     &rawr_sparse_a.?,
                     result_allocator,
                     &rawr_sparse_b.?,
@@ -1894,6 +2085,8 @@ fn makeCRoaringResult(row: ParityRow) !*c.roaring_bitmap_t {
         .lazy_or_construction,
         .lazy_or_construction_batched,
         .lazy_or_construction_batched_sorted,
+        .lazy_or_construction_slotted,
+        .lazy_or_construction_slotted_fused,
         .lazy_or_repair_only,
         => result: {
             const result = c.roaring_bitmap_lazy_or(cr_sparse_a.?, cr_sparse_b.?, true) orelse return error.OutOfMemory;

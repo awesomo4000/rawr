@@ -479,6 +479,8 @@ test "dense set-operation construction is leak-free across allocation failures" 
 const LazyConstructionTestMode = enum {
     batched_unsorted,
     batched_sorted,
+    slotted,
+    slotted_fused,
 };
 
 const LazyConstructionFixture = struct {
@@ -495,7 +497,7 @@ test "batched lazy OR construction matches baseline across eligibility boundarie
     var fixture = try makeLazyConstructionFixture(std.testing.allocator);
     defer fixture.deinit();
 
-    for ([_]LazyConstructionTestMode{ .batched_unsorted, .batched_sorted }) |mode| {
+    for ([_]LazyConstructionTestMode{ .batched_unsorted, .batched_sorted, .slotted, .slotted_fused }) |mode| {
         try expectLazyConstructionEquivalent(mode, &fixture.left, &fixture.right, false);
         try expectLazyConstructionEquivalent(mode, &fixture.left, &fixture.right, true);
 
@@ -508,7 +510,7 @@ test "batched lazy OR construction matches baseline across eligibility boundarie
 }
 
 test "batched lazy OR construction handles all allocation failures" {
-    for ([_]LazyConstructionTestMode{ .batched_unsorted, .batched_sorted }) |mode| {
+    for ([_]LazyConstructionTestMode{ .batched_unsorted, .batched_sorted, .slotted, .slotted_fused }) |mode| {
         try std.testing.checkAllAllocationFailures(
             std.testing.allocator,
             lazyConstructionAllocationFailureCase,
@@ -557,6 +559,8 @@ fn makeLazyConstructionResult(
     return switch (mode) {
         .batched_unsorted => lazy_construction.batchedUnsorted(left, allocator, right, bitset_conversion),
         .batched_sorted => lazy_construction.batchedSorted(left, allocator, right, bitset_conversion),
+        .slotted => lazy_construction.slotted(left, allocator, right, bitset_conversion),
+        .slotted_fused => lazy_construction.slottedFused(left, allocator, right, bitset_conversion),
     };
 }
 
@@ -568,7 +572,7 @@ fn expectLazyConstructionEquivalent(
 ) !void {
     var baseline = try lazy_construction.baseline(left, std.testing.allocator, right, bitset_conversion);
     defer baseline.deinit();
-    try baseline.repairAfterLazy();
+    const baseline_cardinality = baseline.cardinality();
 
     var candidate = try makeLazyConstructionResult(
         mode,
@@ -578,6 +582,9 @@ fn expectLazyConstructionEquivalent(
         bitset_conversion,
     );
     defer candidate.deinit();
+    try std.testing.expectEqual(baseline_cardinality, candidate.cardinality());
+
+    try baseline.repairAfterLazy();
     try candidate.repairAfterLazy();
 
     const baseline_bytes = try baseline.serialize(std.testing.allocator);
@@ -620,6 +627,103 @@ fn lazyConstructionAllocationFailureCase(
     try result.repairAfterLazy();
     try std.testing.expect(result.equals(&expected));
 }
+
+test "slotted lazy OR construction only falls back on pending scratch failure" {
+    for ([_]LazyConstructionTestMode{ .slotted, .slotted_fused }) |mode| {
+        var fixture = try makeLazyConstructionFixture(std.testing.allocator);
+        defer fixture.deinit();
+
+        var fail_index: usize = 0;
+        while (true) : (fail_index += 1) {
+            var fail_once = LazyConstructionFailOnceAllocator{
+                .backing = std.testing.allocator,
+                .fail_index = fail_index,
+            };
+            const attempted = makeLazyConstructionResult(
+                mode,
+                &fixture.left,
+                fail_once.allocator(),
+                &fixture.right,
+                false,
+            );
+
+            if (!fail_once.failed) {
+                var result = try attempted;
+                result.deinit();
+                break;
+            }
+            if (fail_index == 2) {
+                var result = try attempted;
+                result.deinit();
+            } else {
+                try std.testing.expectError(error.OutOfMemory, attempted);
+            }
+        }
+    }
+}
+
+const LazyConstructionFailOnceAllocator = struct {
+    backing: std.mem.Allocator,
+    fail_index: usize,
+    alloc_index: usize = 0,
+    failed: bool = false,
+
+    const Self = @This();
+
+    fn allocator(self: *Self) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        const index = self.alloc_index;
+        self.alloc_index += 1;
+        if (!self.failed and index == self.fail_index) {
+            self.failed = true;
+            return null;
+        }
+        return self.backing.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resize(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) bool {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.backing.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remap(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.backing.rawRemap(memory, alignment, new_len, ret_addr);
+    }
+
+    fn free(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        ret_addr: usize,
+    ) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.backing.rawFree(memory, alignment, ret_addr);
+    }
+};
 
 fn denseSetOperationAllocationFailureCase(result_allocator: std.mem.Allocator) !void {
     const source_allocator = std.testing.allocator;

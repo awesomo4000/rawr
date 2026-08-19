@@ -731,6 +731,20 @@ fn assertLazyOrCase(
     try sorted.validate();
     try expectRawrEqual("lazyOr:batched-sorted-eager", &sorted, &eager);
 
+    var slotted = try rawr.lazy_construction.slotted(a, allocator, b, bitset_conversion);
+    defer slotted.deinit();
+    try std.testing.expectEqual(eager.cardinality(), slotted.cardinality());
+    try slotted.repairAfterLazy();
+    try slotted.validate();
+    try expectRawrEqual("lazyOr:slotted-eager", &slotted, &eager);
+
+    var slotted_fused = try rawr.lazy_construction.slottedFused(a, allocator, b, bitset_conversion);
+    defer slotted_fused.deinit();
+    try std.testing.expectEqual(eager.cardinality(), slotted_fused.cardinality());
+    try slotted_fused.repairAfterLazy();
+    try slotted_fused.validate();
+    try expectRawrEqual("lazyOr:slotted-fused-eager", &slotted_fused, &eager);
+
     var in_place = try a.clone(allocator);
     defer in_place.deinit();
     try in_place.lazyOrInPlace(b, bitset_conversion);
@@ -748,6 +762,8 @@ fn assertLazyOrCase(
     try assertSameValues(allocator, "lazyOr:croaring", &lazy, oracle_result);
     try assertSameValues(allocator, "lazyOr:batched-croaring", &batched, oracle_result);
     try assertSameValues(allocator, "lazyOr:batched-sorted-croaring", &sorted, oracle_result);
+    try assertSameValues(allocator, "lazyOr:slotted-croaring", &slotted, oracle_result);
+    try assertSameValues(allocator, "lazyOr:slotted-fused-croaring", &slotted_fused, oracle_result);
 }
 
 fn assertLazyXorCase(

@@ -2134,11 +2134,26 @@ pub const RoaringBitmap = struct {
         baseline,
         batched_unsorted,
         batched_sorted,
+        slotted_unfused,
+        slotted_fused,
     };
 
     const PendingBitset = struct {
         payload_addr: usize,
         header: *BitsetContainer,
+    };
+
+    const SlottedPendingBitset = struct {
+        payload_addr: usize,
+        header: *BitsetContainer,
+        src_a: TaggedPtr,
+        src_b: TaggedPtr,
+        slot: u32,
+    };
+
+    const LazySlottedCounts = struct {
+        output_count: u32,
+        eligible_count: usize,
     };
 
     fn manyOrMerge(allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self {
@@ -2331,7 +2346,7 @@ pub const RoaringBitmap = struct {
         a: *const Self,
         b: *const Self,
         bitset_conversion: bool,
-        mode: LazyConstructionMode,
+        comptime mode: LazyConstructionMode,
     ) !Self {
         const max_result_size = @min(a.size + b.size, @as(u32, 1) << 16);
         var result = try Self.initCapacity(allocator, max_result_size);
@@ -2339,6 +2354,18 @@ pub const RoaringBitmap = struct {
 
         if (op != .bor or mode == .baseline) {
             try lazyMergeTwoBaselineInto(op, allocator, a, b, bitset_conversion, &result);
+            return result;
+        }
+
+        if (mode == .slotted_unfused or mode == .slotted_fused) {
+            try lazyMergeTwoSlottedInto(
+                allocator,
+                a,
+                b,
+                bitset_conversion,
+                &result,
+                mode == .slotted_fused,
+            );
             return result;
         }
 
@@ -2463,6 +2490,138 @@ pub const RoaringBitmap = struct {
         return count;
     }
 
+    fn lazySlottedCounts(a: *const Self, b: *const Self, bitset_conversion: bool) LazySlottedCounts {
+        var output_count: u32 = 0;
+        var eligible_count: usize = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < a.size and j < b.size) {
+            const key_a = a.keys[i];
+            const key_b = b.keys[j];
+            output_count += 1;
+            if (key_a < key_b) {
+                i += 1;
+            } else if (key_a > key_b) {
+                j += 1;
+            } else {
+                const c_a = Container.fromTagged(a.containers[i]);
+                const c_b = Container.fromTagged(b.containers[j]);
+                if (bitset_conversion or isBitsetContainer(c_a) or isBitsetContainer(c_b)) {
+                    eligible_count += 1;
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+        output_count += @intCast((a.size - i) + (b.size - j));
+        return .{ .output_count = output_count, .eligible_count = eligible_count };
+    }
+
+    fn lazyMergeTwoSlottedInto(
+        allocator: std.mem.Allocator,
+        a: *const Self,
+        b: *const Self,
+        bitset_conversion: bool,
+        result: *Self,
+        comptime fused: bool,
+    ) !void {
+        const counts = lazySlottedCounts(a, b, bitset_conversion);
+        const pending = allocator.alloc(SlottedPendingBitset, counts.eligible_count) catch {
+            try lazyMergeTwoBaselineInto(.bor, allocator, a, b, bitset_conversion, result);
+            return;
+        };
+        defer allocator.free(pending);
+
+        const reserved: TaggedPtr = .{ .tag = .reserved, .addr = 0 };
+        @memset(result.containers[0..counts.output_count], reserved);
+        result.size = counts.output_count;
+
+        var initialized_count: usize = 0;
+        var transferred_count: usize = 0;
+        errdefer {
+            for (pending[transferred_count..initialized_count]) |entry| entry.header.deinit(allocator);
+        }
+
+        for (pending) |*entry| {
+            const header = try initPendingBitset(allocator);
+            entry.* = .{
+                .payload_addr = @intFromPtr(header.words),
+                .header = header,
+                .src_a = undefined,
+                .src_b = undefined,
+                .slot = undefined,
+            };
+            initialized_count += 1;
+        }
+
+        var i: usize = 0;
+        var j: usize = 0;
+        var slot: u32 = 0;
+        var pending_index: usize = 0;
+        while (i < a.size and j < b.size) {
+            const key_a = a.keys[i];
+            const key_b = b.keys[j];
+            if (key_a < key_b) {
+                result.keys[slot] = key_a;
+                result.containers[slot] = try cloneContainer(allocator, a.containers[i]);
+                i += 1;
+            } else if (key_a > key_b) {
+                result.keys[slot] = key_b;
+                result.containers[slot] = try cloneContainer(allocator, b.containers[j]);
+                j += 1;
+            } else {
+                const tp_a = a.containers[i];
+                const tp_b = b.containers[j];
+                const c_a = Container.fromTagged(tp_a);
+                const c_b = Container.fromTagged(tp_b);
+                result.keys[slot] = key_a;
+                if (bitset_conversion or isBitsetContainer(c_a) or isBitsetContainer(c_b)) {
+                    if (pending_index >= pending.len) return error.LazyConstructionCountMismatch;
+                    pending[pending_index].src_a = tp_a;
+                    pending[pending_index].src_b = tp_b;
+                    pending[pending_index].slot = slot;
+                    pending_index += 1;
+                } else {
+                    const merged = try ops.containerUnion(allocator, c_a, c_b);
+                    result.containers[slot] = merged.toTagged();
+                }
+                i += 1;
+                j += 1;
+            }
+            slot += 1;
+        }
+        while (i < a.size) : (i += 1) {
+            result.keys[slot] = a.keys[i];
+            result.containers[slot] = try cloneContainer(allocator, a.containers[i]);
+            slot += 1;
+        }
+        while (j < b.size) : (j += 1) {
+            result.keys[slot] = b.keys[j];
+            result.containers[slot] = try cloneContainer(allocator, b.containers[j]);
+            slot += 1;
+        }
+        if (slot != counts.output_count or pending_index != pending.len) {
+            return error.LazyConstructionCountMismatch;
+        }
+
+        std.mem.sortUnstable(SlottedPendingBitset, pending, {}, slottedPendingBitsetLessThan);
+        if (!fused) {
+            for (pending) |entry| @memset(entry.header.words, 0);
+        }
+        for (pending) |entry| {
+            if (fused) @memset(entry.header.words, 0);
+            lazyAccumulateIntoBitset(.bor, entry.header, Container.fromTagged(entry.src_a));
+            lazyAccumulateIntoBitset(.bor, entry.header, Container.fromTagged(entry.src_b));
+            result.containers[entry.slot] = TaggedPtr.initBitset(entry.header);
+            transferred_count += 1;
+        }
+
+        for (result.containers[0..result.size]) |tp| {
+            if (tp.getType() == .reserved) return error.LazyConstructionReservedSlot;
+        }
+        result.cached_cardinality = -1;
+    }
+
     fn lazyMergeTwoBatchedInto(
         allocator: std.mem.Allocator,
         a: *const Self,
@@ -2512,6 +2671,10 @@ pub const RoaringBitmap = struct {
     }
 
     fn pendingBitsetLessThan(_: void, lhs: PendingBitset, rhs: PendingBitset) bool {
+        return lhs.payload_addr < rhs.payload_addr;
+    }
+
+    fn slottedPendingBitsetLessThan(_: void, lhs: SlottedPendingBitset, rhs: SlottedPendingBitset) bool {
         return lhs.payload_addr < rhs.payload_addr;
     }
 
@@ -2897,6 +3060,24 @@ pub const lazy_construction = struct {
         bitset_conversion: bool,
     ) !RoaringBitmap {
         return RoaringBitmap.lazyMergeTwo(.bor, allocator, left, right, bitset_conversion, .batched_sorted);
+    }
+
+    pub fn slotted(
+        left: *const RoaringBitmap,
+        allocator: std.mem.Allocator,
+        right: *const RoaringBitmap,
+        bitset_conversion: bool,
+    ) !RoaringBitmap {
+        return RoaringBitmap.lazyMergeTwo(.bor, allocator, left, right, bitset_conversion, .slotted_unfused);
+    }
+
+    pub fn slottedFused(
+        left: *const RoaringBitmap,
+        allocator: std.mem.Allocator,
+        right: *const RoaringBitmap,
+        bitset_conversion: bool,
+    ) !RoaringBitmap {
+        return RoaringBitmap.lazyMergeTwo(.bor, allocator, left, right, bitset_conversion, .slotted_fused);
     }
 };
 

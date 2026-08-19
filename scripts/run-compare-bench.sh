@@ -61,16 +61,18 @@ manifest_file="${prefix}-manifest.tsv"
 header_file="${prefix}-header.txt"
 process_rows="${prefix}-process-rows.tsv"
 aggregate_rows="${prefix}-aggregate.tsv"
+diagnostics="${prefix}-diagnostics.tsv"
 summary="${prefix}-summary.txt"
 
 "$worker" --list >"$manifest_file" 2>&1
 "$worker" --header >"$header_file" 2>&1
 : >"$process_rows"
+: >"$diagnostics"
 
 tuple_count="$(awk -F '\t' '$1 == "TUPLE" { count++ } END { print count + 0 }' "$manifest_file")"
 row_count="$(awk -F '\t' '$1 == "ROW" { count++ } END { print count + 0 }' "$manifest_file")"
-if [[ "$row_count" != 42 ]]; then
-    printf 'expected 42 manifest rows, got %s\n' "$row_count" >&2
+if [[ "$row_count" != 44 ]]; then
+    printf 'expected 44 manifest rows, got %s\n' "$row_count" >&2
     exit 1
 fi
 printf 'Accurate parity table: %s rows, %s tuples, %s independent processes each\n' \
@@ -113,6 +115,7 @@ while IFS=$'\t' read -r kind row implementation allocator reference_row referenc
             exit 1
         fi
         printf '%s\n' "$result_line" >>"$process_rows"
+        awk -F '\t' '$1 == "DIAG"' "$output" >>"$diagnostics"
         ((run++))
     done
 done < <(awk -F '\t' '$1 == "TUPLE"' "$manifest_file")
@@ -188,4 +191,15 @@ sort -t $'\t' -k1,1 -k2,2 -k3,3 -k6,6n "$process_rows" | awk -F '\t' '
     ' "$aggregate_rows" "$manifest_file"
 } | tee "$summary"
 
+if [[ -s "$diagnostics" ]]; then
+    {
+        printf '\nLazy construction source-travel diagnostics\n'
+        printf 'record metric allocator eligible arrays bitsets runs bytes a-key a-destination b-key b-destination interleaved-key interleaved-destination\n'
+        cat "$diagnostics"
+    } | tee -a "$summary"
+fi
+
 printf '\nsaved summary: %s\n' "$summary"
+if [[ -s "$diagnostics" ]]; then
+    printf 'saved diagnostics: %s\n' "$diagnostics"
+fi

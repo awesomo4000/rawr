@@ -380,6 +380,36 @@ const manifest = [_]ManifestRow{
         .operation = .lazy_or_construction_batched_sorted,
     },
     .{
+        .id = "lazy-or-construction-slotted",
+        .display_name = "lazyOr construction (slotted)",
+        .corpus = "same sparse corpus as lazy-or-construction",
+        .seed = 54321,
+        .rawr_operation = "internal payload-address-sorted slotted lazy OR construction with separate zero and accumulation passes",
+        .croaring_operation = "lazy-or-construction CRoaring reference",
+        .allocation_class = .allocating,
+        .variants = &rawr_allocating_variants,
+        .reference = .{ .row_id = "lazy-or-construction", .variant = .{ .implementation = .croaring, .allocator = .libc } },
+        .setup_boundary = "inputs outside timing; prepass, metadata, allocation, sort, zero, accumulation, and slot assembly inside timing",
+        .teardown_boundary = "result deinit/free outside the internally timed interval",
+        .validation_oracle = .portable_bytes,
+        .operation = .lazy_or_construction_slotted,
+    },
+    .{
+        .id = "lazy-or-construction-slotted-fused",
+        .display_name = "lazyOr construction (slotted fused)",
+        .corpus = "same sparse corpus as lazy-or-construction",
+        .seed = 54321,
+        .rawr_operation = "internal payload-address-sorted slotted lazy OR construction with fused zero and accumulation",
+        .croaring_operation = "lazy-or-construction CRoaring reference",
+        .allocation_class = .allocating,
+        .variants = &rawr_allocating_variants,
+        .reference = .{ .row_id = "lazy-or-construction", .variant = .{ .implementation = .croaring, .allocator = .libc } },
+        .setup_boundary = "inputs outside timing; prepass, metadata, allocation, sort, fused zero and accumulation, and slot assembly inside timing",
+        .teardown_boundary = "result deinit/free outside the internally timed interval",
+        .validation_oracle = .portable_bytes,
+        .operation = .lazy_or_construction_slotted_fused,
+    },
+    .{
         .id = "lazy-or-repair-only",
         .display_name = "lazyOr repair (sparse)",
         .corpus = "same sparse corpus as sparse-or",
@@ -810,7 +840,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn validateManifest() !void {
-    if (manifest.len != 42) return error.InvalidManifestRowCount;
+    if (manifest.len != 44) return error.InvalidManifestRowCount;
     for (&manifest, 0..) |*row, i| {
         if (row.id.len == 0 or row.variants.len == 0 or row.batch_count == 0) return error.InvalidManifestRow;
         if (dashboard.parityRequiresAllocator(row.operation) != (row.allocation_class == .allocating)) {
@@ -957,6 +987,11 @@ fn runTuple(requested: RequestedTuple) !u64 {
 
     const median_ns = measure(requested);
     try dashboard.parityValidate(requested.row.operation, requested.variant.allocator);
+    if (requested.row.operation == .lazy_or_construction_slotted_fused and
+        requested.variant.implementation == .rawr)
+    {
+        try dashboard.parityPrintLazyConstructionSourceTravel(requested.variant.allocator);
+    }
     return median_ns;
 }
 
