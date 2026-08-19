@@ -73,9 +73,18 @@ Exact sequence — **scratch must exist before the pending objects it records**:
 1. **`result.initCapacity`** — see §4.2. Leave it exactly where baseline has it.
 2. **Pre-pass** the merge walk; compute the exact eligible count (§3).
 3. **Allocate the scratch** `[]Pending` for that count.
-4. **On scratch OOM → take the baseline path now**, *before any pending object exists*. Failing over at
-   this point means there is nothing to unwind — the retry is clean by construction rather than by
-   careful cleanup.
+4. **On scratch OOM → fall through into the baseline merge loop, reusing the `result` from step 1.**
+
+   *(An earlier draft said there was "nothing to unwind" at this point. That is wrong: `result` was
+   initialized in step 1 and **already owns its key and container arrays**. Returning to a fresh baseline
+   call without handling it would leak both.)*
+
+   **Decision: factor the baseline merge loop to operate on an already-initialized `result`**, and on
+   scratch OOM continue into it with the existing one. No pending object exists yet, so nothing else
+   needs unwinding, and the result is reused rather than freed and rebuilt.
+
+   *(Rejected: `deinit` the result and call baseline from scratch. It works, but discards two allocations
+   and re-does them, on a path already under memory pressure — the worst moment to allocate again.)*
 5. **Allocate** all eligible headers + payloads via `initPendingBitset` — no zeroing — **recording each
    into the scratch as it is created**.
 6. **Sort** the scratch by `payload_addr` (§4).
@@ -90,11 +99,12 @@ nowhere to be recorded until the scratch exists.)*
 
 **Three things this explicitly forbids:**
 
-- **No second mapping** from sorted position back to key. Step 5 consumes sequentially precisely because
-  buffers are interchangeable; adding a key→buffer map re-introduces the scratch cost the design avoids.
-- **No appending out of key order.** Step 5 walks keys, not the sorted array; the sorted array is only a
-  free-list cursor by that point.
-- **No publishing a pending buffer before step 4 completes** for it. Zeroing precedes accumulation, which
+- **No second mapping** from sorted position back to key. **Step 8** consumes sequentially precisely
+  because buffers are interchangeable; adding a key→buffer map re-introduces the scratch cost the design
+  avoids.
+- **No appending out of key order.** **Step 8** walks keys, not the sorted array; the sorted array is
+  only a free-list cursor by that point.
+- **No publishing a pending buffer before step 7 completes** for it. Zeroing precedes accumulation, which
   precedes append (§5).
 
 The merge walk therefore runs **twice** — once to count, once to build. Both traversals are inside the
@@ -205,9 +215,10 @@ no pending container, no scratch. Use a leak-checking GPA, never `c_allocator`.
   byte-identical to `.baseline` and to CRoaring.
 - Eligible-pair pre-pass exact for both forced and selective; **no unused 8 KB buffers allocated** —
   verified by counting, not asserted.
-- **Pipeline follows §4.1 exactly:** pre-pass → allocate → sort → zero in sorted order → re-walk in key
-  order consuming buffers sequentially. **No key→buffer mapping**, no out-of-key-order append, no
-  publication before zeroing.
+- **Pipeline follows §4.1 exactly:** `initCapacity` (unchanged position, §4.2) → pre-pass → **allocate
+  scratch** → *scratch OOM falls through to the baseline loop reusing `result`* → allocate pending into
+  scratch → sort → zero in sorted order → re-walk in key order consuming buffers sequentially. **No
+  key→buffer mapping**, no out-of-key-order append, no publication before zeroing.
 - Exactly one `[]Pending` scratch allocation, `sortUnstable` on the inline key, freed on every path;
   scratch failure retries the existing path.
 - Ownership contract (§5) holds; **failure-injection suite green at all five points** — no leaks, inputs

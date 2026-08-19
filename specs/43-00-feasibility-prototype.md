@@ -126,8 +126,14 @@ does not transfer to this element. **This chunk establishes the number.**
   **The prototype is neither an upper nor a lower bound — production omits interactions that push both
   ways:**
 
-  - **Dilution (production recovers less).** Unmatched-key clones are allocated interleaved with the
-    pending batch (`bitmap.zig:2331`), fragmenting the address space that the sort is trying to linearize.
+  - **Dilution (production recovers less).** The prototype's allocation stream is synthetic. Production's
+    also contains `result.initCapacity`'s two allocations and, later, the unmatched-key clones — so the
+    address distribution SMP actually returns for the pending batch may be less favourable than the
+    prototype's, and the sort's benefit correspondingly smaller.
+
+    *(A previous draft claimed clones are interleaved **with** the pending batch and fragment it. That is
+    inconsistent with `43-01` §4.1: all pending buffers are allocated in step 5, before the key-order
+    merge in step 8 where clones are created. Clones cannot fragment a batch that is already complete.)*
   - **Amplification (production recovers more).** The prototype models **zeroing only**. In production the
     same buffers are then **accumulated into** — `lazyAccumulateIntoBitset` for both operands — so
     ascending order benefits that traffic too, and it is not modelled here at all.

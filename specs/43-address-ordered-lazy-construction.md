@@ -277,10 +277,13 @@ it.
   (`bench_croaring.zig:507-512`). A prototype that folds result teardown into the timed region measures a
   different quantity than the row it is trying to predict.
 
-**The prototype is a SCREENING test, not a gate.** It omits clones, accumulation, and result assembly —
-work that only **adds** production cost — so its recovery is an **upper bound**, never a prediction. GO
-means "enough evidence to justify `43-01`", not "Gate 1 will pass". Threshold and rerun policy in
-`43-00`.
+**The prototype is a SCREENING test, not a gate.** It omits clones, accumulation, and result assembly, so
+its recovery is **neither an upper nor a lower bound** — omitted interactions push both ways (the
+prototype's synthetic allocation stream may be more favourable than production's; but it models zeroing
+only, while production also *accumulates into* the same buffers, which ascending order should help too).
+GO means "enough evidence to justify `43-01`", not "Gate 1 will pass". Threshold and rerun policy in
+`43-00`. *(An earlier draft called it an upper bound, which would have made a sub-gap GO
+self-contradictory.)*
 
 ## 8. Measurement
 
@@ -342,11 +345,12 @@ disassembly. A gate-1 pass does not predict the canonical row's post-adoption va
 - Per-bitset allocation count **still two**; scratch allocations reported separately.
 - All four suites green — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
   `check-package`.
-- **Negative control on the mechanism:** disable sorting in the production path and confirm the gap
-  returns — **but not as a single "the whole gap returns" check**, which contradicts the three-arm model:
-  if batching independently helps, disabling sorting alone cannot restore the full gap, and a real
-  ordering win would be falsely invalidated. Three distinct conditions instead — anchor, magnitude
-  against Gate 1's arm 2, and direction. See `43-02` §4.
+- **Negative control on the mechanism — measured entirely WITHIN the Gate 2 binary.** Not a single "the
+  whole gap returns" check: if batching independently helps, disabling sorting alone cannot restore the
+  full gap, and a real ordering win would be falsely invalidated. Instead: baseline row identified,
+  baseline vs `.batched_unsorted` **reported** as the batching effect, and **gated** on the sorted
+  default beating `.batched_unsorted` with non-overlapping ranges. **No comparison against Gate 1
+  numbers** — ratios hold only within one run. See `43-02` §4.
 
 ## 10. Out of scope
 
