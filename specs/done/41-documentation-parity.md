@@ -211,6 +211,28 @@ which some allocators reward"* is usable; *"1.033x on M4"* rots.
 Each chunk stands alone with its own pass/fail; the rationale that shaped them (green-on-landing,
 guard-first inventory, helper ownership) now lives in the chunks themselves.
 
+## 6.1 Outcome — CLOSED
+
+All three chunks implemented and accepted; each carries its own verification record. Landed upstream as
+`0b8e67d` (41-00) and `705fd82` (41-01 + 41-02), independently re-checked afterwards with no issues.
+
+End state: `check-docs` guards **168** direct public methods, `check-package` proves the shipped set
+(**33** files, logo included) builds and runs from the allowlist alone, no performance claim remains in
+either shipped document, and both 64-bit types are documented for the first time.
+
+**Highest-value finding was not mechanical.** The manual prose audit caught that
+`Roaring64Bitmap.fromRange` is **half-open** while `addRange` beside it is inclusive both ends — so
+`API.md`'s blanket "Ranges Are Inclusive" heading had been wrong since that constructor shipped. No token
+check could ever have found it: `check-docs` verifies a name is present, never that the surrounding
+sentence is true.
+
+**Residual limitation, intentional and recorded** (`41-00` §3.1): the guard covers direct `pub fn` only,
+not nested public types/constants (`BulkContext`, `Statistics`, `RepairAfterLazyOptions`, the
+`ValidateError` pair). Changes there still need the manual audit. This is stated in the guard's own output
+and header so a passing check is never read as "the complete public API is documented" — the same
+overstatement risk that spec 40-01 established when the `check-32` probe surface turned out to *be* the
+guard boundary.
+
 ## 7. Estimate
 
 **M** — mostly writing. The guard is **S**; the `Roaring64Bitmap` section is the bulk; 41-02 needs care
