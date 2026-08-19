@@ -109,15 +109,25 @@ does not transfer to this element. **This chunk establishes the number.**
 - All three cells implemented, run on both hosts, SMP and libc, with medians and full ranges recorded.
 - Sort cost recorded as a separate line item.
 - **Timing boundary matches the canonical row:** scratch release inside, result teardown outside.
-- **Verdict recorded explicitly, against a stated rule.** "Clears the gap with margin" means: the net
-  gain after full candidate cost (pre-pass + scratch + allocation + sort + zeroing + scratch release)
-  recovers **≥50% of the ~1.7 ms M4 gap**, with **non-overlapping ranges** between `batched_sorted` and
-  `batched_unsorted` across repeated runs. Ranges that overlap → **rerun**; still overlapping →
-  **inconclusive, treated as NO-GO**.
+- **Verdict recorded explicitly, against a stated rule. This is a SCREENING threshold, not the gate.**
 
-  The 50% floor exists because the prototype omits clones, accumulation, and result assembly, so a
-  prototype gain barely covering the gap would not survive the real path. A marginal prototype is a
-  NO-GO, not a "proceed carefully".
+  *(An earlier draft called ≥50% recovery "clearing the gap with margin" and then justified it by saying
+  omitted production work needs extra headroom — which argues for a threshold **above** the full gap, not
+  below it. The two halves contradicted each other. Resolved below.)*
+
+  **GO means: enough evidence to justify spending `43-01`, not evidence that Gate 1 will be met.** The
+  prototype omits clones, accumulation, and result assembly — work that only **adds** cost in production
+  — so a prototype recovery of X ms is an **upper bound** on what production can recover, never a
+  prediction of it. No prototype number can establish the ≤1.10x gate; only Gate 1 can.
+
+  **Threshold:** net gain after full candidate cost (pre-pass + scratch + allocation + sort + zeroing +
+  scratch release) recovers **≥50% of the ~1.7 ms M4 gap** (~0.85 ms), with **non-overlapping ranges**
+  between `batched_sorted` and `batched_unsorted` across repeated runs. Overlap → **rerun**; still
+  overlapping → **inconclusive, treated as NO-GO**.
+
+  Below 50% the upper bound is already too small to plausibly close the row once production overheads are
+  added, so `43-01` would be spent to fail. At or above it, the question is genuinely open and Gate 1 is
+  the way to answer it.
 - **libc shows no large ordering effect.** If it does, stop and diagnose the harness rather than
   proceeding — the premise is that ordering matters for SMP specifically.
 - **GO/NO-GO stated.** NO-GO ends spec 43 here, with no production code written.

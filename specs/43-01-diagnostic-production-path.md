@@ -62,6 +62,35 @@ dereferences nothing. Freed before return **on every path**.
 from *that* path. Do not propagate the scratch OOM directly; do not promise success, since an exhausted
 allocator may still legitimately fail the retry.
 
+## 4.1 The pipeline — pinned, because sorting discards key order
+
+Sorting `Pending` by payload address **destroys merge-key order**, yet result containers must be appended
+**in key order**. The resolution is that zeroed pending buffers are **interchangeable** — an 8 KB zeroed
+bitset is identical to any other — so no mapping back to keys is needed or wanted.
+
+Exact sequence:
+
+1. **Pre-pass** the merge walk; compute the exact eligible count (§3).
+2. **Allocate** all eligible headers + payloads via `initPendingBitset` — no zeroing.
+3. **Sort** the `[]Pending` scratch by `payload_addr` (§4).
+4. **Zero** the payloads in sorted order — *this is the entire point of the spec*: the 8 KB `@memset`
+   traffic now walks memory ascending.
+5. **Re-walk the merge in key order**, and for each eligible pair **take the next pending buffer
+   sequentially** from the scratch array (a simple cursor), accumulate both operands into it, and append
+   it — transferring ownership per §5.
+
+**Three things this explicitly forbids:**
+
+- **No second mapping** from sorted position back to key. Step 5 consumes sequentially precisely because
+  buffers are interchangeable; adding a key→buffer map re-introduces the scratch cost the design avoids.
+- **No appending out of key order.** Step 5 walks keys, not the sorted array; the sorted array is only a
+  free-list cursor by that point.
+- **No publishing a pending buffer before step 4 completes** for it. Zeroing precedes accumulation, which
+  precedes append (§5).
+
+The merge walk therefore runs **twice** — once to count, once to build. Both traversals are inside the
+timed region and inside the candidate's cost.
+
 ## 5. Ownership
 
 The pending pool **owns** a header and payload until that container has been (1) zeroed, (2) accumulated,
@@ -154,6 +183,9 @@ no pending container, no scratch. Use a leak-checking GPA, never `c_allocator`.
   byte-identical to `.baseline` and to CRoaring.
 - Eligible-pair pre-pass exact for both forced and selective; **no unused 8 KB buffers allocated** —
   verified by counting, not asserted.
+- **Pipeline follows §4.1 exactly:** pre-pass → allocate → sort → zero in sorted order → re-walk in key
+  order consuming buffers sequentially. **No key→buffer mapping**, no out-of-key-order append, no
+  publication before zeroing.
 - Exactly one `[]Pending` scratch allocation, `sortUnstable` on the inline key, freed on every path;
   scratch failure retries the existing path.
 - Ownership contract (§5) holds; **failure-injection suite green at all five points** — no leaks, inputs

@@ -59,8 +59,10 @@ Rules:
   `@memset` (see §2.4 for the exact transfer point).
 - **Cleanup for partial batches.** Every already-allocated pending header and payload is freed, including
   ones not yet zeroed. `BitsetContainer.deinit` is safe here — it frees `words` and destroys the header
-  without reading the body — **provided `words` is assigned before any failure point**. Make that
-  ordering explicit in the helper.
+  without reading the body — **provided the header is initialized immediately after the payload
+  allocation succeeds, before any later fallible step**. If the payload allocation itself fails, destroy
+  only the header. *(Superseded "assign `words` before any failure point", which is impossible: the
+  payload allocation IS a failure point. See `43-01` §2.)*
 - **No new public or internal export.** The helper is file-private to `bitmap.zig`, so it enters neither
   the `check-docs` surface nor the `check-32` probe.
 
@@ -275,7 +277,10 @@ it.
   (`bench_croaring.zig:507-512`). A prototype that folds result teardown into the timed region measures a
   different quantity than the row it is trying to predict.
 
-**Proceed to production only if the prototype clears the gap with margin.**
+**The prototype is a SCREENING test, not a gate.** It omits clones, accumulation, and result assembly —
+work that only **adds** production cost — so its recovery is an **upper bound**, never a prediction. GO
+means "enough evidence to justify `43-01`", not "Gate 1 will pass". Threshold and rerun policy in
+`43-00`.
 
 ## 8. Measurement
 
@@ -338,7 +343,10 @@ disassembly. A gate-1 pass does not predict the canonical row's post-adoption va
 - All four suites green — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
   `check-package`.
 - **Negative control on the mechanism:** disable sorting in the production path and confirm the gap
-  returns. A win that survives disabling the lever was never the lever.
+  returns — **but not as a single "the whole gap returns" check**, which contradicts the three-arm model:
+  if batching independently helps, disabling sorting alone cannot restore the full gap, and a real
+  ordering win would be falsely invalidated. Three distinct conditions instead — anchor, magnitude
+  against Gate 1's arm 2, and direction. See `43-02` §4.
 
 ## 10. Out of scope
 

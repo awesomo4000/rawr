@@ -49,16 +49,22 @@ three-arm model.** If batching independently helps — which arm 2 vs arm 1 exis
 disabling *sorting alone* will not restore the full original gap, and a real ordering win would be
 falsely invalidated.
 
-The control is three separate conditions:
+The control is three **distinct** conditions — each a different comparison against a different reference.
+*(An earlier draft's conditions 2 and 3 were the same comparison stated twice; condition 2 now pins a
+**magnitude against Gate 1**, which is what makes it independent.)*
 
-1. **`lazy-or-construction-baseline` reproduces the original interleaved gap** — the pre-adoption
-   behaviour is still there and still slow, so the comparison is anchored.
-2. **`.batched_unsorted` loses the ordering gain measured as arm 3 vs arm 2 in Gate 1** — removing the
-   sort removes *that* increment, whatever batching contributes on its own.
-3. **The sorted default remains faster than `.batched_unsorted`** — the ordering effect persists after
-   adoption and did not evaporate into layout.
+1. **Anchor — `lazy-or-construction-baseline` reproduces its own pre-adoption measurement** within the
+   noise policy (≤5% on median, ranges considered). Establishes that the retained path and the harness
+   are unchanged, so conditions 2 and 3 are being measured against a stable reference.
+2. **Magnitude — `.batched_unsorted` reproduces Gate 1's arm-2 measurement** within the same tolerance.
+   This is the claim that the *batching* contribution is what Gate 1 said it was, and that the
+   ordering increment attributed in Gate 1 is still the increment being observed.
+3. **Direction — the sorted default beats `.batched_unsorted` with non-overlapping ranges.** The
+   ordering effect survives adoption and did not evaporate into layout.
 
-All three must hold. Condition 2 is the actual causal claim; conditions 1 and 3 bound it.
+All three must hold. Condition 1 validates the reference, condition 2 validates the decomposition
+against Gate 1, condition 3 validates the effect itself. Overlapping ranges → rerun; still overlapping →
+inconclusive → **NO-GO and rollback**.
 
 ## Acceptance
 
@@ -76,9 +82,10 @@ All three must hold. Condition 2 is the actual causal claim; conditions 1 and 3 
   - **Decision rules, not impressions:** ≥5 fresh-process medians with full ranges per cell; **≤5% on
     median** is the no-regression threshold; **rerun any ambiguous overlap**; an unresolved difference
     after rerun is **inconclusive → NO-GO and rollback**, never a marginal pass.
-- **Negative control passes — all three §4 conditions:** `lazy-or-construction-baseline` reproduces the
-  original gap; `.batched_unsorted` loses the Gate 1 arm-3-vs-arm-2 increment; sorted default stays faster
-  than `.batched_unsorted`. Record the output.
+- **Negative control passes — all three distinct §4 conditions:** (1) baseline reproduces its own
+  pre-adoption measurement within ≤5%; (2) `.batched_unsorted` reproduces **Gate 1's arm-2 measurement**
+  within ≤5%; (3) sorted default beats `.batched_unsorted` with non-overlapping ranges. Record the
+  output.
 - All four suites green — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
   `check-package`.
 - **ROLLBACK on Gate 2 failure — mandatory.** If canonical parity, libc, Zen 4, or any whole-board gate
