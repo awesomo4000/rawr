@@ -116,6 +116,9 @@ slots**, so neither is involved.
    buffer is owned twice or not at all.
 6. **Fill unmatched / non-eligible slots directly.**
 7. **Before returning success, verify no `.reserved` slot remains.**
+8. **Set `result.cached_cardinality = -1` before success** — `initCapacity` leaves it at `0`, and
+   direct-slot writes bypass `appendContainer`, so a populated result would otherwise report
+   `cardinality() == 0`.
 
 Pending cleanup covers untransferred entries; result cleanup covers assigned slots. **No second ownership
 bitmap is needed** — the cursor plus the reserved sentinel carry the whole boundary.
@@ -125,9 +128,10 @@ bitmap is needed** — the cursor plus the reserved sentinel carry the whole bou
 **Only the initial scratch allocation failure falls back to the baseline merge loop** (reusing the
 untouched initialized `result`).
 
-**Header, payload, metadata, clone, accumulation, and assembly failures all propagate** after
-transactional cleanup per §4. *(An earlier draft said "scratch/metadata OOM", which was ambiguous and
-would have licensed a mid-flight fallback with buffers already staged.)*
+**All other real fallible sites from `44-00` §4 propagate** after transactional cleanup per §4 — that
+list includes `Self.initCapacity` (which precedes scratch and has no result to fall back with).
+*(Earlier drafts named "metadata, accumulation, and assembly": metadata **is** the scratch allocation,
+and accumulation and slot assignment are **infallible**.)*
 
 ## 5. Cost accounting
 
@@ -153,11 +157,15 @@ nothing about where the bytes being read live:
 | bitset | `words` (`words: *align(64) [1024]u64`) |
 | run | `runs` (`runs: [*]RunPair`) |
 
-**Traversal sequences — report all three:**
+**Scope: eligible matched pairs ONLY.** Unmatched clones and non-eligible unions are **not reordered by
+the candidate** — they occur in key order in every arm — so mixing them into the totals would dilute the
+comparison with traffic the experiment does not affect.
 
-- the **A stream** alone, in each order;
+**Traversal sequences — six totals, three sequences × two orders:**
+
+- the **A stream** alone, in key order and destination order;
 - the **B stream** alone, in each order;
-- the **actual interleaved `A,B` sequence** as accumulation performs it.
+- the **actual interleaved `A,B` sequence** as accumulation performs it, in each order.
 
 The interleaved sequence is what the hardware sees; the separated streams show whether one side dominates.
 

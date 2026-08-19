@@ -57,6 +57,10 @@ which tells the campaign whether a future lever should target cache behaviour or
 From the real canonical sparse corpus: source container **counts** and **types**, **bytes actually read**,
 and **source-address travel in key order versus destination order**.
 
+**Scope: eligible matched pairs ONLY.** Unmatched clones and non-eligible unions are not reordered by the
+candidate — they occur in key order in every arm — so including them would dilute the totals with traffic
+the experiment does not affect.
+
 **Payload addresses, type-specific** — never `TaggedPtr` or header addresses:
 
 | Container | Address |

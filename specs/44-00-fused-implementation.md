@@ -68,6 +68,11 @@ cursor; this path writes directly into slots, so neither applies.
    owned twice or not at all.
 6. **Fill unmatched / non-eligible slots directly.**
 7. **Before returning success, verify no `.reserved` slot remains.**
+8. **Set `result.cached_cardinality = -1` before returning success.** `initCapacity` initializes it to
+   **`0`** (`bitmap.zig:75`), which is correct for an empty bitmap — but direct-slot writes **bypass
+   `appendContainer`**, so nothing updates the cache as slots are filled. Left at `0`, a fully populated
+   result reports `cardinality() == 0`. `-1` is the "unknown, recompute" sentinel (`bitmap.zig:39`,
+   `:401`).
 
 Pending cleanup covers untransferred entries; result cleanup covers assigned slots. **No second ownership
 bitmap** — cursor plus reserved sentinel carry the whole boundary.
@@ -127,6 +132,11 @@ scaffolding, and an untested arm 4 makes `arm5 − arm4` meaningless:
 
 `lazyXor` **byte-identical to baseline**, verified — scope stays `op == .bor`.
 
+**Cardinality test — call `cardinality()` BEFORE `repairAfterLazy`.** The byte-equivalence tests above
+repair first, and repair recomputes cardinality, so they would **mask** a stale `cached_cardinality`
+entirely. A dedicated test must construct via arms 4 and 5, call `cardinality()` on the unrepaired
+result, and compare against baseline's unrepaired value.
+
 ## 6. Manifest — 42 → 44 rows
 
 Arms 4 and 5 add two rows. **Both guards must read exactly 44:**
@@ -153,7 +163,10 @@ assembly, and reserved handling — which is exactly the attribution failure thi
 - **Both** arm 4 (unfused) and arm 5 (fused) implemented per §1, identical except pass structure;
   metadata types exactly as §2.
 - Transactional ownership per §3: scratch-before-staging, `.reserved` initialization built directly,
-  `result.size = output_count`, cursor handoff, **no reserved slot remaining on success**.
+  `result.size = output_count`, cursor handoff, **no reserved slot remaining on success**, and
+  **`cached_cardinality = -1` set before success**.
+- **Cardinality checked before `repairAfterLazy`**, not only after — the repaired-only tests cannot catch
+  a stale cache.
 - Fallback scope per §3.1 — **initial scratch failure only**; everything else propagates.
 - **`checkAllAllocationFailures` green** across all six real fallible sites (§4, including
   `Self.initCapacity`), plus the targeted fallback-boundary test proving **only site 1 falls back**, plus
