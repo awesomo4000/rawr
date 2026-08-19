@@ -49,22 +49,25 @@ three-arm model.** If batching independently helps — which arm 2 vs arm 1 exis
 disabling *sorting alone* will not restore the full original gap, and a real ordering win would be
 falsely invalidated.
 
-The control is three **distinct** conditions — each a different comparison against a different reference.
-*(An earlier draft's conditions 2 and 3 were the same comparison stated twice; condition 2 now pins a
-**magnitude against Gate 1**, which is what makes it independent.)*
+**Entirely within the Gate 2 binary. No cross-run comparison.**
 
-1. **Anchor — `lazy-or-construction-baseline` reproduces its own pre-adoption measurement** within the
-   noise policy (≤5% on median, ranges considered). Establishes that the retained path and the harness
-   are unchanged, so conditions 2 and 3 are being measured against a stable reference.
-2. **Magnitude — `.batched_unsorted` reproduces Gate 1's arm-2 measurement** within the same tolerance.
-   This is the claim that the *batching* contribution is what Gate 1 said it was, and that the
-   ordering increment attributed in Gate 1 is still the increment being observed.
-3. **Direction — the sorted default beats `.batched_unsorted` with non-overlapping ranges.** The
-   ordering effect survives adoption and did not evaporate into layout.
+*(An earlier draft required baseline and `.batched_unsorted` to reproduce their **Gate 1** measurements
+within 5% — which contradicts §3 of this very chunk. If adoption changes layout enough that Gate 1 cannot
+predict Gate 2, it equally cannot serve as a reference for the negative control. The campaign has paid
+for this lesson twice: spec 39-00 vs 39-01 moved rawr +4.1% while the CRoaring reference moved −7.8%, so
+ratios are valid only **within** one run.)*
 
-All three must hold. Condition 1 validates the reference, condition 2 validates the decomposition
-against Gate 1, condition 3 validates the effect itself. Overlapping ranges → rerun; still overlapping →
-inconclusive → **NO-GO and rollback**.
+All three rows exist in the **same binary and the same run**, so they are directly comparable:
+
+1. **Identification** — `lazy-or-construction-baseline` runs the pre-adoption interleaved path, and is
+   confirmed to be that path (not a duplicate of the default).
+2. **Batching effect — report `baseline` vs `.batched_unsorted`.** This is *reported*, not gated: it may
+   be positive, negative, or nil, and any of those is informative. Gating it would re-import a prediction
+   the spec has no basis for.
+3. **Ordering effect — GATE: the sorted default beats `.batched_unsorted` with non-overlapping ranges.**
+   This is the causal claim, and it is measured against a row in the same binary.
+
+Overlapping ranges on condition 3 → rerun; still overlapping → inconclusive → **NO-GO and rollback**.
 
 ## Acceptance
 
@@ -82,10 +85,11 @@ inconclusive → **NO-GO and rollback**.
   - **Decision rules, not impressions:** ≥5 fresh-process medians with full ranges per cell; **≤5% on
     median** is the no-regression threshold; **rerun any ambiguous overlap**; an unresolved difference
     after rerun is **inconclusive → NO-GO and rollback**, never a marginal pass.
-- **Negative control passes — all three distinct §4 conditions:** (1) baseline reproduces its own
-  pre-adoption measurement within ≤5%; (2) `.batched_unsorted` reproduces **Gate 1's arm-2 measurement**
-  within ≤5%; (3) sorted default beats `.batched_unsorted` with non-overlapping ranges. Record the
-  output.
+- **Negative control passes, measured entirely within the Gate 2 binary (§4):** (1)
+  `lazy-or-construction-baseline` confirmed to run the pre-adoption path; (2) baseline vs
+  `.batched_unsorted` **reported** as the batching effect, not gated; (3) **GATE:** sorted default beats
+  `.batched_unsorted` with non-overlapping ranges. **No condition compares against Gate 1 numbers** —
+  ratios are valid only within one run. Record the output.
 - All four suites green — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
   `check-package`.
 - **ROLLBACK on Gate 2 failure — mandatory.** If canonical parity, libc, Zen 4, or any whole-board gate

@@ -68,16 +68,25 @@ Sorting `Pending` by payload address **destroys merge-key order**, yet result co
 **in key order**. The resolution is that zeroed pending buffers are **interchangeable** — an 8 KB zeroed
 bitset is identical to any other — so no mapping back to keys is needed or wanted.
 
-Exact sequence:
+Exact sequence — **scratch must exist before the pending objects it records**:
 
-1. **Pre-pass** the merge walk; compute the exact eligible count (§3).
-2. **Allocate** all eligible headers + payloads via `initPendingBitset` — no zeroing.
-3. **Sort** the `[]Pending` scratch by `payload_addr` (§4).
-4. **Zero** the payloads in sorted order — *this is the entire point of the spec*: the 8 KB `@memset`
+1. **`result.initCapacity`** — see §4.2. Leave it exactly where baseline has it.
+2. **Pre-pass** the merge walk; compute the exact eligible count (§3).
+3. **Allocate the scratch** `[]Pending` for that count.
+4. **On scratch OOM → take the baseline path now**, *before any pending object exists*. Failing over at
+   this point means there is nothing to unwind — the retry is clean by construction rather than by
+   careful cleanup.
+5. **Allocate** all eligible headers + payloads via `initPendingBitset` — no zeroing — **recording each
+   into the scratch as it is created**.
+6. **Sort** the scratch by `payload_addr` (§4).
+7. **Zero** the payloads in sorted order — *this is the entire point of the spec*: the 8 KB `@memset`
    traffic now walks memory ascending.
-5. **Re-walk the merge in key order**, and for each eligible pair **take the next pending buffer
+8. **Re-walk the merge in key order**, and for each eligible pair **take the next pending buffer
    sequentially** from the scratch array (a simple cursor), accumulate both operands into it, and append
    it — transferring ownership per §5.
+
+*(An earlier draft ordered allocation before scratch, which is impossible: the pending objects have
+nowhere to be recorded until the scratch exists.)*
 
 **Three things this explicitly forbids:**
 
@@ -90,6 +99,19 @@ Exact sequence:
 
 The merge walk therefore runs **twice** — once to count, once to build. Both traversals are inside the
 timed region and inside the candidate's cost.
+
+### 4.2 `result.initCapacity` placement — unchanged from baseline, deliberately
+
+`lazyMergeTwo` calls `Self.initCapacity(allocator, max_result_size)` **before** the merge loop
+(`bitmap.zig:2325`), and that call allocates. **Allocation order is the mechanism under test**, so where
+those allocations sit relative to the pending batch cannot be left to chance.
+
+**Decision: leave `initCapacity` exactly where baseline has it — first, before the pre-pass.** All three
+arms then share an identical prologue, and the *only* difference between them is how the pending bitsets
+are allocated and ordered. Moving it would change arm 1 as well as arms 2 and 3, confounding the very
+comparison the arms exist to make.
+
+If an implementation finds a reason to move it, that is a **separate arm**, not a silent change.
 
 ## 5. Ownership
 

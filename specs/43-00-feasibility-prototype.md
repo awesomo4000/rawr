@@ -115,19 +115,31 @@ does not transfer to this element. **This chunk establishes the number.**
   omitted production work needs extra headroom — which argues for a threshold **above** the full gap, not
   below it. The two halves contradicted each other. Resolved below.)*
 
-  **GO means: enough evidence to justify spending `43-01`, not evidence that Gate 1 will be met.** The
-  prototype omits clones, accumulation, and result assembly — work that only **adds** cost in production
-  — so a prototype recovery of X ms is an **upper bound** on what production can recover, never a
-  prediction of it. No prototype number can establish the ≤1.10x gate; only Gate 1 can.
+  **GO means: enough evidence to justify spending `43-01`, not evidence that Gate 1 will be met.**
+
+  *(Two earlier drafts were wrong here. The first called ≥50% "clearing the gap with margin" while
+  justifying it by arguing omitted work needs extra headroom. The second called the prototype gain an
+  **upper bound** while still permitting GO at ~0.85 ms against a ~1.7 ms gap — if it really were an
+  upper bound, that GO would authorize work that provably cannot close the row. The "upper bound" claim
+  is withdrawn; it was false.)*
+
+  **The prototype is neither an upper nor a lower bound — production omits interactions that push both
+  ways:**
+
+  - **Dilution (production recovers less).** Unmatched-key clones are allocated interleaved with the
+    pending batch (`bitmap.zig:2331`), fragmenting the address space that the sort is trying to linearize.
+  - **Amplification (production recovers more).** The prototype models **zeroing only**. In production the
+    same buffers are then **accumulated into** — `lazyAccumulateIntoBitset` for both operands — so
+    ascending order benefits that traffic too, and it is not modelled here at all.
 
   **Threshold:** net gain after full candidate cost (pre-pass + scratch + allocation + sort + zeroing +
   scratch release) recovers **≥50% of the ~1.7 ms M4 gap** (~0.85 ms), with **non-overlapping ranges**
   between `batched_sorted` and `batched_unsorted` across repeated runs. Overlap → **rerun**; still
   overlapping → **inconclusive, treated as NO-GO**.
 
-  Below 50% the upper bound is already too small to plausibly close the row once production overheads are
-  added, so `43-01` would be spent to fail. At or above it, the question is genuinely open and Gate 1 is
-  the way to answer it.
+  50% is a **screen against wasted effort**, not a prediction: below it the ordering effect is too weak
+  for amplification to plausibly rescue, so `43-01` would likely be spent to fail. At or above it the
+  question is genuinely open, and **only Gate 1 can answer it.**
 - **libc shows no large ordering effect.** If it does, stop and diagnose the harness rather than
   proceeding — the premise is that ordering matters for SMP specifically.
 - **GO/NO-GO stated.** NO-GO ends spec 43 here, with no production code written.
