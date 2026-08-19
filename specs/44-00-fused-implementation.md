@@ -77,8 +77,9 @@ bitmap** — cursor plus reserved sentinel carry the whole boundary.
 **Only the initial scratch allocation failure falls back** to the baseline merge loop, reusing the
 untouched initialized `result`.
 
-**Header, payload, metadata, clone, accumulation, and assembly failures propagate** after transactional
-cleanup per §3. No mid-flight fallback once buffers are staged.
+**Every other fallible site propagates** after transactional cleanup per §3 — see §4 for the real list.
+No mid-flight fallback once buffers are staged. *(An earlier draft said "header, payload, metadata,
+clone, accumulation, and assembly", which named a duplicate and two infallible operations.)*
 
 ## 4. Failure injection — the REAL fallible sites
 
@@ -88,17 +89,25 @@ both the scratch and the metadata, and accumulation and direct-slot assignment a
 
 Actual fallible allocation sites:
 
-1. **pending scratch** — the one `[]Pending` allocation;
-2. **header `create`** per pending bitset;
-3. **`words` payload allocation** per pending bitset;
-4. **unmatched clone** allocations;
-5. **non-eligible union** allocations.
+| # | Site | On failure |
+| --- | --- | --- |
+| 0 | **`Self.initCapacity`** — top-level keys and containers arrays, **before** scratch | **propagate** — nothing is staged and there is no result to unwind |
+| 1 | **pending scratch** — the one `[]Pending` allocation | **fall back to baseline**, reusing the initialized `result` |
+| 2 | **header `create`** per pending bitset | propagate |
+| 3 | **`words` payload allocation** per pending bitset | propagate |
+| 4 | **unmatched clone** allocations | propagate |
+| 5 | **non-eligible union** allocations | propagate |
+
+**Site 1 is the only one that falls back.** Site 0 precedes it — `initCapacity` allocates two arrays and
+can fail — and must propagate, since there is no initialized result for a fallback to reuse.
+
+Accumulation and direct-slot assignment are **infallible** and are not injection sites.
 
 **Use `std.testing.checkAllAllocationFailures`** for exhaustive coverage rather than hand-enumerated
 injection points.
 
-**Plus one targeted test proving the fallback boundary:** only failure at site 1 invokes the baseline
-fallback; failures at 2–5 **propagate** after transactional cleanup (§3.1).
+**Plus one targeted test proving the fallback boundary:** only failure at **site 1** invokes the baseline
+fallback; **site 0 and sites 2–5 propagate** after transactional cleanup (§3.1).
 
 Every failure must leave **both inputs untouched** and leak **nothing**. Leak-checking GPA, never
 `c_allocator`.
@@ -146,8 +155,9 @@ assembly, and reserved handling — which is exactly the attribution failure thi
 - Transactional ownership per §3: scratch-before-staging, `.reserved` initialization built directly,
   `result.size = output_count`, cursor handoff, **no reserved slot remaining on success**.
 - Fallback scope per §3.1 — **initial scratch failure only**; everything else propagates.
-- **`checkAllAllocationFailures` green** across the five real fallible sites (§4), plus the targeted
-  fallback-boundary test, plus the no-reserved-dereference and no-double-free assertions.
+- **`checkAllAllocationFailures` green** across all six real fallible sites (§4, including
+  `Self.initCapacity`), plus the targeted fallback-boundary test proving **only site 1 falls back**, plus
+  the no-reserved-dereference and no-double-free assertions.
 - Equivalence coverage per §5 passing; `lazyXor` byte-identical.
 - **Manifest at 44 rows, both guards updated**; all **five** arms selectable and producing rows.
 - No public API added; internal export classified in the manifest; `check-docs` green with an empty

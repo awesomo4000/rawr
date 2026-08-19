@@ -84,7 +84,7 @@ makes `arm5 − arm4` a fusion measurement.
 | --- | --- |
 | **Batching machinery cost** | arm 2 − arm 1 |
 | **Ordering recovery** | arm 3 − arm 2 |
-| **Metadata/slot machinery cost** | arm 4 − arm 3 |
+| **Slotted vehicle delta** | arm 4 − arm 3 |
 | **Fusion recovery** | arm 5 − arm 4 |
 | **Net result** | arm 5 − arm 1 |
 
@@ -204,10 +204,20 @@ and narrowly misses.
   regression is a NO-GO on its own.
 - Overlapping ranges → rerun; still overlapping → **inconclusive → NO-GO**.
 
-**Report the full decomposition regardless of outcome.** Spec 43 measured the batching penalty at
-+1.544 ms on M4 but could not split it. Arms 4 and 5 split it: `arm4 − arm3` is the metadata/slot
-machinery, `arm5 − arm4` is the cold second pass. That split is the durable result **even on a NO-GO** —
-it determines whether any future lever targets cache behaviour or machinery.
+**Report the full decomposition regardless of outcome.**
+
+**Scope the claim honestly.** `arm5 − arm4` measures **fusion within the new slotted vehicle** — arms 4
+and 5 differ only by pass structure, so that comparison is clean. It does **not** causally decompose the
+historical `arm2 − arm1` (+1.544 ms): that penalty arose under different metadata, traversal, and
+assembly conditions, and the two vehicles are not the same experiment. *(An earlier draft claimed arms 4
+and 5 "split the 1.544 ms". They do not.)*
+
+`arm4 − arm3` is the **slotted vehicle delta** — metadata construction, direct-slot assembly, reserved
+handling **and the change in source traversal order** together. It is not a metadata/slot cost in
+isolation.
+
+The durable result **even on a NO-GO** is whether fusion removes a real cost inside the slotted vehicle,
+which tells the campaign whether a future lever should target cache behaviour or machinery.
 
 ## 9. Out of scope
 
@@ -219,7 +229,7 @@ it determines whether any future lever targets cache behaviour or machinery.
 ## 10. Chunking
 
 - **[44-00](44-00-fused-implementation.md)** — implementation, ownership, correctness, failure injection,
-  43-row manifest.
+  **44-row** manifest.
 - **[44-01](44-01-measurement-and-verdict.md)** — two-host canonical measurement, decomposition, verdict.
 
 ## 11. Estimate

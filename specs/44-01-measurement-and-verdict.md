@@ -32,19 +32,25 @@ after the clock stops (`bench_croaring.zig:507-512`).
 | --- | --- |
 | **Batching machinery cost** | arm 2 − arm 1 |
 | **Ordering recovery** | arm 3 − arm 2 |
-| **Metadata/slot machinery cost** | arm 4 − arm 3 |
+| **Slotted vehicle delta** | arm 4 − arm 3 |
 | **Fusion recovery** | arm 5 − arm 4 |
 | **Net result** | arm 5 − arm 1 |
 
 **Report all five, on both hosts, whatever the verdict.**
 
-Spec 43 measured the batching penalty at +1.544 ms on M4 but could not split it. **Arms 4 and 5 split
-it**: `arm4 − arm3` is the metadata/slot machinery, and `arm5 − arm4` is the cold second pass — because
-arms 4 and 5 are identical except for pass structure. `arm5 − arm3` would bundle the two and is **not** a
-fusion measurement.
+**Scope each quantity to what it actually measures:**
 
-That split is the durable result **even on a NO-GO**: it determines whether any future lever should target
-cache behaviour or the machinery itself.
+- **`arm5 − arm4` measures fusion WITHIN the slotted vehicle.** Arms 4 and 5 are identical except for
+  pass structure, so this is a clean causal claim. `arm5 − arm3` would bundle fusion with the vehicle and
+  is **not** a fusion measurement.
+- **`arm5 − arm4` does NOT decompose the historical `arm2 − arm1` (+1.544 ms).** That penalty arose under
+  different metadata, traversal, and assembly conditions — different vehicle, different experiment.
+  *(An earlier draft claimed arms 4 and 5 "split the 1.544 ms". They do not; do not report it that way.)*
+- **`arm4 − arm3` is the slotted vehicle delta** — metadata, direct-slot assembly, reserved handling
+  **and the change in source traversal order** together, not a metadata/slot cost in isolation.
+
+The durable result **even on a NO-GO** is whether fusion removes a real cost inside the slotted vehicle,
+which tells the campaign whether a future lever should target cache behaviour or machinery.
 
 ## 4. Source-traversal reporting
 
@@ -59,9 +65,25 @@ and **source-address travel in key order versus destination order**.
 | bitset | `words` |
 | run | `runs` |
 
-**Report three sequences:** the **A stream** alone, the **B stream** alone, and the **actual interleaved
-`A,B` sequence** as accumulation performs it. Accumulate deltas in **`u128`** — summed absolute deltas
-over ~16k containers can exceed `u64`.
+**Report SIX travel totals** — three sequences × two orders:
+
+| Sequence | key order | destination order |
+| --- | --- | --- |
+| **A stream** alone | ✓ | ✓ |
+| **B stream** alone | ✓ | ✓ |
+| **interleaved `A,B`** as accumulation performs it | ✓ | ✓ |
+
+Accumulate deltas in **`u128`** — summed absolute deltas over ~16k containers can exceed `u64`.
+
+**"Bytes actually read" means live payload bytes, not capacity:**
+
+| Container | Bytes |
+| --- | --- |
+| array | `cardinality * 2` (`values: []align(32) u16`) |
+| bitset | `8192` (1024 × `u64`) |
+| run | `n_runs * @sizeOf(RunPair)` (`RunPair` = two `u16`) |
+
+Capacity-based figures would overstate reads for any container with slack.
 
 **Collect AFTER all timed runs, or in a separate diagnostic process.** Walking every source container to
 compute travel would **precondition the source caches** and corrupt the measurement this spec depends on —
@@ -87,9 +109,9 @@ Zen 4 1.344x) **on large bitsets**; if these sources are mostly small arrays tha
 - All **five** arms measured on **both hosts**, all three canonical tuples, ≥5 fresh-process medians with
   full ranges, in **one binary**.
 - Timed region per §2; only result teardown outside.
-- **§3 decomposition reported on both hosts** — batching cost, ordering recovery, **metadata/slot
-  machinery cost**, **fusion recovery**, net — with fusion's share of the 1.544 ms stated explicitly and
-  derived from `arm5 − arm4`, never `arm5 − arm3`.
+- **§3 decomposition reported on both hosts** — batching cost, ordering recovery, **slotted vehicle
+  delta**, **fusion recovery**, net. Fusion recovery derived from `arm5 − arm4`, never `arm5 − arm3`, and
+  **not reported as a share of the historical 1.544 ms**.
 - **§4 source-traversal reporting complete**: payload addresses per type, three sequences, `u128`
   accumulator, **collected after the timed runs or in a separate process**.
 - Gate §5 evaluated; **GO/NO-GO stated**, with the reasoning.
