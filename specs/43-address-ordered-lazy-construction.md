@@ -72,8 +72,8 @@ const Pending = struct {
 - **Allocator:** the bitmap's allocator (the one passed to `lazyOr`).
 - **Ownership:** scratch is owned by the construction routine and freed before it returns, on every path.
 
-**The ~0.13 ms estimate in §3 is superseded and does not apply to this representation** — it was measured
-on flat `usize`. The prototype (§7) must measure **this exact struct, this comparator, this sort**.
+**No sort-cost estimate is carried anywhere in this spec.** The prototype (§7) must measure **this exact
+struct, this comparator, this sort** and establish the number.
 
 **Scratch allocation failure → retry through the existing interleaved path.** If *that* path also fails,
 propagate its error. *(Corrected from "fall back and succeed", which over-promised: a genuinely exhausted
