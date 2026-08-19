@@ -153,7 +153,9 @@ rather than assume it.
 
 ## 4. Deliberately not doing
 
-No pre-pass, eligible count, scratch array, sort, per-payload metadata, or slot assembly. No change to
+No pre-pass, eligible count, scratch array, **payload-address sort**, per-payload metadata, or slot
+assembly. *(Qualified as in §1: the ~128-entry chunk-list index **is** sorted once before repair,
+per §3.1.)* No change to
 construction order — ordering comes from the allocator, not from reordering work. No header change. No
 `RoaringBitmap` field. Nothing outside lazy-OR; `lazyXor` and all other callers keep normal allocation.
 
@@ -173,7 +175,14 @@ Extend `src/bench_smp_layout.zig` (zero rawr code — model the header locally, 
 `BitsetContainer`).
 
 **Four explicit cells**, each timing its **complete** cost — allocation, any metadata, any sort, and
-zeroing — with retained teardown **outside** the region:
+zeroing.
+
+**Teardown boundary, matching the canonical row:**
+
+- **Inside** timing: release of **temporary** batched/sort metadata — it exists only to build the result.
+- **Outside** timing: teardown of **retained** headers, payloads, and the candidate's **chunk list** —
+  these are the result, and the canonical construction row calls `result.deinit()` after the clock stops
+  (`bench_croaring.zig:507-512`).
 
 | Cell | What it does |
 | --- | --- |
@@ -198,6 +207,18 @@ deferring the zeroing, which is the entire point.
 available  = batched_unsorted     - batched_sorted        # ordering headroom this probe can see
 recovered  = scattered_interleaved - chunked_<size>       # what the candidate actually delivers
 ```
+
+**Step 1 — validate `available` BEFORE using it.** *(An earlier draft did not, which made the gate
+trivially passable: if sorting fails to win, `available` is zero or negative and `recovered >= 0.50 *
+available` is satisfied by **any** result, including a candidate that is slower than baseline.)*
+
+- **`batched_sorted` must beat `batched_unsorted`**, with **non-overlapping ranges**, hence
+  **`available > 0`**.
+- If it does not: **NO-GO** — the probe **failed to reproduce the ordering mechanism** established by
+  specs 37 and 44. That is a defective probe, not evidence against chunking, and it must be diagnosed
+  before any candidate number is interpreted.
+
+**Step 2 — only then evaluate the candidate:**
 
 - **GO requires `recovered >= 0.50 * available`**, with **non-overlapping ranges** between
   `chunked_<size>` and `scattered_interleaved`.
