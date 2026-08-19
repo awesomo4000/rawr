@@ -127,6 +127,66 @@ Zen 4 1.344x) **on large bitsets**; if these sources are mostly small arrays tha
   decomposition; do **not** report it as closed, and do **not** use "at parity when enabled" — that
   phrasing belongs to opt-in outcomes like spec 39-01, and this spec has no opt-in path.
 
+## Outcome — NO-GO for adoption. Fusion CONFIRMED. Machinery is now the binding constraint.
+
+**Absolute medians (the deltas below are adjacent-arm differences, not timings):**
+
+| Arm | M4 | Zen 4 |
+|---|---:|---:|
+| A1 baseline | 5.744 ms | 20.749 ms |
+| A2 batched | 7.274 ms | 23.084 ms |
+| A3 sorted | 5.063 ms | 18.816 ms |
+| A4 slotted | 5.491 ms | 19.605 ms |
+| **A5 fused slotted** | **4.179 ms** | **18.570 ms** |
+
+| Decomposition | M4 | Zen 4 |
+|---|---:|---:|
+| Batching (A2−A1) | +1.530 | +2.335 |
+| Ordering (A3−A2) | **−2.211** | **−4.268** |
+| Slotted vehicle (A4−A3) | +0.428 | +0.789 |
+| **Fusion (A5−A4)** | **−1.312** | **−1.035** |
+| Net (A5−A1) | −1.565 | −2.179 |
+
+Re-derived from the absolutes; all five agree.
+
+**A5 is the fastest construction path measured, on both hosts.** But M4 lands at **1.235x** against a
+1.10x gate, and **M4 libc regressed +21.2%** (3.787 → 4.591) — an independent STOP. Zen 4 improved and
+passed its no-regression gate.
+
+### The three residuals are the same quantity
+
+| Quantity | M4 |
+|---|---:|
+| Total machinery — batching + slotted + fusion (`A5 − A3` plus the batching cost) | **+0.646 ms** |
+| Residual gap to CRoaring (implied 3.384 ms) | **+0.795 ms** |
+| libc regression | **+0.804 ms** |
+
+libc is **order-insensitive** (spec 37: 0.011–0.073 ms sorted vs unsorted), so it pays the full machinery
+and receives none of the ordering benefit. Its regression is therefore a **direct measurement of the
+machinery cost** — and it lands within 0.16 ms of the SMP residual gap.
+
+**Arithmetic, not a measurement:** 4.179 − 0.646 = 3.533 ms = **1.044x**, inside the gate. Treat that as
+hypothesis-generating only — subtracting a cost is not the same as removing it. But it says plainly that
+**machinery, not ordering, is now what stands between this path and the row.**
+
+### Ordering is worth more than it costs; the vehicle is what fails
+
+Ordering: **−2.211 ms M4, −4.268 ms Zen 4** — the largest single effect measured in this campaign.
+Fusion recovers **−1.312 ms** of the batching penalty, confirming the two-pass structure was most of it
+*(within the slotted vehicle — this does not causally decompose the historical +1.544 ms)*.
+
+### Source-read order is NOT the limiting factor — spec 38's concern does not transfer
+
+All **32,728 operands were small arrays**, totalling **499,994 live bytes**, and destination ordering
+**barely changed** interleaved source travel. Spec 38's read-order penalty was measured on large bitsets
+and **does not apply here**. This risk is closed for this path; do not re-raise it.
+
+*(Context, not a lever: 16,364 × 8 KB = **134 MB zeroed to hold 0.5 MB live**, a 268:1 ratio. CRoaring
+does the same — spec 31 established identical zero volume — so it is not a parity lever.)*
+
+**Opt-in would not rescue this.** Unlike spec 39-01, the M4 SMP number **fails the gate even when
+enabled** (1.235x). There is no "at parity when enabled" outcome available here.
+
 ## Estimate
 
 **S/M** — no new production logic; the two-host canonical run and the reporting are the work.

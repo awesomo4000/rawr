@@ -240,6 +240,42 @@ which tells the campaign whether a future lever should target cache behaviour or
   **44-row** manifest.
 - **[44-01](44-01-measurement-and-verdict.md)** — two-host canonical measurement, decomposition, verdict.
 
+## 10.1 OUTCOME — NO-GO for adoption. Row stays open. Machinery is the binding constraint.
+
+Full numbers in [44-01](44-01-measurement-and-verdict.md). Summary:
+
+**A5 (fused slotted) is the fastest construction path measured on both hosts** — M4 5.744 → **4.179 ms**,
+Zen 4 20.749 → **18.570 ms**. It still misses: **1.235x** on M4 against a 1.10x gate, and **M4 libc
++21.2%**, an independent STOP. **No default changed.**
+
+| Effect | M4 | Zen 4 |
+|---|---:|---:|
+| Ordering | **−2.211** | **−4.268** |
+| Fusion (within the slotted vehicle) | **−1.312** | **−1.035** |
+| Batching + slotted machinery | +1.958 | +3.124 |
+
+**What this establishes:**
+
+1. **Ordering is the largest single effect in the campaign** and it is real on both hosts.
+2. **Fusion works** — it recovers most of the two-pass penalty, as hypothesized.
+3. **The machinery is now the binding constraint, and one number proves it three ways.** M4 machinery
+   +0.646 ms ≈ residual gap to CRoaring +0.795 ms ≈ libc regression +0.804 ms. libc is order-insensitive,
+   so it pays all the machinery and gets none of the benefit — its regression *is* a measurement of the
+   machinery.
+4. **Source-read order is NOT limiting.** All 32,728 operands were small arrays (499,994 live bytes) and
+   destination ordering barely moved interleaved source travel. **Spec 38's read-order penalty does not
+   transfer to this path** — closed, do not re-raise.
+5. **Opt-in cannot rescue it** — unlike spec 39-01, M4 SMP fails the gate *even when enabled*.
+
+**The open question this hands forward:** can the ordering benefit be obtained **without** the pre-pass,
+scratch, sort, metadata, and slot machinery? Spec 43 deferred a **contiguous slab** (its Variant B) on the
+grounds that per-container lifetimes make it hard and Variant A should be tried first. Variant A has now
+been tried, and it failed *specifically on the machinery a slab would not need*. That deferral deserves
+revisiting on the new evidence — as a new spec, with the ownership problem addressed head-on.
+
+**Do not re-propose** plain batching, unfused slotted construction, or source-read reordering. All three
+are measured and all three lose.
+
 ## 11. Estimate
 
 **M** — vehicle exists at `37d0e8b`; new work is metadata, slot assembly, the fused loop, the
