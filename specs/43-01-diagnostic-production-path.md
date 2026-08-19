@@ -26,9 +26,12 @@ so the helper can build a `BitsetContainer` directly with no new export.
 
 - `allocator.create(BitsetContainer)` + `allocator.alignedAlloc(u64, .@"64", NUM_WORDS)`, **no
   `@memset`**, `cardinality` set to whatever `init` uses.
-- **Assign `words` before any failure point**, so `BitsetContainer.deinit` is safe on a pending container
-  — it frees `words` and destroys the header without reading the body. This ordering is the difference
-  between clean cleanup and a leak or double-free.
+- **Ordering contract:** after the payload allocation **succeeds**, initialize the header immediately —
+  before any subsequent fallible operation — so `BitsetContainer.deinit` is valid from that point on (it
+  frees `words` and destroys the header without reading the body). If the **payload allocation itself
+  fails**, destroy only the header; there is no payload to free. *(An earlier draft said "assign `words`
+  before any failure point", which is not achievable — the payload allocation is itself a failure point,
+  and `words` cannot be assigned before it returns.)*
 - File-private: enters neither the `check-docs` surface nor the `check-32` probe.
 
 ## 3. Eligible-pair pre-pass
@@ -91,6 +94,23 @@ Diagnostic rows, all against the same CRoaring/libc tuple:
 | `lazy-or-construction-batched` | 2 — batched, unsorted |
 | `lazy-or-construction-batched-sorted` | 3 — batched, sorted |
 
+## 6.1 Equivalence coverage — the diagnostic modes must actually be executed
+
+**Without this, the batched paths ship untested.** Public `lazyOr` still uses `.baseline` throughout this
+chunk, so the unit suite, `difftest`, and `difftest64` **never execute either new mode**. The canonical
+sparse corpus does not help — it exercises one shape, and the risk here is the ownership path, not the
+arithmetic.
+
+Add tests that drive `.batched_unsorted` and `.batched_sorted` **directly** through the internal dispatch:
+
+- **both** forced and selective lazy OR;
+- eligible-pair counts of **zero, partial, and all** matched pairs — zero and all are the pre-pass's
+  boundary cases, and partial is the only case where selective and forced diverge;
+- **array/bitset/run combinations**, disjoint keys, and empty inputs on either side;
+- **byte-identical repaired output** against both `.baseline` and CRoaring.
+
+Equality is on the **repaired** result, since lazy output is not directly comparable.
+
 ## 7. Failure injection — required
 
 Inject allocation failure at **scratch, pending headers, pending payloads, unmatched clones, and result
@@ -102,8 +122,12 @@ no pending container, no scratch. Use a leak-checking GPA, never `c_allocator`.
 ## Acceptance
 
 - Scope limited to `.bor`; **`lazyXor` behaviour byte-identical to baseline**, verified.
-- `initPendingBitset` file-private in `bitmap.zig`, `words` assigned before any failure point, no new
-  export.
+- `initPendingBitset` file-private in `bitmap.zig`, header initialized immediately after a successful
+  payload allocation and before any later fallible step; payload-allocation failure destroys only the
+  header. No new export.
+- **Equivalence coverage (§6.1) executes both diagnostic modes** — forced and selective, eligible counts
+  of zero/partial/all, array/bitset/run combinations, disjoint keys, empty inputs — with repaired output
+  byte-identical to `.baseline` and to CRoaring.
 - Eligible-pair pre-pass exact for both forced and selective; **no unused 8 KB buffers allocated** —
   verified by counting, not asserted.
 - Exactly one `[]Pending` scratch allocation, `sortUnstable` on the inline key, freed on every path;

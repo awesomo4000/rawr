@@ -24,20 +24,28 @@ Both would flatter the candidate:
 - **`bench_smp_layout.zig:233`** — it sorts **slices** with **stable `std.mem.sort`**. The candidate uses
   `sortUnstable` (pdq) over a 16-byte struct with an inline key.
 
-### 1.2 Time the exact production representation
+### 1.2 Time the structural equivalent of the production representation
+
+**Preserve the probe's zero-rawr-code property.** `bench_smp_layout.zig` imports only `std` and
+`builtin` and models the container header with a local `Header` (`:15`) carrying a comptime 16-byte
+assertion (`:20`). That independence is why spec 37's result was credible — it reproduced the pathology
+with no rawr or CRoaring code at all. Do not import `BitsetContainer` here.
 
 ```zig
 const Pending = struct {
-    payload_addr: usize,          // sort key — no dereference in the comparator
-    header: *BitsetContainer,     // association preserved alongside the key
+    payload_addr: usize,   // sort key — no dereference in the comparator
+    header: *Header,       // local 16-byte stand-in, existing size assertion retained
 };
 ```
+
+*(An earlier draft wrote `*BitsetContainer`, which would have broken the probe's defining property. The
+production type is structurally identical for this purpose: pointer + `i32`, 16 bytes.)*
 
 One scratch allocation of `[]Pending`; `sortUnstable` on `payload_addr`; comparator touches nothing else.
 
 **Full candidate cost inside the timed region:**
 
-- eligible-count pre-pass (model its `O(a.size + b.size)` walk cost),
+- eligible-count pre-pass (model its `O(a.size + b.size)` walk cost — see §1.2.1),
 - scratch allocation,
 - header **and** payload allocation,
 - the sort,
@@ -48,6 +56,22 @@ One scratch allocation of `[]Pending`; `sortUnstable` on `payload_addr`; compara
 times `lazyOr(...)` alone and calls `result.deinit()` after stopping the clock
 (`bench_croaring.zig:507-512`); a prototype that folds result teardown inward measures a different
 quantity than the row it is trying to predict.
+
+### 1.2.1 The modelled pre-pass must resist the optimizer
+
+The probe has **no real merge inputs**, so a synthetic pre-pass over constant data is exactly the kind of
+loop the compiler folds away — and a pre-pass that costs nothing in the prototype but costs real time in
+production would flatter the candidate into a false GO.
+
+Require:
+
+- **Runtime-populated** key and container-type arrays — not comptime-known, not derivable by constant
+  propagation.
+- **Validate the resulting eligible count** against an independently computed expectation, so the loop
+  has an observable result.
+- **`std.mem.doNotOptimizeAway`** (or an equivalent data dependency) on that result.
+
+Record the measured pre-pass cost separately, as with the sort.
 
 ### 1.3 Cells
 
@@ -76,6 +100,10 @@ does not transfer to this element. **This chunk establishes the number.**
 
 - Probe corrections at `:167` and `:233` made; timed region contains allocation, and the sort is
   `sortUnstable` over `[]Pending`.
+- **Zero-rawr-code property preserved** — no rawr import; `Pending.header` is `*Header`, the local
+  16-byte stand-in, with the existing comptime assertion retained.
+- **Modelled pre-pass resists the optimizer** (§1.2.1): runtime-populated inputs, validated eligible
+  count, `doNotOptimizeAway`. Pre-pass cost recorded separately.
 - All three cells implemented, run on both hosts, SMP and libc, with medians and full ranges recorded.
 - Sort cost recorded as a separate line item.
 - **Timing boundary matches the canonical row:** scratch release inside, result teardown outside.

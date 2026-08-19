@@ -21,7 +21,7 @@ negative control loses its reference the moment the default flips.
 | Row | After adoption |
 | --- | --- |
 | `lazy-or-construction` | **sorted default** — the board row, gates |
-| retained baseline row | pre-adoption interleaved path, for the §4 negative control |
+| `lazy-or-construction-baseline` | pre-adoption interleaved path, for the §4 negative control |
 | `lazy-or-construction-batched` | batched, unsorted — kept for attribution |
 
 ## 3. Gate 2 is a fresh measurement, not an inference
@@ -36,14 +36,23 @@ with instruction-identical disassembly. So Gate 2 requires a **full rerun**, not
 - **Both hosts**, all three canonical tuples — rawr/SMP, rawr/libc, CRoaring/libc.
 - **Whole board**, for spec-28 layout noise. Sub-~1.2x M4 ratios sit at the measurement floor.
 
-## 4. Negative control on the mechanism
+## 4. Negative control — three conditions, not "the gap returns"
 
-With the default adopted, run the production path with sorting disabled (via the retained baseline row and
-the `.batched_unsorted` arm) and **confirm the gap returns**.
+**Corrected: an earlier draft said disabling sorting must make "the gap return", which contradicts the
+three-arm model.** If batching independently helps — which arm 2 vs arm 1 exists to measure — then
+disabling *sorting alone* will not restore the full original gap, and a real ordering win would be
+falsely invalidated.
 
-A win that survives disabling the lever was never the lever — it would mean the improvement came from
-batching, from layout, or from the measurement, and the spec's causal claim would be false even though the
-number improved.
+The control is three separate conditions:
+
+1. **`lazy-or-construction-baseline` reproduces the original interleaved gap** — the pre-adoption
+   behaviour is still there and still slow, so the comparison is anchored.
+2. **`.batched_unsorted` loses the ordering gain measured as arm 3 vs arm 2 in Gate 1** — removing the
+   sort removes *that* increment, whatever batching contributes on its own.
+3. **The sorted default remains faster than `.batched_unsorted`** — the ordering effect persists after
+   adoption and did not evaporate into layout.
+
+All three must hold. Condition 2 is the actual causal claim; conditions 1 and 3 bound it.
 
 ## Acceptance
 
@@ -56,9 +65,16 @@ number improved.
   - **no other board row moves beyond the 5% layout tolerance**;
   - Zen 4 not regressed;
   - **libc not regressed — a libc regression is a STOP**, not a fallback to opt-in within this spec.
-- **Negative control passes:** disabling sorting returns the gap. Record the output.
+- **Negative control passes — all three §4 conditions:** `lazy-or-construction-baseline` reproduces the
+  original gap; `.batched_unsorted` loses the Gate 1 arm-3-vs-arm-2 increment; sorted default stays faster
+  than `.batched_unsorted`. Record the output.
 - All four suites green — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
   `check-package`.
+- **ROLLBACK on Gate 2 failure — mandatory.** If canonical parity, libc, Zen 4, or any whole-board gate
+  fails, **restore `.baseline` as the default** and record a NO-GO. The candidate does not stay shipped
+  merely because the measurement happens after the implementation; that ordering is an artifact of how
+  the work is sequenced, not a reason to ship a failed default. The diagnostic rows and the internal
+  dispatch may remain for future work.
 - **Outcome recorded on the umbrella (spec 31)** either way. If the row closes, say so with the measured
   ratio and the date. If it does not, record the measured result and the reason, and do **not** report it
   as closed or as "at parity when enabled" — that phrasing belongs to opt-in outcomes like spec 39-01, and
