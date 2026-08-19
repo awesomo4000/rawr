@@ -719,6 +719,18 @@ fn assertLazyOrCase(
     defer allocator.free(bytes);
     try expectRawrEqual("lazyOr:rawr-eager", &lazy, &eager);
 
+    var batched = try rawr.lazy_construction.batchedUnsorted(a, allocator, b, bitset_conversion);
+    defer batched.deinit();
+    try batched.repairAfterLazy();
+    try batched.validate();
+    try expectRawrEqual("lazyOr:batched-eager", &batched, &eager);
+
+    var sorted = try rawr.lazy_construction.batchedSorted(a, allocator, b, bitset_conversion);
+    defer sorted.deinit();
+    try sorted.repairAfterLazy();
+    try sorted.validate();
+    try expectRawrEqual("lazyOr:batched-sorted-eager", &sorted, &eager);
+
     var in_place = try a.clone(allocator);
     defer in_place.deinit();
     try in_place.lazyOrInPlace(b, bitset_conversion);
@@ -734,6 +746,8 @@ fn assertLazyOrCase(
     defer c.roaring_bitmap_free(oracle_result);
     c.roaring_bitmap_repair_after_lazy(oracle_result);
     try assertSameValues(allocator, "lazyOr:croaring", &lazy, oracle_result);
+    try assertSameValues(allocator, "lazyOr:batched-croaring", &batched, oracle_result);
+    try assertSameValues(allocator, "lazyOr:batched-sorted-croaring", &sorted, oracle_result);
 }
 
 fn assertLazyXorCase(

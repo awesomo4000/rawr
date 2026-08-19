@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
+const lazy_construction = @import("bitmap.zig").lazy_construction;
 const OwnedBitmap = @import("bitmap.zig").OwnedBitmap;
 const FrozenBitmap = @import("frozen.zig").FrozenBitmap;
 const ArrayContainer = @import("array_container.zig").ArrayContainer;
@@ -473,6 +474,151 @@ test "dense set-operation construction is leak-free across allocation failures" 
         denseSetOperationAllocationFailureCase,
         .{},
     );
+}
+
+const LazyConstructionTestMode = enum {
+    batched_unsorted,
+    batched_sorted,
+};
+
+const LazyConstructionFixture = struct {
+    left: RoaringBitmap,
+    right: RoaringBitmap,
+
+    fn deinit(self: *LazyConstructionFixture) void {
+        self.left.deinit();
+        self.right.deinit();
+    }
+};
+
+test "batched lazy OR construction matches baseline across eligibility boundaries" {
+    var fixture = try makeLazyConstructionFixture(std.testing.allocator);
+    defer fixture.deinit();
+
+    for ([_]LazyConstructionTestMode{ .batched_unsorted, .batched_sorted }) |mode| {
+        try expectLazyConstructionEquivalent(mode, &fixture.left, &fixture.right, false);
+        try expectLazyConstructionEquivalent(mode, &fixture.left, &fixture.right, true);
+
+        var empty = try RoaringBitmap.init(std.testing.allocator);
+        defer empty.deinit();
+        try expectLazyConstructionEquivalent(mode, &empty, &fixture.right, false);
+        try expectLazyConstructionEquivalent(mode, &fixture.left, &empty, false);
+        try expectLazyConstructionEquivalent(mode, &empty, &empty, true);
+    }
+}
+
+test "batched lazy OR construction handles all allocation failures" {
+    for ([_]LazyConstructionTestMode{ .batched_unsorted, .batched_sorted }) |mode| {
+        try std.testing.checkAllAllocationFailures(
+            std.testing.allocator,
+            lazyConstructionAllocationFailureCase,
+            .{mode},
+        );
+    }
+}
+
+fn makeLazyConstructionFixture(allocator: std.mem.Allocator) !LazyConstructionFixture {
+    var left = try RoaringBitmap.init(allocator);
+    errdefer left.deinit();
+    var right = try RoaringBitmap.init(allocator);
+    errdefer right.deinit();
+
+    for ([_]u16{ 1, 7, 31 }) |low| _ = try left.add(low);
+    for ([_]u16{ 2, 7, 63 }) |low| _ = try right.add(low);
+
+    for (0..5000) |index| {
+        _ = try left.add((@as(u32, 1) << 16) | @as(u32, @intCast(index * 2)));
+    }
+    for ([_]u16{ 3, 11, 101 }) |low| {
+        _ = try right.add((@as(u32, 1) << 16) | low);
+    }
+
+    _ = try left.addRange((@as(u32, 2) << 16) | 100, (@as(u32, 2) << 16) | 500);
+    _ = try right.addRange((@as(u32, 2) << 16) | 300, (@as(u32, 2) << 16) | 700);
+    _ = try left.add((@as(u32, 3) << 16) | 9);
+    _ = try right.add((@as(u32, 4) << 16) | 10);
+    _ = try left.runOptimize();
+    _ = try right.runOptimize();
+
+    try std.testing.expectEqual(TaggedPtr.ContainerType.array, left.containers[0].getType());
+    try std.testing.expectEqual(TaggedPtr.ContainerType.bitset, left.containers[1].getType());
+    try std.testing.expectEqual(TaggedPtr.ContainerType.run, left.containers[2].getType());
+    try std.testing.expectEqual(TaggedPtr.ContainerType.run, right.containers[2].getType());
+    return .{ .left = left, .right = right };
+}
+
+fn makeLazyConstructionResult(
+    mode: LazyConstructionTestMode,
+    left: *const RoaringBitmap,
+    allocator: std.mem.Allocator,
+    right: *const RoaringBitmap,
+    bitset_conversion: bool,
+) !RoaringBitmap {
+    return switch (mode) {
+        .batched_unsorted => lazy_construction.batchedUnsorted(left, allocator, right, bitset_conversion),
+        .batched_sorted => lazy_construction.batchedSorted(left, allocator, right, bitset_conversion),
+    };
+}
+
+fn expectLazyConstructionEquivalent(
+    mode: LazyConstructionTestMode,
+    left: *const RoaringBitmap,
+    right: *const RoaringBitmap,
+    bitset_conversion: bool,
+) !void {
+    var baseline = try lazy_construction.baseline(left, std.testing.allocator, right, bitset_conversion);
+    defer baseline.deinit();
+    try baseline.repairAfterLazy();
+
+    var candidate = try makeLazyConstructionResult(
+        mode,
+        left,
+        std.testing.allocator,
+        right,
+        bitset_conversion,
+    );
+    defer candidate.deinit();
+    try candidate.repairAfterLazy();
+
+    const baseline_bytes = try baseline.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(baseline_bytes);
+    const candidate_bytes = try candidate.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(candidate_bytes);
+    try std.testing.expectEqualSlices(u8, baseline_bytes, candidate_bytes);
+}
+
+fn lazyConstructionAllocationFailureCase(
+    allocator: std.mem.Allocator,
+    mode: LazyConstructionTestMode,
+) !void {
+    var fixture = try makeLazyConstructionFixture(std.testing.allocator);
+    defer fixture.deinit();
+    const left_before = try fixture.left.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(left_before);
+    const right_before = try fixture.right.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(right_before);
+
+    var expected = try lazy_construction.baseline(
+        &fixture.left,
+        std.testing.allocator,
+        &fixture.right,
+        false,
+    );
+    defer expected.deinit();
+    try expected.repairAfterLazy();
+
+    var result = makeLazyConstructionResult(mode, &fixture.left, allocator, &fixture.right, false) catch |err| {
+        const left_after = try fixture.left.serialize(std.testing.allocator);
+        defer std.testing.allocator.free(left_after);
+        const right_after = try fixture.right.serialize(std.testing.allocator);
+        defer std.testing.allocator.free(right_after);
+        try std.testing.expectEqualSlices(u8, left_before, left_after);
+        try std.testing.expectEqualSlices(u8, right_before, right_after);
+        return err;
+    };
+    defer result.deinit();
+    try result.repairAfterLazy();
+    try std.testing.expect(result.equals(&expected));
 }
 
 fn denseSetOperationAllocationFailureCase(result_allocator: std.mem.Allocator) !void {

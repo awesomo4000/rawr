@@ -42,6 +42,7 @@ const internal_exports = [_]InternalExport{
     .{ .name = "test_gen", .reason = "test data generation" },
     .{ .name = "roaring64_test_gen", .reason = "64-bit test data generation" },
     .{ .name = "roaring64_test_support", .reason = "64-bit test support" },
+    .{ .name = "lazy_construction", .reason = "lazy-OR construction benchmark diagnostics" },
 };
 
 const MethodOmission = struct {

@@ -87,6 +87,11 @@ const allocating_variants = [_]Variant{
     .{ .implementation = .croaring, .allocator = .libc },
 };
 
+const rawr_allocating_variants = [_]Variant{
+    .{ .implementation = .rawr, .allocator = .smp },
+    .{ .implementation = .rawr, .allocator = .libc },
+};
+
 const non_allocating_variants = [_]Variant{
     .{ .implementation = .rawr, .allocator = .none },
     .{ .implementation = .croaring, .allocator = .none },
@@ -343,6 +348,36 @@ const manifest = [_]ManifestRow{
         .teardown_boundary = "result deinit/free outside the internally timed interval",
         .validation_oracle = .portable_bytes,
         .operation = .lazy_or_construction,
+    },
+    .{
+        .id = "lazy-or-construction-batched",
+        .display_name = "lazyOr construction (batched)",
+        .corpus = "same sparse corpus as lazy-or-construction",
+        .seed = 54321,
+        .rawr_operation = "internal batched-unsorted lazy OR construction",
+        .croaring_operation = "lazy-or-construction CRoaring reference",
+        .allocation_class = .allocating,
+        .variants = &rawr_allocating_variants,
+        .reference = .{ .row_id = "lazy-or-construction", .variant = .{ .implementation = .croaring, .allocator = .libc } },
+        .setup_boundary = "inputs outside timing; prepass, pending allocation, and lazy result construction inside timing",
+        .teardown_boundary = "result deinit/free outside the internally timed interval",
+        .validation_oracle = .portable_bytes,
+        .operation = .lazy_or_construction_batched,
+    },
+    .{
+        .id = "lazy-or-construction-batched-sorted",
+        .display_name = "lazyOr construction (batched sorted)",
+        .corpus = "same sparse corpus as lazy-or-construction",
+        .seed = 54321,
+        .rawr_operation = "internal payload-address-sorted batched lazy OR construction",
+        .croaring_operation = "lazy-or-construction CRoaring reference",
+        .allocation_class = .allocating,
+        .variants = &rawr_allocating_variants,
+        .reference = .{ .row_id = "lazy-or-construction", .variant = .{ .implementation = .croaring, .allocator = .libc } },
+        .setup_boundary = "inputs outside timing; prepass, pending allocation, sort, and lazy result construction inside timing",
+        .teardown_boundary = "result deinit/free outside the internally timed interval",
+        .validation_oracle = .portable_bytes,
+        .operation = .lazy_or_construction_batched_sorted,
     },
     .{
         .id = "lazy-or-repair-only",
@@ -775,7 +810,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn validateManifest() !void {
-    if (manifest.len != 40) return error.InvalidManifestRowCount;
+    if (manifest.len != 42) return error.InvalidManifestRowCount;
     for (&manifest, 0..) |*row, i| {
         if (row.id.len == 0 or row.variants.len == 0 or row.batch_count == 0) return error.InvalidManifestRow;
         if (dashboard.parityRequiresAllocator(row.operation) != (row.allocation_class == .allocating)) {
