@@ -214,9 +214,10 @@ available` is satisfied by **any** result, including a candidate that is slower 
 
 - **`batched_sorted` must beat `batched_unsorted`**, with **non-overlapping ranges**, hence
   **`available > 0`**.
-- If it does not: **NO-GO** — the probe **failed to reproduce the ordering mechanism** established by
-  specs 37 and 44. That is a defective probe, not evidence against chunking, and it must be diagnosed
-  before any candidate number is interpreted.
+- If it does not: **INVALID / STOP** — **not** a candidate NO-GO. The probe **failed to reproduce the
+  ordering mechanism** established by specs 37 and 44, so it is a defective instrument and **no candidate
+  number from that run may be interpreted at all**. Diagnose the probe, then re-run. Recording it as a
+  candidate NO-GO would attribute an instrument failure to the idea under test.
 
 **Step 2 — only then evaluate the candidate:**
 
@@ -312,6 +313,13 @@ source-read reordering (spec 44 closed it); the microarchitectural attribution q
 **M** — the allocation change is small; the wrapper, migration path, failure transaction, and dual-gate
 measurement are the work.
 
-## 12. Chunking
+## 12. Chunking — cleared, three chunks
 
-Not chunked — pending review.
+- **[45-00](45-00-chunked-prototype.md)** — prototype, four cells, ordering control, chunk-size sweep.
+- **[45-01](45-01-arena-implementation.md)** — wrapper, ownership, migration, failure transaction,
+  correctness, 42-row manifest.
+- **[45-02](45-02-measurement-and-verdict.md)** — two-host canonical measurement, dual gate, memory,
+  verdict.
+
+Each is a stopping point: an INVALID/STOP or NO-GO at `45-00` costs no production code, and `45-01`
+changes no default.
