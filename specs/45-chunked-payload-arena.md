@@ -20,7 +20,9 @@ Three M4 numbers were the same quantity: machinery **+0.646 ms**, residual gap *
 regression **+0.804 ms**. **Ordering pays; the machinery to obtain it does not.**
 
 This spec obtains ordering **without the machinery**: no pre-pass, no eligible count, no scratch array,
-no sort, **no per-payload scratch metadata**, no slot assembly, no second pass. Construction stays as it
+**no payload-address sort**, **no per-payload scratch metadata**, no slot assembly, no second pass.
+*(Qualified deliberately: the ~128-entry **chunk-list index** IS sorted once before repair per §3.1. What
+this spec avoids is sorting 16,364 payload addresses.)* Construction stays as it
 is today — fused, key order, one buffer at a time. **Only the source of the 8 KB payload changes.**
 
 *(The chunk list is itself metadata; it is small and bounded, and **its cost belongs inside the timed
@@ -45,8 +47,9 @@ largest cost this design avoids relative to specs 43 and 44.
 
 Sweep at minimum **256 KiB, 1 MiB, 4 MiB**; report the ordering benefit at each.
 
-**Selection rule, decided in advance:** choose the **smallest** size within **5%** of the best result on
-**both** hosts. If no single size satisfies both, **report that and stop** — host-specific tuning is a
+**Selection rule, decided in advance:** using **SMP medians on both hosts**, choose the **smallest** size
+within **5%** of the best result on both. **libc is report-only and must not influence selection**
+(§7.1). If no single size satisfies both hosts, **report that and stop** — host-specific tuning is a
 separate decision requiring explicit sign-off, never a silent default.
 
 ## 3. Ownership — an internal wrapper, not a field on `RoaringBitmap`
@@ -169,30 +172,45 @@ construction order — ordering comes from the allocator, not from reordering wo
 Extend `src/bench_smp_layout.zig` (zero rawr code — model the header locally, do **not** import
 `BitsetContainer`).
 
-**Cells:** **scattered** (today), **sorted** (spec 43's mechanism — the ceiling reference), and
-**chunked** at each candidate size. Zeroing in allocation order in every cell.
+**Four explicit cells**, each timing its **complete** cost — allocation, any metadata, any sort, and
+zeroing — with retained teardown **outside** the region:
 
-The sorted cell is what makes the stop gate falsifiable: it measures, inside this prototype, how much
-ordering is available at all.
+| Cell | What it does |
+| --- | --- |
+| `scattered_interleaved` | today's structure: allocate and zero **per buffer**, interleaved |
+| `batched_unsorted` | allocate all, then zero in **allocation order** |
+| `batched_sorted` | allocate all, **sort payload addresses**, zero in **sorted order** |
+| `chunked_<size>` | chunk bump-allocate and zero **per buffer**, interleaved — the candidate |
 
-**Must include, inside the timed region:** header allocations, chunk allocation **and chunk-list
-metadata maintenance**, exact **64-byte payload alignment**, chunk-boundary transitions, and both
-allocation and zeroing.
+*(An earlier draft was incoherent: it named a `sorted` cell as the ordering ceiling while also stating
+every cell zeroes in allocation order, which would make that cell identical to `batched_unsorted`. It
+also required allocation inside timing while the existing probe's sorted cell allocates before it —
+`bench_smp_layout.zig:167`, already flagged in spec 43-00.)*
 
-**Protocol:** the existing fresh-process controller — **≥5 process medians, each 3 warmup / 21 timed.**
+Note the candidate is **interleaved like the baseline**, not batched: chunking gets ordering *without*
+deferring the zeroing, which is the entire point.
 
 ### 6.1 Stop gate — numeric, decided in advance
 
-Let `available = scattered − sorted` (M4, SMP) — the ordering headroom this prototype can see.
+**M4, SMP:**
 
-- **GO requires chunked to recover ≥50% of `available` on M4**, with **non-overlapping ranges** between
-  chunked and scattered.
-- **Zen 4: chunked must not be worse than scattered by more than 5%** on median.
+```
+available  = batched_unsorted     - batched_sorted        # ordering headroom this probe can see
+recovered  = scattered_interleaved - chunked_<size>       # what the candidate actually delivers
+```
+
+- **GO requires `recovered >= 0.50 * available`**, with **non-overlapping ranges** between
+  `chunked_<size>` and `scattered_interleaved`.
+- **Zen 4: `chunked / scattered_interleaved <= 1.05`** on median.
 - Overlapping ranges → **rerun**; still overlapping → **inconclusive → NO-GO**.
+
+`available` is measured in the batched world because that is the only place a payload-address sort is
+possible; `recovered` is measured against the real baseline structure because that is what the candidate
+must actually beat. **They are deliberately different comparisons.**
 
 *(An earlier draft asked for a "comparable share", which is not falsifiable.)* 50% is a screen, not a
 prediction: below it the mechanism cannot plausibly cover the residual once production overheads are
-added, so the production work would be spent to fail. **Only the §7 gates can decide the row.**
+added. **Only the §7 gates can decide the row.**
 
 Run both hosts, SMP and libc. **NO-GO here ends the spec** with no production change.
 
@@ -201,7 +219,7 @@ Run both hosts, SMP and libc. **NO-GO here ends the spec** with no production ch
 - **Construction:** candidate `lazy-or-construction` row **≤1.10x** on M4. **Primary.**
 - **Combined:** `lazyOr+repair` **within 5% on median** of baseline, ranges considered. Migration cost
   lands here, and spec 35 established that gating the aggregate alone authorizes work that buys nothing.
-- **Zen 4 ≤5%**, both rows.
+- **Zen 4: `candidate / baseline ≤ 1.05`** on median, for **both** rows, ranges considered.
 - **Memory:** report **requested-byte high-water** and **post-repair live bytes**, tolerance **≤5%**
   against baseline, plus a hard assertion that **retained chunk bytes are zero after successful repair**.
 - Canonical harness only, both hosts, all three tuples, ≥5 fresh-process medians with full ranges.
