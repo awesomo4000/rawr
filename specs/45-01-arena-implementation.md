@@ -32,6 +32,16 @@ Documentation cannot prevent that; withholding the bitmap can.
 - `deinit()` → §3.2 teardown;
 - `clearRetainingCapacity()` → frees chunks explicitly **and** applies §3 classification.
 
+### 1.1 Handoff state — the wrapper and the returned bitmap cannot both own the result
+
+- **On success**, `repairAndTake*` **consumes and invalidates the wrapper**. A subsequent wrapper
+  `deinit()` must be **safe and a no-op**, so a caller's `defer wrapper.deinit()` cannot double-free what
+  the returned bitmap now owns.
+- **On failure**, the wrapper **remains the owner** and remains **retryable** (§3.2).
+- **Required test:** `defer` teardown of **both** the wrapper and the returned bitmap in the same scope,
+  under a leak-checking GPA, confirming no double free and no leak. That is the exact shape a caller
+  will write, so it is the shape that must be proven safe.
+
 **Public `RoaringBitmap.repairAfterLazy` / `repairAfterLazyWithOptions` are NOT modified.** They have no
 chunk-list context and must never receive the hidden bitmap.
 
@@ -42,6 +52,9 @@ the header's size class is load-bearing).
 
 **No pre-pass** — chunks grow on demand, so the eligible count is never needed. Payloads are **ascending
 within each chunk**; chunk addresses themselves need not be globally ascending.
+
+**Chunk size: use the size selected by `45-00` §6. No retuning in this chunk** — re-choosing it here
+would silently re-open a decision that was made against a pinned rule.
 
 **Chunk list:** append **unsorted** during construction; **sort exactly once** before repair or ownership
 classification. The sort is over ~128 elements, is **infallible**, and belongs inside combined timing.
@@ -96,8 +109,14 @@ rather than assume it.**
 
 ## 4. Failure injection
 
-Inject at: **chunk allocation**, **chunk-list capacity reservation** (must not orphan a chunk — §2),
-**header allocation**, **migration allocation during repair**, and the existing **clone/union** sites.
+Inject at:
+
+1. **chunk allocation**;
+2. **chunk-list capacity reservation** — must not orphan a chunk (§2);
+3. **header allocation**;
+4. **migration allocation during repair**;
+5. **unmatched clone** allocation;
+6. **non-eligible union** allocation.
 
 Use `std.testing.checkAllAllocationFailures`. Every failure: **inputs untouched, nothing leaked**,
 leak-checking GPA, never `c_allocator`.
@@ -132,10 +151,13 @@ must read exactly 42:** `src/bench_parity_worker.zig:778`, `scripts/run-compare-
 
 - Wrapper per §1; **bitmap not exposed before repair**; public repair methods unmodified;
   `RoaringBitmap` gains no field.
+- **Handoff per §1.1** — success consumes/invalidates the wrapper, failure retains ownership and stays
+  retryable, and the **double-`defer` test passes**.
 - Chunk allocation per §2, including **capacity-reserved-before-chunk** and the single pre-repair sort.
 - **§3 classification applied on every cleanup path**; no header flag; `BitsetContainer` size unchanged.
 - Lifetime and failure transaction per §3.1–3.2; **retry idempotence verified, not assumed**.
-- **`checkAllAllocationFailures` green** at all five sites, including the mixed arena/ordinary case.
+- **`checkAllAllocationFailures` green** at every §4 injection site, including the mixed arena/ordinary
+  case.
 - Correctness per §5, including **pre-repair `cardinality()`** and the **multi-chunk** case.
 - **Manifest at 42 rows, both guards updated**; both candidate rows selectable.
 - No public API added; internal only; outside `API.md`, the `check-docs` guarded region, and the

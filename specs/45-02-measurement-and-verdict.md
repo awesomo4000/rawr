@@ -43,9 +43,17 @@ regression does not stop this spec. It remains diagnostic signal — in spec 44 
 cleanest available measurement of machinery cost, because libc is order-insensitive and so pays overhead
 while gaining nothing.
 
-## 4. Memory — new for this spec
+## 4. Memory — new for this spec, and measured OUT OF BAND
 
 Chunking changes the allocation profile, so speed alone is not a sufficient verdict.
+
+**Memory accounting must never contaminate gated timing.** A counting-allocator wrapper **must not**
+replace SMP in any timed cell, and **must not run before one in the same process**. Prior specs measured
+how badly allocator preconditioning moves this row: spec 35's focused harness read **1.155x** where
+canonical read **1.727x**, purely because earlier passes had touched the same population.
+
+**Therefore: collect memory figures in a separate fresh process, or in an explicitly untimed diagnostic
+run.** Never in the same process as a gated cell.
 
 - **Requested-byte high-water** during construction and during the combined cycle.
 - **Post-repair live bytes.**

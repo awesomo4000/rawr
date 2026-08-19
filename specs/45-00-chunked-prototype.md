@@ -5,8 +5,14 @@
 Toplevel: [45-chunked-payload-arena.md](45-chunked-payload-arena.md).
 
 **No production code.** This chunk answers one question before anything is built: does chunk bump
-allocation deliver a useful share of the ordering benefit **without** sorting? An INVALID/STOP or NO-GO
-here ends spec 45 cheaply.
+allocation deliver a useful share of the ordering benefit **without** sorting?
+
+**Two different outcomes, and only one of them ends spec 45:**
+
+- **Candidate NO-GO** — the mechanism was validly measured and does not deliver. **Ends spec 45.**
+- **INVALID / STOP** — the ordering control failed, so the probe is a defective instrument. **Blocks
+  progression pending a diagnosed, valid rerun.** It says nothing about chunking and must never be
+  recorded as a candidate result.
 
 ## 1. Where
 
@@ -14,9 +20,17 @@ Extend `src/bench_smp_layout.zig` — **zero rawr code**, per spec 37/43 practic
 header **locally**; do **not** import `BitsetContainer`. That independence is why spec 37's result was
 credible.
 
-**Fix the probe's known defects first** (both flagged in spec 43-00): the existing sorted cell
-**allocates before the timed region** (`:167`), and it sorts **slices** with stable `std.mem.sort`
-(`:233`). Every cell here times its own allocation, and payload-address sorting uses `sortUnstable`.
+**Add the four cells below; do NOT alter the existing ones.** `zero_sorted_*`, `sort_zero_*`, and the
+probe's historical output keep their current semantics and boundaries.
+
+*(An earlier draft called the existing cells "defective" and asked for them to be fixed. They are not
+defective — their boundaries **deliberately isolate zeroing and sort cost**, which is what spec 37 needed.
+They are merely **unsuitable as spec-45 candidate models**, because this spec must time complete
+candidate cost including allocation. Changing them would break comparability with spec 37/43 results
+still in use.)*
+
+The new cells therefore carry their own boundaries: each times its own allocation, and payload-address
+sorting uses `sortUnstable`.
 
 ## 2. Four cells
 
@@ -94,7 +108,10 @@ host-specific tuning needs explicit sign-off, never a silent default.
 
 ## Acceptance
 
-- Probe defects at `:167` and `:233` fixed; **zero rawr imports**; header modelled locally.
+- **Four new cells added; existing cells untouched** — `zero_sorted_*`, `sort_zero_*`, and historical
+  output byte-identical. **Zero rawr imports**; header modelled locally.
+- New cells time their own allocation, and payload-address sorting uses `sortUnstable` — the boundaries
+  the *existing* cells deliberately do not have.
 - Four cells implemented per §2, chunk sizes swept per §2.
 - Timing boundary per §3, including temporary-versus-retained teardown placement and chunk-list cost.
 - Protocol per §4 on both hosts; libc recorded but not decisive.
@@ -102,9 +119,12 @@ host-specific tuning needs explicit sign-off, never a silent default.
   interpreted.
 - **Step 2 evaluated only if `available > 0`.**
 - Chunk-size selection per §6, or an explicit report that no size satisfies both hosts.
-- **GO / NO-GO / INVALID-STOP stated**, with the reasoning. A NO-GO or INVALID-STOP ends spec 45 with no
-  production code written.
+- **Verdict stated explicitly as one of GO / candidate NO-GO / INVALID-STOP**, with reasoning:
+  - **GO** → proceed to `45-01`;
+  - **candidate NO-GO** → **ends spec 45**, no production code written;
+  - **INVALID-STOP** → **does not end spec 45**; diagnose the probe and rerun. No candidate number from
+    that run may be reported.
 
 ## Estimate
 
-**S** — the probe exists; this extends and corrects it.
+**S** — the probe exists; this adds cells alongside it.
