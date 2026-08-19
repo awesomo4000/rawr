@@ -39,17 +39,30 @@ Three facts, verified in source, that the first draft did not account for:
 - **Matched bitsets and unmatched clones are allocated interleaved** in the merge loop
   (`bitmap.zig:2331`) — clones for unmatched keys, lazy bitsets for matched ones, in key order.
 
-### 2.1 Private pending-allocation path
+### 2.1 Private pending-allocation path — in `bitmap.zig`, not `bitset_container.zig`
 
-Add a **private, non-`pub`** uninitialized path — e.g. `BitsetContainer.initPending` — that allocates the
-header and payload but **does not zero**. Rules:
+**Corrected: an earlier draft specified a non-`pub` `BitsetContainer.initPending`, which cannot work.**
+Zig privacy is file-level, so a non-`pub` declaration in `bitset_container.zig` is **not callable from
+`bitmap.zig`** — the draft asked for something the language forbids. Making it `pub` would instead add it
+to the internally-exported container surface, which is the opposite of the intent.
 
+**Decision: a private `initPendingBitset` helper inside `bitmap.zig`**, allocating the header and payload
+directly. This is possible because Zig struct fields carry no visibility modifier — `words` and
+`cardinality` are reachable wherever `BitsetContainer` is — so the helper can construct the container
+without any new export.
+
+Rules:
+
+- **Allocate without zeroing:** `allocator.create(BitsetContainer)` + `allocator.alignedAlloc(u64, .@"64",
+  NUM_WORDS)`, **no `@memset`**, `cardinality` set to the same initial value `init` uses.
 - **Zero before publication.** A pending container is never reachable by any read path before its
-  `@memset`. State the publication point precisely.
-- **Cleanup for partial batches.** If the batch fails midway, every already-allocated pending header and
-  payload is freed — including ones not yet zeroed. Pending containers are not valid containers, so
-  cleanup cannot route through `deinit` unless `deinit` is safe on an unzeroed body.
-- **Not public.** It must not enter the `check-docs` surface or the `check-32` probe as public API.
+  `@memset` (see §2.4 for the exact transfer point).
+- **Cleanup for partial batches.** Every already-allocated pending header and payload is freed, including
+  ones not yet zeroed. `BitsetContainer.deinit` is safe here — it frees `words` and destroys the header
+  without reading the body — **provided `words` is assigned before any failure point**. Make that
+  ordering explicit in the helper.
+- **No new public or internal export.** The helper is file-private to `bitmap.zig`, so it enters neither
+  the `check-docs` surface nor the `check-32` probe.
 
 ### 2.2 Scratch for the sort — one design, decided
 
@@ -164,8 +177,9 @@ measured against the **same CRoaring/libc tuple**:
 | `lazy-or-construction-batched` | 2 — batched, unsorted |
 | `lazy-or-construction-batched-sorted` | 3 — batched, sorted |
 
-Arm rows are **diagnostic**: they exist to attribute the effect and are not board rows. Only
-`lazy-or-construction` gates.
+Arm rows are **diagnostic**: they exist to attribute the effect and are not board rows. **Only
+`lazy-or-construction` is a board row** — but it is not the only thing that gates: the sorted diagnostic
+row gates **promotion** (§8.1 gate 1), and the canonical board row gates **adoption** (gate 2).
 
 **Mechanism — runtime dispatch, one worker build. DECIDED.** A build option cannot express this: the
 parity worker is built **once** (`run-compare-bench.sh` builds `bench-parity-worker -Dcpu=native`) and
@@ -229,8 +243,14 @@ covers the target. **`lazyXor` carries no-regression coverage** as a shared-help
   **follow-up opt-in spec** that owns the API and documentation cost explicitly — as spec 39-01 did,
   where opt-in was a deliberately scoped chunk rather than a contingency.
 - **The arm control is internal** — the §4 runtime `ConstructionMode` dispatch reached through
-  `roaring.zig`'s internal-export manifest, **not** a build option and not public API. It
-  drives the §4 arms and the §9 negative control, and ships as no part of the library surface.
+  `roaring.zig`'s internal-export manifest, **not** a build option. It drives the §4 arms and the §9
+  negative control.
+
+  **Precisely:** it **does** ship, in the package's *internal* surface — `roaring.zig` is in `.paths`, so
+  the export is present for any consumer who goes looking. What it stays outside is the **stable public
+  API**: `API.md`, the `check-docs` guarded region, and the `check-32` probe. It carries the same "may
+  change without notice" status as the other 10 internal exports, and needs a reason string in the
+  manifest. *(An earlier draft said it "ships as no part of the library surface", which was wrong.)*
 
 ## 7. Feasibility prototype — not end-to-end
 
