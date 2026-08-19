@@ -51,17 +51,42 @@ header and payload but **does not zero**. Rules:
   cleanup cannot route through `deinit` unless `deinit` is safe on an unzeroed body.
 - **Not public.** It must not enter the `check-docs` surface or the `check-32` probe as public API.
 
-### 2.2 Scratch for the sort
+### 2.2 Scratch for the sort — one design, decided
 
-Sorting needs storage that keeps header↔payload together. Pin all of it:
+```zig
+const Pending = struct {
+    payload_addr: usize,          // sort key — no dereference in the comparator
+    header: *BitsetContainer,     // association preserved alongside the key
+};
+```
 
-- **Representation:** an array of `{header_ptr, payload_ptr}` (or an index permutation over a
-  pending array), sorted on **payload address as `usize`**. Do not sort slices (§3).
-- **Maximum size:** bounded by matched-pair count ≤ `min(a.size, b.size)` ≤ 65,536 entries.
-- **Allocator:** the bitmap's allocator. State it explicitly.
-- **On scratch allocation failure: fall back to the existing interleaved path and succeed.** The
-  optimization is not worth converting a satisfiable request into OOM. Pin this as behaviour, not
-  best-effort.
+- **Exactly one scratch allocation:** `[]Pending`, length = matched-pair count.
+- **Comparator reads `payload_addr` only.** Rejected: `[]*BitsetContainer` sorted by `a.words < b.words`
+  — 8-byte elements, but every comparison **dereferences a header**, so ~229k comparisons at 16k buffers
+  each risk a cache miss on randomly-ordered headers. A 16-byte element whose key is in-line and
+  traversed sequentially is the cheaper shape even though the element is wider. Rejected: index
+  permutation — needs a second mapping for no benefit.
+- **Sort:** `sortUnstable` (pdq) on `payload_addr`.
+- **Size bound:** matched pairs ≤ `min(a.size, b.size)` ≤ 65,536 → ≤ 1 MiB of scratch.
+- **Allocator:** the bitmap's allocator (the one passed to `lazyOr`).
+- **Ownership:** scratch is owned by the construction routine and freed before it returns, on every path.
+
+**The ~0.13 ms estimate in §3 is superseded and does not apply to this representation** — it was measured
+on flat `usize`. The prototype (§7) must measure **this exact struct, this comparator, this sort**.
+
+**Scratch allocation failure → retry through the existing interleaved path.** If *that* path also fails,
+propagate its error. *(Corrected from "fall back and succeed", which over-promised: a genuinely exhausted
+allocator can still legitimately return OOM.)*
+
+### 2.3 Publication contract
+
+The pending pool **owns** a header and payload until that container has been (1) zeroed, (2) accumulated,
+and (3) successfully appended through an ownership-taking helper. **Only on successful append does the
+result own it.**
+
+Consequences, which is the point of stating it this way: any failure before the append frees through the
+**pool**, any failure after frees through the **result**, and no container is ever owned by both or
+neither. Error cleanup becomes mechanical rather than case-by-case.
 
 **Correction to the first draft: "allocation count unchanged" is now false and is withdrawn.** The
 honest framing: **two allocations per bitset are preserved**, and scratch adds a small, bounded number on
@@ -97,6 +122,19 @@ assumed away — if batching alone moves the row, the story is not ordering.
 Run all three as **equivalent fresh-process cells** so prior allocator conditioning cannot decide the
 result (spec 35's warmed-context artifact read 1.155x where canonical read 1.727x).
 
+**How they appear in the manifest.** Canonical tuples are keyed by *(implementation, allocator)*, so
+three rawr/SMP variants cannot share one row. Express the arms as **three named operation rows**, each
+measured against the **same CRoaring/libc tuple**:
+
+| Row | Arm |
+| --- | --- |
+| `lazy-or-construction` | 1 — existing interleaved baseline (the canonical row; unchanged) |
+| `lazy-or-construction-batched` | 2 — batched, unsorted |
+| `lazy-or-construction-batched-sorted` | 3 — batched, sorted |
+
+Arm rows are **diagnostic**: they exist to attribute the effect and are not board rows. Only
+`lazy-or-construction` gates. Selection between arms is the internal build option from §6.
+
 ## 5. Failure semantics — explicit gate
 
 A pending pool creates many owners before result assembly, which is exactly where leaks hide.
@@ -109,23 +147,29 @@ container, no pending container, no scratch. Use a leak-checking GPA, never `c_a
 
 Scratch failure specifically must **degrade to the existing path and succeed** (§2.2), not propagate OOM.
 
-## 6. Scope — which operations, and how it is selected
+## 6. Scope and selection — DECIDED
 
-`lazyMergeTwo` serves **forced and selective `lazyOr` *and* `lazyXor`** (`bitmap.zig:1128`, `:2344`;
-the branch condition includes `op == .xor`). Decide and state:
+`lazyMergeTwo` serves forced and selective `lazyOr` **and** `lazyXor` (`bitmap.zig:1128`, `:2344`; the
+branch condition includes `op == .xor`).
 
-- whether batching applies to **forced lazy OR only** or to **every lazy-bitset branch**;
-- **no-regression coverage for everything sharing the helper** — `lazyXor` must not regress even if it is
-  out of scope for the win.
+**Scope: lazy OR only — `op == .or_`, both forced and selective. `lazyXor` is excluded.**
+The forced/selective flag changes only *how many* pairs take the bitset branch, not the mechanism, so
+splitting on it would be arbitrary; splitting on `op` is a clean boundary that keeps XOR's behaviour
+identical. The canonical row is `lazyOr(allocator, b, true)` (`bench_croaring.zig:507`), so this scope
+covers the target. **`lazyXor` carries no-regression coverage** as a shared-helper obligation.
 
-**Selection mechanism — decide before implementing, not after measuring:**
+**Selection: DEFAULT behaviour. No public API in this spec.**
 
-- A **public option** expands the API surface and pulls in `API.md`, the `check-docs` guarded region, and
-  the `check-32` probe (spec 41/40-01 rules apply).
-- A **default change** affects **every caller-provided allocator**, not only the three canonical tuples —
-  the independent reason spec 39-01 rejected default adoption.
-- The **negative control** (§7) needs a way to disable sorting that does **not** itself ship as public
-  API if the option does not.
+- A public option would pull in `API.md`, the `check-docs` guarded region, and the `check-32` probe
+  (spec 41 / 40-01 rules) — real cost for a knob nobody asked for.
+- **Default is also the only way the canonical row can close.** An opt-in leaves the canonical default
+  untouched, which is exactly why spec 39-01 reports "at parity when enabled" rather than closing a row.
+  Choosing opt-in up front would concede the target before measuring.
+- **Contingency, pre-registered:** if libc regresses, fall back to opt-in scope per spec 39-01 — and then
+  the **canonical row does not move** and the outcome is reported as "at parity when enabled", never "row
+  closed". This is the *fallback*, not the plan.
+- **The arm control is internal** — a build option consumed by the benchmark worker, not public API. It
+  drives the §4 arms and the §9 negative control, and ships as no part of the library surface.
 
 ## 7. Feasibility prototype — not end-to-end
 
@@ -136,9 +180,19 @@ Current gaps to fix in the probe itself: its `sort_zero` cell **allocates before
 (`bench_smp_layout.zig:167`) and it **sorts slices with stable `std.mem.sort`** (`:233`) — both
 misrepresent the candidate.
 
-Cells must time the **chosen production representation** and the **full candidate cost**: scratch
-allocation, header **and** payload allocation, sorting, zeroing, and cleanup. Sorting that recovers
-1.7 ms and costs 1.4 ms is not a win, and only in-region timing shows it.
+Cells must time the **chosen production representation** (§2.2's `Pending` struct, its comparator, its
+sort) and the **full candidate cost**: scratch allocation, header **and** payload allocation, sorting,
+and zeroing. Sorting that recovers 1.7 ms and costs 1.4 ms is not a win, and only in-region timing shows
+it.
+
+**Cleanup splits in two, and the split must match the canonical row:**
+
+- **Scratch release is construction cost — time it inside the region.** It exists only to build the
+  result.
+- **Retained header/payload teardown is NOT construction — time it outside.** The canonical construction
+  row times `lazyOr(...)` alone and calls `result.deinit()` after stopping the clock
+  (`bench_croaring.zig:507-512`). A prototype that folds result teardown into the timed region measures a
+  different quantity than the row it is trying to predict.
 
 **Proceed to production only if the prototype clears the gap with margin.**
 
@@ -158,11 +212,14 @@ allocation, header **and** payload allocation, sorting, zeroing, and cleanup. So
 ## 9. Acceptance
 
 - Private pending path per §2.1: never publishes unzeroed state, cleans up partial batches, stays
-  non-public.
-- Scratch per §2.2, including the **fallback-on-scratch-failure** behaviour.
-- Prototype (§7) shows net gain with **full candidate cost timed in-region**; recorded.
-- **Three arms measured** (§4) as fresh-process cells; **arm 3 vs arm 2** reported as the ordering result
-  and **arm 2 vs arm 1** as the batching effect.
+  non-public. **Publication contract §2.3 holds** — pool owns until successful append, result owns after.
+- Scratch per §2.2: **exactly one** `[]Pending` allocation, comparator on `payload_addr`, `sortUnstable`,
+  freed on every path; scratch failure retries the existing path and propagates only that path's error.
+- **Scope is lazy OR only**; `lazyXor` behaviour byte-identical to baseline.
+- Prototype (§7) shows net gain, measuring **§2.2's exact representation**, with scratch release inside
+  the timed region and result teardown outside; recorded.
+- **Three arms measured** (§4) as fresh-process cells under the named diagnostic rows; **arm 3 vs arm 2**
+  reported as the ordering result and **arm 2 vs arm 1** as the batching effect.
 - Canonical `lazy-or-construction` **≤1.10x on M4**, or an explicit reasoned stop.
 - Combined `lazyOr+repair` does not regress; `lazyXor` does not regress; no other board row moves beyond
   the 5% layout tolerance.
