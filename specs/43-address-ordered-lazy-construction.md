@@ -94,12 +94,17 @@ buffer. Sizing off matched pairs would allocate **thousands of unused 8 KB buffe
 the worst case — turning an ordering optimization into a memory-consumption defect.
 
 **Therefore: one pre-pass over the merge walk evaluating the same predicate**, producing the exact
-eligible count before any pending allocation. No allocation in the pre-pass. Its cost — an extra
-`O(min(a.size, b.size))` scan with container-type checks — must be **inside the timed region** of both
-the prototype and production, since it is part of the candidate.
+eligible count before any pending allocation. No allocation in the pre-pass.
 
-*(Enum spelling corrected throughout: the op is `.bor`, per `TwoWayOp = enum { bor, band, xor, andnot }`
-at `bitmap.zig:1859`. An earlier draft wrote `.or_`.)*
+Its cost is an extra **`O(a.size + b.size)`** scan with container-type checks — the merge walk advances
+through *both* key arrays; only the number of *matches* is bounded by `min(a.size, b.size)`. *(An earlier
+draft wrote `O(min(a.size, b.size))`, conflating the match count with the walk length.)* That cost must be
+**inside the timed region** of both the prototype and production, since it is part of the candidate.
+
+*(Enum corrected throughout: `lazyMergeTwo(comptime op: ManyOp, ...)` (`bitmap.zig:2317`) takes
+**`ManyOp = enum { bor, xor }`** (`bitmap.zig:2131`) — **not** `TwoWayOp` at `:1859`, which is a different
+enum that also happens to spell one variant `bor`. An earlier draft wrote `.or_`, then cited the wrong
+enum.)*
 
 ### 2.4 Publication contract
 
@@ -223,7 +228,8 @@ covers the target. **`lazyXor` carries no-regression coverage** as a shared-help
   **Outcome in that case:** record the measured result, report the row as **not closed**, and open a
   **follow-up opt-in spec** that owns the API and documentation cost explicitly — as spec 39-01 did,
   where opt-in was a deliberately scoped chunk rather than a contingency.
-- **The arm control is internal** — a build option consumed by the benchmark worker, not public API. It
+- **The arm control is internal** — the §4 runtime `ConstructionMode` dispatch reached through
+  `roaring.zig`'s internal-export manifest, **not** a build option and not public API. It
   drives the §4 arms and the §9 negative control, and ships as no part of the library surface.
 
 ## 7. Feasibility prototype — not end-to-end
@@ -263,6 +269,32 @@ it.
 - **libc must not regress. If it does, this spec STOPS** (§6) — record the result, report the row as not
   closed, and open a follow-up opt-in spec that owns the API/docs cost. Do not expand this spec's surface
   mid-flight.
+
+### 8.1 Two gates, in order — the candidate must prove itself before it becomes default
+
+"Only the canonical row gates" created a circular requirement: while the default is baseline, the
+candidate lives in a diagnostic row, so it could never demonstrate ≤1.10x *before* adoption, yet adoption
+was supposed to be justified by clearing the gate. Split it:
+
+**Gate 1 — promotion (candidate still diagnostic, default unchanged):**
+
+- `lazy-or-construction-batched-sorted` **≤1.10x** against the shared CRoaring/libc reference;
+- **arm 3 beats arm 2** — the ordering effect is real and not merely a batching artifact;
+- **libc does not regress** (else STOP per §6).
+
+Failing gate 1 means the lever does not work, and **nothing is adopted** — no production default changes,
+so the failure costs nothing but the diagnostic rows.
+
+**Gate 2 — adoption (default switched to sorted):**
+
+- **Rerun the canonical row and the whole board**, fresh processes;
+- canonical `lazy-or-construction` **≤1.10x**;
+- no other board row moves beyond the 5% layout tolerance;
+- the retained old-baseline diagnostic row (§4 staging) still available for the §9 negative control.
+
+Gate 2 is a **separate measurement**, not an inference from gate 1: adoption changes which code the whole
+binary contains, and spec 28 showed that alone moves untouched rows with instruction-identical
+disassembly. A gate-1 pass does not predict the canonical row's post-adoption value.
 - Whole-board check for spec-28 layout noise; sub-~1.2x M4 ratios are at the measurement floor.
 
 ## 9. Acceptance
@@ -294,6 +326,18 @@ it.
   implied a ~98-site migration and returned NO-GO. Separate spec.
 - Allocator replacement (closed, spec 18); transient arenas (lose, spec 17).
 - The microarchitectural attribution question — it would bound the ceiling, not gate the test.
+
+## 10.1 Chunking sketch
+
+Pending review. The two-gate structure maps directly onto three chunks:
+
+- **43-00 — feasibility prototype.** `bench_smp_layout.zig` cells timing §2.2's exact representation and
+  the full candidate cost (§7). Stop here if the prototype does not clear the gap with margin.
+- **43-01 — diagnostic production path.** Pending path, scratch, eligible pre-pass, ownership contract,
+  failure injection, runtime three-arm dispatch, diagnostic rows. **Ends at gate 1**; default unchanged,
+  so a gate-1 failure changes no production behaviour.
+- **43-02 — adoption.** Switch the default, retain the old-baseline diagnostic row, rerun canonical and
+  whole board. **Gate 2.**
 
 ## 11. Estimate
 
