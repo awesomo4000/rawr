@@ -146,8 +146,11 @@ does not transfer to this element. **This chunk establishes the number.**
   50% is a **screen against wasted effort**, not a prediction: below it the ordering effect is too weak
   for amplification to plausibly rescue, so `43-01` would likely be spent to fail. At or above it the
   question is genuinely open, and **only Gate 1 can answer it.**
-- **libc shows no large ordering effect.** If it does, stop and diagnose the harness rather than
-  proceeding — the premise is that ordering matters for SMP specifically.
+- **libc shows no ordering effect beyond the noise policy** — `batched_sorted` vs `batched_unsorted`
+  within **≤5% on median, ranges considered**. Overlapping ranges → **rerun**. A **repeatable** movement
+  beyond 5% **invalidates the probe**: stop and diagnose the harness rather than proceeding, because the
+  premise is that ordering matters for SMP specifically and spec 37 measured libc at 0.011–0.073 ms
+  sorted vs unsorted. *(An earlier draft said "no large ordering effect" without defining large.)*
 - **GO/NO-GO stated.** NO-GO ends spec 43 here, with no production code written.
 
 ## Estimate

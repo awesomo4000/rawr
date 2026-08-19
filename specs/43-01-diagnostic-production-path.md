@@ -123,13 +123,31 @@ comparison the arms exist to make.
 
 If an implementation finds a reason to move it, that is a **separate arm**, not a silent change.
 
-## 5. Ownership
+## 5. Ownership — the handoff is BEFORE the call, not after it
 
-The pending pool **owns** a header and payload until that container has been (1) zeroed, (2) accumulated,
-and (3) **successfully appended** through an ownership-taking helper. Only then does the result own it.
+**Corrected: an earlier draft said the pool owns the buffer until the append *succeeds*. That produces a
+double free.** `appendOwnedContainer` (`bitmap.zig:2094`) is:
 
-So: failure **before** the append frees through the pool, failure **after** frees through the result, and
-no container is ever owned by both or neither.
+```zig
+fn appendOwnedContainer(self: *Self, allocator: std.mem.Allocator, key: u16, tp: TaggedPtr) !void {
+    errdefer Container.fromTagged(tp).deinit(allocator);
+    try self.appendContainer(key, tp);
+}
+```
+
+It **takes ownership on entry** and frees the container itself if the append fails. So on a failed append
+the helper frees it *and* pool cleanup would free it again.
+
+**Pinned transfer:**
+
+1. The pool owns the pending entry until **immediately before** the `appendOwnedContainer` call.
+2. **Mark the entry transferred — advance the cursor — before the call**, not after it.
+3. From that point the helper is solely responsible: it frees on failure, or the result owns it on
+   success.
+4. **Pool cleanup covers only entries not yet handed off** — those at or after the cursor.
+
+The invariant: every pending buffer is owned by exactly one party at every instant, and the cursor is the
+single place that boundary is recorded.
 
 ## 6. Runtime three-arm dispatch
 

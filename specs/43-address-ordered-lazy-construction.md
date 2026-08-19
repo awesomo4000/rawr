@@ -123,13 +123,17 @@ enum.)*
 
 ### 2.4 Publication contract
 
-The pending pool **owns** a header and payload until that container has been (1) zeroed, (2) accumulated,
-and (3) successfully appended through an ownership-taking helper. **Only on successful append does the
-result own it.**
+The pending pool owns a header and payload until **immediately before** the `appendOwnedContainer` call —
+**not** until the append succeeds. `appendOwnedContainer` (`bitmap.zig:2094`) carries
+`errdefer Container.fromTagged(tp).deinit(allocator)`, so it **takes ownership on entry** and frees the
+container itself if the append fails; "pool owns until success" would free it twice.
 
-Consequences, which is the point of stating it this way: any failure before the append frees through the
-**pool**, any failure after frees through the **result**, and no container is ever owned by both or
-neither. Error cleanup becomes mechanical rather than case-by-case.
+**Transfer:** mark the entry transferred (advance the cursor) **before** the call; thereafter the helper
+frees on failure or the result owns on success; pool cleanup covers only entries at or after the cursor.
+
+The invariant: every pending buffer is owned by exactly one party at every instant, with the cursor as
+the single record of that boundary. *(An earlier draft placed the handoff after a successful append —
+see `43-01` §5.)* Error cleanup becomes mechanical rather than case-by-case.
 
 **Correction to the first draft: "allocation count unchanged" is now false and is withdrawn.** The
 honest framing: **two allocations per bitset are preserved**, and scratch adds a small, bounded number on
