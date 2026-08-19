@@ -266,6 +266,44 @@ no pending container, no scratch. Use a leak-checking GPA, never `c_allocator`.
 - All four suites green — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
   `check-package`.
 
+## Outcome — GATE 1 FAILED, NO-GO. Default unchanged; `43-02` correctly not started.
+
+**M4, canonical harness:**
+
+| Path | Median | Range | vs CRoaring |
+|---|---:|---:|---:|
+| CRoaring | 3.402 ms | 3.373–3.500 | 1.000x |
+| rawr/SMP arm 1 baseline | 5.894 ms | 5.855–5.920 | 1.732x |
+| rawr/SMP arm 2 batched, unsorted | 7.438 ms | 7.391–7.583 | 2.186x |
+| rawr/SMP arm 3 batched, sorted | 5.222 ms | 5.096–5.292 | **1.535x** |
+
+Gate 1 required ≤1.10x. **1.535x — failed.** libc regressed 3.781 → 7.194 ms (**+90%**), which is an
+independent STOP per §6. Ratios re-derived and confirmed; arm 3 and arm 1 ranges do **not** overlap, so
+the 11.4% net gain is real and resolved, not noise.
+
+### The three-arm design was decisive, and this is why it was worth the cost
+
+A two-arm test would have reported "**sorting gives 11.4%**" — a modest, misleading number. The
+decomposition says something entirely different:
+
+- **Ordering recovers 2.216 ms** (arm 3 vs arm 2) — ~30% of arm 2. **Spec 37's premise is CONFIRMED in
+  production**, not just in the standalone probe.
+- **Batching costs 1.544 ms** (arm 2 vs arm 1) — and it is the batching *machinery*, not the ordering
+  idea, that defeats the spec.
+- Net: 0.672 ms.
+
+So the lever works and the vehicle does not. Without arm 2 we would have concluded the ordering effect
+was weak and abandoned a mechanism that is actually worth 2.2 ms.
+
+### Mechanism — a cold second pass
+
+Baseline allocates, zeroes, and accumulates **each buffer while it is hot**. Batching splits that: zero
+every payload (pass 1), then accumulate into every payload (pass 2), re-touching ~134 MB cold. Measured
+against the standalone probe, that second pass costs **~1.4–1.6 ms** — consistent with the 1.544 ms arm 2
+vs arm 1 penalty.
+
+**This is the cost the next experiment must remove, not the ordering.**
+
 ## Estimate
 
 **M/L** — the pending path, exact pre-pass, ownership, and failure injection are each substantial.

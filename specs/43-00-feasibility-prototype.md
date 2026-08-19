@@ -149,6 +149,33 @@ does not transfer to this element. **This chunk establishes the number.**
   sorted vs unsorted. *(An earlier draft said "no large ordering effect" without defining large.)*
 - **GO/NO-GO stated.** NO-GO ends spec 43 here, with no production code written.
 
+## Outcome — GO issued, but the chunk was INVALID on M4 under its own rule
+
+The prototype cleared the ≥50% screen and a GO was issued, which authorized `43-01`.
+
+**On review the libc control failed and should have blocked that GO.** The acceptance rule required
+`batched_sorted` vs `batched_unsorted` on **libc** to stay within **≤5% on median** — the *complete*
+totals. M4 libc moved **15.8%**. The reading initially taken was the isolated **zeroing component**,
+which moved only **2.3%**.
+
+**Both numbers are correct and they mean different things:**
+
+- **2.3% on the zeroing component** — libc's order-insensitivity is intact, exactly as spec 37 measured
+  (0.011–0.073 ms sorted vs unsorted). The premise was not wrong.
+- **15.8% on the totals** — the *batching machinery* moved libc, not the ordering. The rule was written
+  against the whole candidate, so it fired correctly: the candidate as a whole was already hurting libc
+  at prototype stage, which is precisely what Gate 1 then confirmed at **+90%**.
+
+**The control was measuring the right thing and its failure was the earliest available signal.** Reading
+a component where the rule specified the total delayed a NO-GO that the prototype had already earned.
+
+**Carry-forward rule:** when a control specifies *complete totals*, a component reading is not a
+substitute — components can pass while the candidate fails, which is the entire reason totals were
+specified.
+
+The NO-GO does not rest on this: **Gate 1 independently and decisively confirmed it** (1.535x vs a 1.10x
+gate, libc +90%).
+
 ## Estimate
 
 **S** — the probe exists; this extends and corrects it.

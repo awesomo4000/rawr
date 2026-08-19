@@ -377,6 +377,38 @@ changes no default.
 - **[43-01](43-01-diagnostic-production-path.md)** — diagnostic production path, **Gate 1**. **M/L.**
 - **[43-02](43-02-default-adoption.md)** — default adoption, **Gate 2**. **S/M.**
 
+## 10.2 OUTCOME — NO-GO. Row stays open. Ordering premise CONFIRMED.
+
+`43-00` GO (invalid on M4 under its own libc rule — see that chunk), `43-01` **Gate 1 FAILED**, `43-02`
+correctly **never started**. **No production default changed.**
+
+M4: baseline 1.732x → sorted **1.535x** against a **≤1.10x** gate. libc **+90%** — an independent STOP.
+
+**What was learned, and it is not nothing:**
+
+| Effect | Measured |
+| --- | --- |
+| **Ordering** (arm 3 vs arm 2) | **−2.216 ms** — spec 37's premise confirmed in production |
+| **Batching machinery** (arm 2 vs arm 1) | **+1.544 ms** — this is what defeats the spec |
+| Net | −0.672 ms (11.4%) |
+
+**The lever is real; the vehicle is not.** Batching splits allocate/zero/accumulate into a zero pass and
+a cold accumulate pass over ~134 MB, costing ~1.4–1.6 ms. Baseline does all three while each buffer is
+hot — it is *fused but badly ordered*; arm 3 is *well ordered but unfused*.
+
+**The synthesis is the obvious next experiment: fused AND address-ordered** — sort, then zero **and
+accumulate** each buffer immediately while it is hot. That requires source-pair and output-slot metadata
+in each pending entry, which **§4.1's no-mapping constraint forbids**. That constraint was written to
+prevent re-importing scratch cost for no benefit; it now has a measured benefit to weigh against, so it
+should be revisited **in a new spec**, not amended here.
+
+**Known risk for that spec:** accumulating in address order reads source containers in an order unrelated
+to key order, and spec 38 established that read traversal wants **ascending** (M4 1.221x, Zen 4 1.344x
+when sorted for frees). Destination-ordered accumulation may simply move the penalty from writes to
+reads. That is the first thing its prototype must measure.
+
+**Do not re-propose plain batching.** It is measured, on both allocators, and it loses.
+
 ## 11. Estimate
 
 **M/L** — the production change is confined to the lazy path, but the pending-allocation path, failure
