@@ -89,8 +89,8 @@ Mirror the three arms so the prototype answers the same attribution question:
 batching/scheduling effect — measure it, do not assume it away.
 
 Run on **both hosts**, SMP and libc. libc is the negative control for the whole premise: spec 37 found it
-**order-insensitive** (0.011–0.073 ms sorted vs unsorted), so a libc arm that shows a large ordering gain
-means the harness is measuring something other than address order.
+**order-insensitive** (0.011–0.073 ms sorted vs unsorted), so a libc arm showing an ordering effect
+beyond the noise policy (Acceptance) means the harness is measuring something other than address order.
 
 ## 2. Recording
 
@@ -111,17 +111,13 @@ does not transfer to this element. **This chunk establishes the number.**
 - **Timing boundary matches the canonical row:** scratch release inside, result teardown outside.
 - **Verdict recorded explicitly, against a stated rule. This is a SCREENING threshold, not the gate.**
 
-  *(An earlier draft called ≥50% recovery "clearing the gap with margin" and then justified it by saying
-  omitted production work needs extra headroom — which argues for a threshold **above** the full gap, not
-  below it. The two halves contradicted each other. Resolved below.)*
-
   **GO means: enough evidence to justify spending `43-01`, not evidence that Gate 1 will be met.**
 
   *(Two earlier drafts were wrong here. The first called ≥50% "clearing the gap with margin" while
-  justifying it by arguing omitted work needs extra headroom. The second called the prototype gain an
-  **upper bound** while still permitting GO at ~0.85 ms against a ~1.7 ms gap — if it really were an
-  upper bound, that GO would authorize work that provably cannot close the row. The "upper bound" claim
-  is withdrawn; it was false.)*
+  justifying it by arguing omitted work needs extra headroom — which argues for a threshold **above** the
+  full gap, not below it. The second called the prototype gain an **upper bound** while still permitting
+  GO at ~0.85 ms against a ~1.7 ms gap — if it really were an upper bound, that GO would authorize work
+  that provably cannot close the row. The "upper bound" claim is withdrawn; it was false.)*
 
   **The prototype is neither an upper nor a lower bound — production omits interactions that push both
   ways:**
