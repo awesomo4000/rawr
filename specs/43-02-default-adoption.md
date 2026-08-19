@@ -12,7 +12,13 @@ This chunk changes the default. It is where the canonical row either closes or d
 `ConstructionMode` defaults to `.batched_sorted` for `op == .bor`. No public API is added — the mode
 remains reachable only through the internal export.
 
-## 2. Retain the old baseline as a diagnostic row
+## 2. Retain the old baseline as a diagnostic row — by REPURPOSING, not adding
+
+**Row count stays at 42.** `43-01` raised the guards in `bench_parity_worker.zig:778` and
+`run-compare-bench.sh:72` from 40 to 42. This chunk **repurposes
+`lazy-or-construction-batched-sorted` into `lazy-or-construction-baseline`** rather than adding a row:
+once the default is sorted, the board row *is* the sorted arm, so a separate sorted diagnostic row would
+be redundant — measuring the same code twice under two names. No guard change in this chunk.
 
 **Do this in the same change as the switch.** Once the default is sorted, `lazy-or-construction` measures
 the *candidate*, so the pre-adoption baseline must survive under a separate diagnostic row name or the
@@ -58,13 +64,18 @@ All three must hold. Condition 2 is the actual causal claim; conditions 1 and 3 
 
 - Default is `.batched_sorted` for `op == .bor`; no public API added; `lazyXor` still byte-identical to
   baseline.
-- Pre-adoption baseline retained as a named diagnostic row, in the same change as the switch.
+- Pre-adoption baseline retained as `lazy-or-construction-baseline`, **repurposed from
+  `lazy-or-construction-batched-sorted`**, in the same change as the switch. **Row count still 42; no
+  guard change** in either `bench_parity_worker.zig` or `run-compare-bench.sh`.
 - **GATE 2:**
   - canonical `lazy-or-construction` **≤1.10x on M4**, measured fresh post-adoption;
   - combined `lazyOr+repair` does not regress;
   - **no other board row moves beyond the 5% layout tolerance**;
   - Zen 4 not regressed;
   - **libc not regressed — a libc regression is a STOP**, not a fallback to opt-in within this spec.
+  - **Decision rules, not impressions:** ≥5 fresh-process medians with full ranges per cell; **≤5% on
+    median** is the no-regression threshold; **rerun any ambiguous overlap**; an unresolved difference
+    after rerun is **inconclusive → NO-GO and rollback**, never a marginal pass.
 - **Negative control passes — all three §4 conditions:** `lazy-or-construction-baseline` reproduces the
   original gap; `.batched_unsorted` loses the Gate 1 arm-3-vs-arm-2 increment; sorted default stays faster
   than `.batched_unsorted`. Record the output.

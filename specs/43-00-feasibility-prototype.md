@@ -17,12 +17,14 @@ of the canonical row — only the **relative** question is in scope.
 
 ### 1.1 Fix the probe's existing misrepresentations first
 
-Both would flatter the candidate:
+Both **distort** the result; only the first is known to flatter it:
 
 - **`bench_smp_layout.zig:167`** — the `sort_zero` cell **allocates before the timed region**. Allocation
-  is part of the candidate and must be inside.
+  is part of the candidate and must be inside. **This flatters the candidate** by hiding real cost.
 - **`bench_smp_layout.zig:233`** — it sorts **slices** with **stable `std.mem.sort`**. The candidate uses
-  `sortUnstable` (pdq) over a 16-byte struct with an inline key.
+  `sortUnstable` (pdq) over a 16-byte struct with an inline key. Stable block sort over fat elements
+  most likely **penalizes** the candidate rather than flattering it — either way the measured quantity is
+  not the one being proposed. *(An earlier draft claimed both flattered it, which was wrong.)*
 
 ### 1.2 Time the structural equivalent of the production representation
 
@@ -107,8 +109,15 @@ does not transfer to this element. **This chunk establishes the number.**
 - All three cells implemented, run on both hosts, SMP and libc, with medians and full ranges recorded.
 - Sort cost recorded as a separate line item.
 - **Timing boundary matches the canonical row:** scratch release inside, result teardown outside.
-- **Verdict recorded explicitly** — the net gain after full candidate cost, and whether it clears the
-  ~1.7 ms gap **with margin**.
+- **Verdict recorded explicitly, against a stated rule.** "Clears the gap with margin" means: the net
+  gain after full candidate cost (pre-pass + scratch + allocation + sort + zeroing + scratch release)
+  recovers **≥50% of the ~1.7 ms M4 gap**, with **non-overlapping ranges** between `batched_sorted` and
+  `batched_unsorted` across repeated runs. Ranges that overlap → **rerun**; still overlapping →
+  **inconclusive, treated as NO-GO**.
+
+  The 50% floor exists because the prototype omits clones, accumulation, and result assembly, so a
+  prototype gain barely covering the gap would not survive the real path. A marginal prototype is a
+  NO-GO, not a "proceed carefully".
 - **libc shows no large ordering effect.** If it does, stop and diagnose the harness rather than
   proceeding — the premise is that ordering matters for SMP specifically.
 - **GO/NO-GO stated.** NO-GO ends spec 43 here, with no production code written.

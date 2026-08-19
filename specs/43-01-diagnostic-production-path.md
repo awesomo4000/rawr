@@ -94,7 +94,31 @@ Diagnostic rows, all against the same CRoaring/libc tuple:
 | `lazy-or-construction-batched` | 2 — batched, unsorted |
 | `lazy-or-construction-batched-sorted` | 3 — batched, sorted |
 
-## 6.1 Equivalence coverage — the diagnostic modes must actually be executed
+### 6.1 Manifest row count — update both guards to 42
+
+The row count is asserted in **two** places, both hardcoded at 40:
+
+- `src/bench_parity_worker.zig:778` — `if (manifest.len != 40) return error.InvalidManifestRowCount;`
+- `scripts/run-compare-bench.sh:72` — `if [[ "$row_count" != 40 ]]`
+
+This chunk adds two rows → **update both to 42**. Missing either one fails the run rather than silently
+mismeasuring, which is the desired behaviour; the point of naming both here is that a search for "40"
+must not stop at the first hit.
+
+`43-02` keeps the count at 42 by **repurposing**, not adding — see that chunk.
+
+### 6.2 Hook shape — root-level internal, never a method
+
+**Do not implement the dispatch as a `pub fn` on `RoaringBitmap`.** `check_docs.zig:72` reflects over
+direct `pub fn` declarations of the five stable types, so a public method would be classified as **stable
+public API** and demand a `Type.method` entry in the guarded Quick Reference — precisely the surface this
+spec declined to add.
+
+Required shape: a **root-level internal function or namespace**, re-exported through `roaring.zig` and
+classified in the **internal-export manifest** with a reason string. That path is reflected over for
+*classification* but not for method documentation.
+
+### 6.3 Equivalence coverage — the diagnostic modes must actually be executed
 
 **Without this, the batched paths ship untested.** Public `lazyOr` still uses `.baseline` throughout this
 chunk, so the unit suite, `difftest`, and `difftest64` **never execute either new mode**. The canonical
@@ -125,7 +149,7 @@ no pending container, no scratch. Use a leak-checking GPA, never `c_allocator`.
 - `initPendingBitset` file-private in `bitmap.zig`, header initialized immediately after a successful
   payload allocation and before any later fallible step; payload-allocation failure destroys only the
   header. No new export.
-- **Equivalence coverage (§6.1) executes both diagnostic modes** — forced and selective, eligible counts
+- **Equivalence coverage (§6.3) executes both diagnostic modes** — forced and selective, eligible counts
   of zero/partial/all, array/bitset/run combinations, disjoint keys, empty inputs — with repaired output
   byte-identical to `.baseline` and to CRoaring.
 - Eligible-pair pre-pass exact for both forced and selective; **no unused 8 KB buffers allocated** —
@@ -137,10 +161,18 @@ no pending container, no scratch. Use a leak-checking GPA, never `c_allocator`.
 - Per-bitset allocation count **still two**; scratch reported separately. This is not an
   allocation-count-reduction lever (specs 27 and 35 both regressed M4 SMP that way).
 - Three diagnostic rows measured as **equivalent fresh-process cells**.
-- **GATE 1:**
-  - `lazy-or-construction-batched-sorted` **≤1.10x** vs the shared CRoaring/libc reference;
-  - **arm 3 beats arm 2** — the effect is ordering, not batching;
-  - **libc does not regress.** A libc regression is a **STOP** (record the result, report the row as not
+- **Manifest guards updated to 42 in BOTH `bench_parity_worker.zig:778` and
+  `run-compare-bench.sh:72`.**
+- **Hook is root-level internal** (§6.2), not a `pub fn` on `RoaringBitmap`; classified in the
+  internal-export manifest; `check-docs` still green with an **empty allow-list**.
+- **GATE 1 — decision rules, not impressions.** Campaign policy applies: ≥5 fresh-process medians with
+  full ranges per cell.
+  - `lazy-or-construction-batched-sorted` **≤1.10x** vs the shared CRoaring/libc reference, on median;
+  - **arm 3 faster than arm 2 with non-overlapping ranges.** If the ranges overlap, **rerun**; if they
+    still overlap, the ordering effect is **unresolved → NO-GO**, not a marginal pass. An unresolved
+    arm-2/arm-3 difference means the spec's causal claim is unproven, which is a stop even if arm 3's
+    median looks better.
+  - **libc does not regress — ≤5% on median, ranges considered.** A libc regression is a **STOP** (record the result, report the row as not
     closed, open a follow-up opt-in spec that owns the API/docs cost) — **not** a fallback to opt-in
     inside this spec.
 - Default behaviour unchanged; canonical board row unmoved.
