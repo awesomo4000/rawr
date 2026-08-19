@@ -311,7 +311,8 @@ disassembly. A gate-1 pass does not predict the canonical row's post-adoption va
 - Canonical `lazy-or-construction` **≤1.10x on M4**, or an explicit reasoned stop.
 - Combined `lazyOr+repair` does not regress; `lazyXor` does not regress; no other board row moves beyond
   the 5% layout tolerance.
-- Zen 4 not regressed; libc not regressed, or opt-in scope with the §8 reporting rule.
+- Zen 4 not regressed; **libc not regressed — a libc regression is a STOP** (§6), not a fallback to
+  opt-in scope within this spec.
 - **Failure-injection suite green** (§5) — no leaks, inputs untouched, at every injection point.
 - Per-bitset allocation count **still two**; scratch allocations reported separately.
 - All four suites green — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
