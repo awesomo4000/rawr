@@ -348,17 +348,15 @@ disassembly. A gate-1 pass does not predict the canonical row's post-adoption va
 - Allocator replacement (closed, spec 18); transient arenas (lose, spec 17).
 - The microarchitectural attribution question — it would bound the ceiling, not gate the test.
 
-## 10.1 Chunking sketch
+## 10.1 Chunking — cleared, three chunks, dependency-ordered
 
-Pending review. The two-gate structure maps directly onto three chunks:
+The two-gate structure maps directly onto the split. Each chunk stands alone with its own pass/fail, and
+**each is a stopping point**: a NO-GO at 43-00 costs no production code, and a Gate 1 failure at 43-01
+changes no default.
 
-- **43-00 — feasibility prototype.** `bench_smp_layout.zig` cells timing §2.2's exact representation and
-  the full candidate cost (§7). Stop here if the prototype does not clear the gap with margin.
-- **43-01 — diagnostic production path.** Pending path, scratch, eligible pre-pass, ownership contract,
-  failure injection, runtime three-arm dispatch, diagnostic rows. **Ends at gate 1**; default unchanged,
-  so a gate-1 failure changes no production behaviour.
-- **43-02 — adoption.** Switch the default, retain the old-baseline diagnostic row, rerun canonical and
-  whole board. **Gate 2.**
+- **[43-00](43-00-feasibility-prototype.md)** — feasibility prototype. **S.**
+- **[43-01](43-01-diagnostic-production-path.md)** — diagnostic production path, **Gate 1**. **M/L.**
+- **[43-02](43-02-default-adoption.md)** — default adoption, **Gate 2**. **S/M.**
 
 ## 11. Estimate
 
