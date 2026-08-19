@@ -332,7 +332,10 @@ disassembly. A gate-1 pass does not predict the canonical row's post-adoption va
 ## 9. Acceptance
 
 - Private pending path per §2.1: never publishes unzeroed state, cleans up partial batches, stays
-  non-public. **Publication contract §2.4 holds** — pool owns until successful append, result owns after.
+  non-public. **Publication contract §2.4 holds** — pool owns until **handoff to `appendOwnedContainer`**
+  (cursor advanced *before* the call); thereafter the helper frees on failure or the result owns on
+  success. *(Not "pool owns until successful append" — `appendOwnedContainer` takes ownership on entry
+  and frees on its own error path, so that phrasing authorizes a double free.)*
 - Scratch per §2.2: **exactly one** `[]Pending` allocation, comparator on `payload_addr`, `sortUnstable`,
   freed on every path; scratch failure retries the existing path and propagates only that path's error.
 - **Scope is lazy OR only**; `lazyXor` behaviour byte-identical to baseline.

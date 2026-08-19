@@ -255,7 +255,11 @@ no pending container, no scratch. Use a leak-checking GPA, never `c_allocator`.
     still overlap, the ordering effect is **unresolved → NO-GO**, not a marginal pass. An unresolved
     arm-2/arm-3 difference means the spec's causal claim is unproven, which is a stop even if arm 3's
     median looks better.
-  - **libc does not regress — ≤5% on median, ranges considered.** A libc regression is a **STOP** (record the result, report the row as not
+  - **libc does not regress — arm 3 vs arm 1, rawr/libc, within the same binary; ≤5% on median, ranges
+    considered.** The comparison is against **baseline**, not arm 2: adoption ships batching *and*
+    sorting together, so the regression question is what a libc caller actually gets versus what they
+    have today. Arm 3 vs arm 2 tests only the ordering premise and would miss a batching-induced libc
+    regression entirely. A libc regression is a **STOP** (record the result, report the row as not
     closed, open a follow-up opt-in spec that owns the API/docs cost) — **not** a fallback to opt-in
     inside this spec.
 - Default behaviour unchanged; canonical board row unmoved.
