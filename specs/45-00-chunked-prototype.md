@@ -20,8 +20,8 @@ Extend `src/bench_smp_layout.zig` — **zero rawr code**, per spec 37/43 practic
 header **locally**; do **not** import `BitsetContainer`. That independence is why spec 37's result was
 credible.
 
-**Add the four cells below; do NOT alter the existing ones.** `zero_sorted_*`, `sort_zero_*`, and the
-probe's historical output keep their current semantics and boundaries.
+**Add the four cells below; do NOT alter the existing ones.** `zero_sorted_*` and `sort_zero_*` keep
+their cell names, protocol schema, timed boundaries, and semantics.
 
 *(An earlier draft called the existing cells "defective" and asked for them to be fixed. They are not
 defective — their boundaries **deliberately isolate zeroing and sort cost**, which is what spec 37 needed.
@@ -108,8 +108,10 @@ host-specific tuning needs explicit sign-off, never a silent default.
 
 ## Acceptance
 
-- **Four new cells added; existing cells untouched** — `zero_sorted_*`, `sort_zero_*`, and historical
-  output byte-identical. **Zero rawr imports**; header modelled locally.
+- **Four new cells added; existing cells untouched** — `zero_sorted_*` and `sort_zero_*` keep their
+  **cell names, protocol schema, timed boundaries, and semantics** unchanged. *(Not "byte-identical
+  output": timings and addresses are nondeterministic, so that could never pass.)* **Zero rawr imports**;
+  header modelled locally.
 - New cells time their own allocation, and payload-address sorting uses `sortUnstable` — the boundaries
   the *existing* cells deliberately do not have.
 - Four cells implemented per §2, chunk sizes swept per §2.
