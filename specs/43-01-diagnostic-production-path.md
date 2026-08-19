@@ -295,14 +295,20 @@ decomposition says something entirely different:
 So the lever works and the vehicle does not. Without arm 2 we would have concluded the ordering effect
 was weak and abandoned a mechanism that is actually worth 2.2 ms.
 
-### Mechanism — a cold second pass
+### Mechanism — cold second pass is the LEADING EXPLANATION, not isolated proof
 
 Baseline allocates, zeroes, and accumulates **each buffer while it is hot**. Batching splits that: zero
-every payload (pass 1), then accumulate into every payload (pass 2), re-touching ~134 MB cold. Measured
-against the standalone probe, that second pass costs **~1.4–1.6 ms** — consistent with the 1.544 ms arm 2
-vs arm 1 penalty.
+every payload (pass 1), then accumulate into every payload (pass 2), re-touching ~134 MB cold. Against
+the standalone probe that second pass costs **~1.4–1.6 ms**, which brackets the 1.544 ms arm 2 vs arm 1
+penalty neatly.
 
-**This is the cost the next experiment must remove, not the ordering.**
+**But arm 2 also adds the pre-pass, scratch allocation and release, and deferred assembly.** Those are
+bundled into the same 1.544 ms and have not been separated from it. The cache explanation is consistent
+with the number; it is **not demonstrated to account for all of it**.
+
+**Spec 44 must test whether fusion actually removes the 1.544 ms — not assume the whole penalty is cache
+loss.** If fusion recovers only part of it, the remainder is the machinery, and that changes what the
+next lever should target.
 
 ## Estimate
 

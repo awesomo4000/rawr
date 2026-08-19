@@ -392,9 +392,13 @@ M4: baseline 1.732x → sorted **1.535x** against a **≤1.10x** gate. libc **+9
 | **Batching machinery** (arm 2 vs arm 1) | **+1.544 ms** — this is what defeats the spec |
 | Net | −0.672 ms (11.4%) |
 
-**The lever is real; the vehicle is not.** Batching splits allocate/zero/accumulate into a zero pass and
-a cold accumulate pass over ~134 MB, costing ~1.4–1.6 ms. Baseline does all three while each buffer is
-hot — it is *fused but badly ordered*; arm 3 is *well ordered but unfused*.
+**The lever is real; the vehicle is not.** Baseline does allocate/zero/accumulate while each buffer is
+hot — *fused but badly ordered*; arm 3 is *well ordered but unfused*.
+
+The **leading explanation** for the +1.544 ms is the cold second pass over ~134 MB (~1.4–1.6 ms against
+the standalone probe). **It is not isolated proof:** arm 2 also adds the pre-pass, scratch
+allocation/release, and deferred assembly, and those have not been separated out. Spec 44 must **test**
+whether fusion removes that penalty rather than assume it is all cache loss.
 
 **The synthesis is the obvious next experiment: fused AND address-ordered** — sort, then zero **and
 accumulate** each buffer immediately while it is hot. That requires source-pair and output-slot metadata
