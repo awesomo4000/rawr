@@ -14,7 +14,7 @@ earned, is a separate spec.
   process medians with full ranges**. Never a focused harness — spec 35 read 1.155x where canonical read
   1.727x, purely from SMP preconditioning earlier in the same process.
 - **Both hosts.** All three canonical tuples — rawr/SMP, rawr/libc, CRoaring/libc.
-- **All four arms in one binary.** Spec 43 established cross-run ratios do not hold (39-00 vs 39-01: rawr
+- **All five arms in one binary.** Spec 43 established cross-run ratios do not hold (39-00 vs 39-01: rawr
   moved +4.1% while the CRoaring reference moved −7.8%).
 - **Whole board** for spec-28 layout noise; sub-~1.2x M4 ratios sit at the measurement floor.
 
@@ -32,51 +32,66 @@ after the clock stops (`bench_croaring.zig:507-512`).
 | --- | --- |
 | **Batching machinery cost** | arm 2 − arm 1 |
 | **Ordering recovery** | arm 3 − arm 2 |
-| **Fusion recovery** | arm 4 − arm 3 |
-| **Net result** | arm 4 − arm 1 |
+| **Metadata/slot machinery cost** | arm 4 − arm 3 |
+| **Fusion recovery** | arm 5 − arm 4 |
+| **Net result** | arm 5 − arm 1 |
 
-**Report all four, on both hosts, whatever the verdict.** Spec 43 measured the batching penalty at
-+1.544 ms on M4 but could not say how much was the cold second pass versus pre-pass, scratch, and
-deferred assembly. **This chunk answers that**: fusion recovery is the share attributable to the second
-pass; whatever remains is machinery.
+**Report all five, on both hosts, whatever the verdict.**
 
-That answer is the durable result **even on a NO-GO** — it determines whether any future lever should
-target cache behaviour or the machinery itself.
+Spec 43 measured the batching penalty at +1.544 ms on M4 but could not split it. **Arms 4 and 5 split
+it**: `arm4 − arm3` is the metadata/slot machinery, and `arm5 − arm4` is the cold second pass — because
+arms 4 and 5 are identical except for pass structure. `arm5 − arm3` would bundle the two and is **not** a
+fusion measurement.
+
+That split is the durable result **even on a NO-GO**: it determines whether any future lever should target
+cache behaviour or the machinery itself.
 
 ## 4. Source-traversal reporting
 
-Report, from the real canonical sparse corpus:
+From the real canonical sparse corpus: source container **counts** and **types**, **bytes actually read**,
+and **source-address travel in key order versus destination order**.
 
-- source container **counts** and **types**;
-- **bytes actually read** from sources;
-- **source-address travel in key order versus destination order** — sum of absolute address deltas along
-  each traversal.
+**Payload addresses, type-specific** — never `TaggedPtr` or header addresses:
 
-The travel comparison is the load-bearing number. Container types and byte totals alone **cannot** show
-whether destination sorting made source traversal pathological, which is this design's main risk. Spec 38
-found read traversal wants ascending (M4 1.221x, Zen 4 1.344x) **on large bitsets**; if these sources are
-mostly small arrays that may not transfer.
+| Container | Address |
+| --- | --- |
+| array | `values.ptr` |
+| bitset | `words` |
+| run | `runs` |
 
-This is what makes a disappointing arm 4 interpretable rather than mysterious.
+**Report three sequences:** the **A stream** alone, the **B stream** alone, and the **actual interleaved
+`A,B` sequence** as accumulation performs it. Accumulate deltas in **`u128`** — summed absolute deltas
+over ~16k containers can exceed `u64`.
+
+**Collect AFTER all timed runs, or in a separate diagnostic process.** Walking every source container to
+compute travel would **precondition the source caches** and corrupt the measurement this spec depends on —
+the same contamination class as spec 35's warmed-context artifact.
+
+The travel comparison is load-bearing: types and byte totals alone cannot show whether destination
+sorting made source traversal pathological. Spec 38 found read traversal wants ascending (M4 1.221x,
+Zen 4 1.344x) **on large bitsets**; if these sources are mostly small arrays that may not transfer.
 
 ## 5. Gate
 
-- **Arm 4 beats arm 3 with non-overlapping ranges** — fusion removes a measurable part of the penalty.
-- **Arm 4 reaches ≤1.10x vs CRoaring on M4.**
-- **libc does not regress — arm 4 vs arm 1, rawr/libc, same binary, ≤5% on median, ranges considered.**
+- **Arm 5 beats arm 4 with non-overlapping ranges** — fusion removes a measurable part of the penalty.
+  Arms 4 and 5 differ only by pass structure, so this is a clean causal claim.
+- **Arm 5 reaches ≤1.10x vs CRoaring on M4.**
+- **libc does not regress — arm 5 vs arm 1, rawr/libc, same binary, ≤5% on median, ranges considered.**
   A libc regression is a **STOP** (spec 43 measured +90%).
-- **Zen 4 does not regress — arm 4 vs arm 1, ≤5% on median, ranges considered.** A Zen 4 regression is a
+- **Zen 4 does not regress — arm 5 vs arm 1, ≤5% on median, ranges considered.** A Zen 4 regression is a
   NO-GO on its own.
 - Overlapping ranges → **rerun**; still overlapping → **inconclusive → NO-GO**, never a marginal pass.
 
 ## Acceptance
 
-- All four arms measured on **both hosts**, all three canonical tuples, ≥5 fresh-process medians with
+- All **five** arms measured on **both hosts**, all three canonical tuples, ≥5 fresh-process medians with
   full ranges, in **one binary**.
 - Timed region per §2; only result teardown outside.
-- **§3 decomposition reported on both hosts** — batching cost, ordering recovery, **fusion recovery**, net
-  — with fusion's share of the 1.544 ms stated explicitly.
-- **§4 source-traversal reporting complete**, including key-order versus destination-order travel.
+- **§3 decomposition reported on both hosts** — batching cost, ordering recovery, **metadata/slot
+  machinery cost**, **fusion recovery**, net — with fusion's share of the 1.544 ms stated explicitly and
+  derived from `arm5 − arm4`, never `arm5 − arm3`.
+- **§4 source-traversal reporting complete**: payload addresses per type, three sequences, `u128`
+  accumulator, **collected after the timed runs or in a separate process**.
 - Gate §5 evaluated; **GO/NO-GO stated**, with the reasoning.
 - Whole board checked for layout movement beyond the 5% tolerance.
 - **Default unchanged regardless of outcome**; canonical board row unmoved.
