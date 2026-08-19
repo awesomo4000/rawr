@@ -4,176 +4,185 @@
 
 **Target.** `lazy-or-construction`, the last material open row (M4 **1.732x** baseline, gate **≤1.10x**).
 
-**Diagnosis only. No default change, no adoption path in this spec.** Adoption, if earned, is a separate
-spec.
+**Diagnosis only. No default change, no adoption path in this spec.**
 
-**Prior implementation evidence:** branch `spec-43-lazy-construction-diagnostic`, commit **`37d0e8b`**.
-The three-arm dispatch, pending allocation, scratch, ownership handoff, and failure injection built there
-are the starting point — this spec adds a fourth arm rather than rebuilding.
+**Prior implementation evidence:** branch `spec-43-lazy-construction-diagnostic`, commit **`37d0e8b`** —
+three-arm dispatch, pending allocation, scratch, ownership handoff, failure injection. This spec extends
+it. **That branch is currently local only; push it or the reference does not resolve.**
 
 ## 1. What spec 43 established, and what it did not
-
-**Established (M4, canonical, same binary):**
 
 | Path | Median | vs CRoaring |
 |---|---:|---:|
 | CRoaring | 3.402 ms | 1.000x |
 | baseline — fused, key order | 5.894 ms | 1.732x |
-| batched, unsorted | 7.438 ms | 2.186x |
-| batched, sorted | 5.222 ms | 1.535x |
+| batched, unsorted, unfused | 7.438 ms | 2.186x |
+| batched, sorted, unfused | 5.222 ms | 1.535x |
 
-- **Ordering works in production: −2.216 ms** (sorted vs unsorted). Spec 37's premise is confirmed on
-  real merge inputs, not just a synthetic probe.
-- **The batching vehicle costs +1.544 ms** (unsorted vs baseline) and eats most of the gain.
-- libc regressed **+90%**, an independent stop.
+**Ordering works in production: −2.216 ms.** **The batching vehicle costs +1.544 ms.** libc +90%.
 
-**NOT established: what the +1.544 ms actually consists of.** The cold second pass over ~134 MB is the
-**leading explanation** (~1.4–1.6 ms against the standalone probe, which brackets it neatly), but arm 2
-also introduced the eligible pre-pass, scratch allocation and release, and deferred assembly. Those are
-bundled into the same number.
+**NOT established: what the +1.544 ms consists of.** Cold second pass is the **leading explanation**
+(~1.4–1.6 ms on the standalone probe), but arm 2 also added the pre-pass, scratch, and deferred assembly.
+**Separating them is this spec's first job.**
 
-**This spec's first job is to separate them.** If fusion removes the whole 1.544 ms, the cache
-explanation is right and the row is within reach. If it removes only part, the remainder is machinery
-overhead, and that changes what any future lever should target. **Do not assume; measure.**
+## 2. The candidate
 
-## 2. The candidate — fused and address-ordered
+Baseline is *fused but badly ordered*; spec 43's sorted arm is *well ordered but unfused*. The candidate
+is both: **sort by destination address, then zero and accumulate each buffer while it is hot** —
+`@memset`, then `lazyAccumulateIntoBitset` for both operands, then write to its output slot. Each payload
+is touched once, resident. No second pass.
 
-Baseline is *fused but badly ordered*. Spec 43's arm 3 is *well ordered but unfused*. The candidate is
-both: **sort by destination address, then zero and accumulate each buffer while it is hot.**
+This needs per-entry metadata, which spec 43 §4.1 forbade. That constraint now has a measured 2.2 ms
+benefit to weigh against — hence a new spec.
 
-Per pending entry, in address order:
+### 2.1 Metadata — types pinned
 
-1. `@memset` the 8 KB payload,
-2. accumulate **both** source operands into it immediately (`lazyAccumulateIntoBitset` ×2),
-3. record it into its output slot.
+```zig
+const Pending = struct {
+    payload_addr: usize,          // 8 — sort key, no dereference in comparator
+    header: *BitsetContainer,     // 8
+    src_a: TaggedPtr,             // 8 — packed struct(usize)
+    src_b: TaggedPtr,             // 8
+    slot: u32,                    // 4 — NOT u16: up to 65,536 output slots
+};                                // 36 → 40 bytes with alignment
+```
 
-The payload is touched once, while resident. There is no second pass over the population.
+`slot` **must not be `u16`**: the result can hold 65,536 containers, which does not fit. `src_a`/`src_b`
+are `TaggedPtr` (8 bytes each), so the ~40-byte figure is dependable rather than assumed.
 
-**This requires per-entry metadata** — source containers and destination slot — which spec 43 §4.1
-explicitly forbade. That constraint existed to stop scratch cost being re-imported for no benefit; it now
-has a measured 2.2 ms benefit to weigh against, which is why this is a new spec rather than an amendment.
+**Sort `sortUnstable` (pdq) on `payload_addr`; comparator dereferences nothing.**
 
-### 2.1 Metadata and assembly
+**The parallel-array variant is DEFERRED ENTIRELY** — a 16-byte `{payload_addr, index}` sort with
+metadata alongside is *not* part of this spec. Revisit only if the primary fused result **narrowly misses
+the gate**, and then as a follow-up spec. *(An earlier draft said "if sort cost is material", which is
+not a threshold.)*
 
-The pre-pass must compute, for each eligible pair: both source container pointers and the **destination
-slot index** in the result. Assembly then writes into pre-computed slots rather than appending
-sequentially, so key order is preserved without consuming buffers in key order.
+## 3. Four arms — same binary
 
-**Element shape is a first-class measurement, not an implementation detail.** Spec 43 established that
-the sorted element's size and comparator materially affect cost. Two candidates:
+| Arm | Path | Isolates |
+| --- | --- | --- |
+| 1 | baseline — fused, key order | reference |
+| 2 | batched, **unsorted**, unfused | — |
+| 3 | batched, **sorted**, unfused | — |
+| 4 | batched, **sorted**, **fused** (new) | — |
 
-- **(a) One fat sorted struct** — `{payload_addr, header, src_a, src_b, slot}` (~40 B). Sequential access
-  during the fused pass; costlier sort.
-- **(b) 16-byte `{payload_addr, index}` sorted, metadata in a parallel array** — cheaper sort, but the
-  fused pass indexes metadata randomly.
-
-**Default to (a)**, because the fused pass is the hot loop being optimized and interleaving random
-metadata lookups into it risks reintroducing exactly the kind of scattered access this spec exists to
-remove. **If the measured sort cost is material, measure (b) as a variant** — but do not run both as the
-primary comparison, per §5.
-
-## 3. Arms — same binary, four rows
-
-| Arm | Path |
+| Quantity | Comparison |
 | --- | --- |
-| 1 | baseline — fused, key order (existing) |
-| 2 | batched, sorted, **unfused** (spec 43 arm 3) |
-| 3 | batched, sorted, **fused** (new) |
+| **Batching machinery cost** | arm 2 − arm 1 |
+| **Ordering recovery** | arm 3 − arm 2 |
+| **Fusion recovery** | arm 4 − arm 3 |
+| **Net result** | arm 4 − arm 1 |
 
-Arm 2 is retained deliberately: **arm 3 vs arm 2 is this spec's claim** (does fusion remove the second-pass
-penalty), and **arm 2 vs arm 1** re-measures the machinery penalty in the same binary so the decomposition
-is not carried across runs. Spec 43's own finding was that cross-run ratios do not hold.
+**Arm 2 is required, not optional.** *(An earlier draft dropped it and labelled sorted-unfused "arm 2",
+which makes `arm2 − arm1` a mixture of batching and ordering and destroys the decomposition this spec
+exists to produce.)*
 
-Arm 2 unsorted may be kept for continuity but is not required; it is already measured and it loses.
+All four measured **in one binary** — spec 43 established cross-run ratios do not hold.
 
-## 4. Cost accounting — everything inside timing
+**Manifest goes 42 → 43 rows.** Both guards must read exactly **43**:
+`src/bench_parity_worker.zig:778` and `scripts/run-compare-bench.sh:72`.
 
-The timed region must contain **the complete candidate**: eligible pre-pass, metadata construction,
-scratch allocation, the sort, zeroing, accumulation, assembly into slots, and **scratch release**.
+## 4. Ownership — a NEW transactional contract
 
-Outside the timed region: result teardown only, matching the canonical construction row
-(`bench_croaring.zig:507-512`, `result.deinit()` after the clock stops).
+**Spec 43's contract does not apply and must not be inherited.** It was built around
+`appendOwnedContainer` and a sequential cursor; the fused path writes **directly into pre-computed
+slots**, so neither is involved.
 
-A candidate that looks good only because metadata construction or assembly sits outside the region is not
-a result.
+**Design:**
 
-## 5. Corpus and the read-order risk
+1. **Allocate scratch before staging any slot**, so scratch OOM leaves the initialized `result`
+   untouched and reusable by the baseline fallback.
+2. **Initialize `result.containers[0..output_count]` to `.reserved`** tagged values. Verified:
+   `Container.deinit` has `.reserved => {}` (`container.zig`), so a reserved slot frees as a no-op, and
+   `getCardinality` returns 0.
+   **Build reserved entries directly** — `Container.toTagged` on `.reserved` is `unreachable`.
+3. **Set `result.size = output_count`** so a plain `errdefer result.deinit()` walks every slot and
+   correctly frees exactly the populated ones.
+4. **Pending entries own their bitsets until the pointer is written into its destination slot.**
+5. **On handoff, advance the sorted pending cursor**; the result owns that slot from then on.
+6. **Fill unmatched / non-eligible slots directly.**
+7. **Before returning success, verify no `.reserved` slot remains.**
 
-**Use the real canonical sparse corpus** — the same inputs the board row measures. No synthetic
-population.
+Pending cleanup covers untransferred entries; result cleanup covers assigned slots. **No second ownership
+bitmap is needed** — the cursor plus the reserved sentinel carry the whole boundary.
 
-**Report source container types and byte volumes.** This is the load-bearing measurement for the spec's
-main risk: accumulating in *destination* address order reads *source* containers in an order unrelated to
-their own layout. Spec 38 found read traversal wants ascending (M4 1.221x, Zen 4 1.344x when sorted for
-frees) — **but that result involved large bitsets**, and if these sources are mostly small arrays the
-penalty may not transfer. It may also be that source reads are cheap enough relative to 8 KB writes that
-the trade is clearly worth it.
+### 4.1 Fallback scope — narrow, and only at the start
 
-**Either way it must be reported, not assumed in either direction.** The container-type/byte breakdown is
-what makes the result interpretable if arm 3 disappoints.
+**Only the initial scratch allocation failure falls back to the baseline merge loop** (reusing the
+untouched initialized `result`).
 
-**Do not combine experiments.** Bucket or radix ordering is out of scope for the first run. Consider it
-**only if fusion works and narrowly misses the gate** — combining two changes in one measurement makes
-neither attributable, which is the mistake the three-arm design was built to avoid.
+**Header, payload, metadata, clone, accumulation, and assembly failures all propagate** after
+transactional cleanup per §4. *(An earlier draft said "scratch/metadata OOM", which was ambiguous and
+would have licensed a mid-flight fallback with buffers already staged.)*
 
-## 6. Retained requirements from spec 43
+## 5. Cost accounting
 
-These carry over unchanged and are not re-litigated:
+Timed region contains the **complete candidate**: eligible pre-pass, metadata construction, scratch
+allocation, sort, zeroing, accumulation, slot assembly, reserved-slot verification, and **scratch
+release**.
 
-- **Ownership handoff** (`43-01` §5): pool owns until **immediately before** `appendOwnedContainer`;
-  cursor advances **before** the call; helper frees on failure or result owns on success; pool cleanup
-  covers only entries at or after the cursor. `appendOwnedContainer` takes ownership on entry
-  (`bitmap.zig:2094`).
+Outside: result teardown only — matching the canonical row, which calls `result.deinit()` after the clock
+stops (`bench_croaring.zig:507-512`).
+
+## 6. Corpus and the read-order risk
+
+**Real canonical sparse corpus.** No synthetic population.
+
+**Report, and this is load-bearing:**
+
+- source container **counts** and **types**;
+- **bytes actually read** from sources;
+- **source-address travel in key order versus destination order** — the sum of absolute address deltas
+  along each traversal.
+
+Container type and byte totals alone **cannot** show whether destination sorting made source traversal
+pathological; the travel comparison is what does. Spec 38 found read traversal wants ascending (M4
+1.221x, Zen 4 1.344x), **but on large bitsets** — if these sources are mostly small arrays that result may
+not transfer, and it may also be that source reads are cheap against 8 KB writes.
+
+**Do not combine experiments.** Bucket/radix ordering is out of scope; consider it only if fusion works
+and narrowly misses.
+
+## 7. Retained from spec 43 (unchanged, not re-litigated)
+
 - **Failure injection** at scratch, metadata, pending headers, pending payloads, unmatched clones, and
   assembly. Inputs untouched, nothing leaked, leak-checking GPA, never `c_allocator`.
-- **Scratch/metadata OOM** → fall through to the baseline merge loop **reusing the initialized `result`**.
-- **Equivalence coverage**: the fused arm must be driven directly, over forced and selective lazy OR,
-  eligible counts of zero/partial/all, array/bitset/run combinations, disjoint keys, empty inputs, with
-  **repaired output byte-identical** to baseline and CRoaring.
+- **Equivalence coverage** driving the fused arm directly: forced and selective, eligible counts of
+  zero/partial/all, array/bitset/run combinations, disjoint keys, empty inputs, **repaired output
+  byte-identical** to baseline and CRoaring.
 - **`lazyXor` byte-identical to baseline**; scope stays `op == .bor`.
-- **No public API.** Internal export, classified in the manifest, outside `API.md`, the `check-docs`
+- **No public API** — internal export, classified in the manifest, outside `API.md`, the `check-docs`
   guarded region, and the `check-32` probe.
-- **Manifest guards** updated in **both** `bench_parity_worker.zig:778` and `run-compare-bench.sh:72`.
 - **Canonical harness only**, both hosts, all three canonical tuples, ≥5 fresh-process medians with full
   ranges.
 
-## 7. Gate
+## 8. Gate
 
-- **Arm 3 beats arm 2 with non-overlapping ranges** — fusion removes a measurable part of the penalty.
-- **Arm 3 reaches ≤1.10x vs CRoaring on M4.**
-- **libc does not regress — arm 3 vs arm 1, rawr/libc, same binary, ≤5% on median.** A libc regression is
-  a **STOP**, exactly as in spec 43, where it came in at +90%.
+- **Arm 4 beats arm 3 with non-overlapping ranges** — fusion removes a measurable part of the penalty.
+- **Arm 4 reaches ≤1.10x vs CRoaring on M4.**
+- **libc does not regress — arm 4 vs arm 1, rawr/libc, same binary, ≤5% on median.** A libc regression is
+  a **STOP** (spec 43 measured +90%).
+- **Zen 4 does not regress — arm 4 vs arm 1, ≤5% on median, ranges considered.** Explicit, not implied:
+  the campaign has both hosts and a Zen 4 regression is a NO-GO on its own.
 - Overlapping ranges → rerun; still overlapping → **inconclusive → NO-GO**.
 
-**Report the decomposition regardless of outcome:** how much of the 1.544 ms fusion actually removed.
-That number is the durable result of this spec even if the gate fails — it tells the campaign whether the
-residue is cache or machinery.
-
-## 8. Acceptance
-
-- Fused arm implemented per §2, metadata and slot assembly per §2.1, on top of `37d0e8b`.
-- **Full candidate cost inside the timed region** per §4; only result teardown outside.
-- Real canonical sparse corpus; **source container type and byte breakdown reported** per §5.
-- Three arms measured in one binary; **arm 2 vs arm 1 re-measured**, not carried from spec 43.
-- **Fusion's share of the 1.544 ms reported explicitly.**
-- All §6 requirements met, including failure injection and equivalence coverage.
-- Gate §7 evaluated; GO/NO-GO stated. **No default change in this spec either way.**
-- All four suites green — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
-  `check-package`.
+**Report the decomposition regardless of outcome** — how much of the 1.544 ms fusion removed. That is the
+durable result even on a NO-GO: it tells the campaign whether the residue is cache or machinery.
 
 ## 9. Out of scope
 
-- Default adoption — a separate spec, only if this one passes its gate.
-- Bucket/radix ordering (§5), unless fusion works and narrowly misses.
-- Plain unfused batching. Measured, both allocators, it loses — do not re-propose.
-- The microarchitectural attribution question (prefetch vs TLB vs cache). Still unestablished, still not
-  required.
+- Default adoption — separate spec, only if the gate passes.
+- Parallel-array metadata variant (§2.1) and bucket/radix ordering (§6).
+- Plain unfused batching — measured, both allocators, it loses.
+- The microarchitectural attribution question.
 
-## 10. Estimate
+## 10. Chunking
 
-**M** — the vehicle exists at `37d0e8b`; the new work is metadata, slot assembly, the fused loop, and the
-measurement.
+- **[44-00](44-00-fused-implementation.md)** — implementation, ownership, correctness, failure injection,
+  43-row manifest.
+- **[44-01](44-01-measurement-and-verdict.md)** — two-host canonical measurement, decomposition, verdict.
 
-## 11. Chunking
+## 11. Estimate
 
-Not chunked — pending review. Plausibly single-chunk, since the infrastructure is already built.
+**M** — vehicle exists at `37d0e8b`; new work is metadata, slot assembly, the fused loop, the
+transactional contract, and the measurement.
