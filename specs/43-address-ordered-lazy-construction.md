@@ -60,7 +60,8 @@ const Pending = struct {
 };
 ```
 
-- **Exactly one scratch allocation:** `[]Pending`, length = matched-pair count.
+- **Exactly one scratch allocation:** `[]Pending`, length = the **lazy-bitset-eligible pair count**
+  (§2.3) — **not** the matched-pair count.
 - **Comparator reads `payload_addr` only.** Rejected: `[]*BitsetContainer` sorted by `a.words < b.words`
   — 8-byte elements, but every comparison **dereferences a header**, so ~229k comparisons at 16k buffers
   each risk a cache miss on randomly-ordered headers. A 16-byte element whose key is in-line and
@@ -78,7 +79,29 @@ on flat `usize`. The prototype (§7) must measure **this exact struct, this comp
 propagate its error. *(Corrected from "fall back and succeed", which over-promised: a genuinely exhausted
 allocator can still legitimately return OOM.)*
 
-### 2.3 Publication contract
+### 2.3 Eligible count — a pre-pass, not the matched-pair count
+
+The existing predicate (`bitmap.zig:2344`) is:
+
+```zig
+const use_lazy_bitset = op == .xor or bitset_conversion
+    or isBitsetContainer(c_a) or isBitsetContainer(c_b);
+```
+
+For **forced** lazy OR (`bitset_conversion == true`) every matched pair is eligible, so the two counts
+coincide. For **selective** lazy OR they do **not**: only pairs with a bitset operand need a pending
+buffer. Sizing off matched pairs would allocate **thousands of unused 8 KB buffers** — up to 512 MB in
+the worst case — turning an ordering optimization into a memory-consumption defect.
+
+**Therefore: one pre-pass over the merge walk evaluating the same predicate**, producing the exact
+eligible count before any pending allocation. No allocation in the pre-pass. Its cost — an extra
+`O(min(a.size, b.size))` scan with container-type checks — must be **inside the timed region** of both
+the prototype and production, since it is part of the candidate.
+
+*(Enum spelling corrected throughout: the op is `.bor`, per `TwoWayOp = enum { bor, band, xor, andnot }`
+at `bitmap.zig:1859`. An earlier draft wrote `.or_`.)*
+
+### 2.4 Publication contract
 
 The pending pool **owns** a header and payload until that container has been (1) zeroed, (2) accumulated,
 and (3) successfully appended through an ownership-taking helper. **Only on successful append does the
@@ -96,10 +119,14 @@ distinction is the reason to keep the per-bitset count fixed.
 
 ## 3. Sort constraints
 
-- **Sort `usize` addresses with `sortUnstable` (pdq), never `std.mem.sort`.** Spec 38 measured **86.98
-  ns/op** sorting `[]u8` **slices**; at ~16,364 buffers that is **~1.4 ms** and would consume the entire
-  gain. Raw `usize` is ~8 ns/op → **~0.13 ms**. Spec 38-00 also used stable block sort where pdq was
-  intended — **state which sort is used and confirm it in the code.**
+- **Sort `[]Pending` by its inline `usize` key with `sortUnstable` (pdq), never `std.mem.sort`.** The
+  reason the element shape matters: spec 38 measured **86.98 ns/op** sorting `[]u8` **slices**, which at
+  ~16,364 buffers is **~1.4 ms** — enough to consume the entire gain. §2.2's element is 16 bytes with the
+  key in-line and no dereference, which is why it was chosen, but **its cost is not yet measured and no
+  estimate is carried here** — the prototype (§7) establishes it. *(An earlier draft quoted ~0.13 ms from
+  a flat-`usize` measurement; that figure does not apply to this representation and is withdrawn.)*
+  Spec 38-00 also used stable block sort where pdq was intended — **state which sort is used and confirm
+  it in the code.**
 - **Do not re-propose residency.** Spec 36 **refuted** first-touch/page-faults on M4 (40 faults across
   ~134 MB, 100% page reuse). Pages are resident; the cost is *touching* them in a bad order.
 - **Read-traversal sorting stays NO-GO** (spec 38: M4 1.221x, Zen 4 1.344x). Frees want **descending**,
@@ -133,7 +160,28 @@ measured against the **same CRoaring/libc tuple**:
 | `lazy-or-construction-batched-sorted` | 3 — batched, sorted |
 
 Arm rows are **diagnostic**: they exist to attribute the effect and are not board rows. Only
-`lazy-or-construction` gates. Selection between arms is the internal build option from §6.
+`lazy-or-construction` gates.
+
+**Mechanism — runtime dispatch, one worker build. DECIDED.** A build option cannot express this: the
+parity worker is built **once** (`run-compare-bench.sh` builds `bench-parity-worker -Dcpu=native`) and
+selects rows **at runtime**, so a compile-time switch cannot produce three arms from one binary.
+Rejected: compiling three worker/library variants — it reintroduces exactly the whole-binary layout noise
+spec 28 documented, where adding code moves untouched rows with instruction-identical disassembly. Three
+binaries would make arm-to-arm deltas uninterpretable at the ~1.2x measurement floor.
+
+Instead: a **private `ConstructionMode` dispatch** (`.baseline`, `.batched_unsorted`, `.batched_sorted`)
+threaded through the lazy construction path, reached by the benchmark through an **internal export**, not
+public API. It joins `roaring.zig`'s internal-export manifest with a reason string, so `check-docs`
+classifies it and it stays out of `API.md`, the guarded region, and the `check-32` probe.
+
+**Staging — pin it now:**
+
+| Stage | `lazy-or-construction` (canonical, gates) | diagnostic rows |
+| --- | --- | --- |
+| Before adoption | baseline behaviour | `-batched`, `-batched-sorted` |
+| After adoption | **sorted-default** | a separately named row retains the **old baseline** for the §9 negative control |
+
+Without that second step the negative control loses its reference the moment the default changes.
 
 ## 5. Failure semantics — explicit gate
 
@@ -145,14 +193,16 @@ clones, and result assembly.
 **Every injected failure must:** leave **both inputs untouched**, and leak **nothing** — no assigned
 container, no pending container, no scratch. Use a leak-checking GPA, never `c_allocator`.
 
-Scratch failure specifically must **degrade to the existing path and succeed** (§2.2), not propagate OOM.
+Scratch failure specifically must **retry through the existing interleaved path** (§2.2) and propagate
+only an error arising from *that* path — it must not propagate the scratch OOM directly. A genuinely
+exhausted allocator may still legitimately return OOM from the retry.
 
 ## 6. Scope and selection — DECIDED
 
 `lazyMergeTwo` serves forced and selective `lazyOr` **and** `lazyXor` (`bitmap.zig:1128`, `:2344`; the
 branch condition includes `op == .xor`).
 
-**Scope: lazy OR only — `op == .or_`, both forced and selective. `lazyXor` is excluded.**
+**Scope: lazy OR only — `op == .bor`, both forced and selective. `lazyXor` is excluded.**
 The forced/selective flag changes only *how many* pairs take the bitset branch, not the mechanism, so
 splitting on it would be arbitrary; splitting on `op` is a clean boundary that keeps XOR's behaviour
 identical. The canonical row is `lazyOr(allocator, b, true)` (`bench_croaring.zig:507`), so this scope
@@ -165,9 +215,14 @@ covers the target. **`lazyXor` carries no-regression coverage** as a shared-help
 - **Default is also the only way the canonical row can close.** An opt-in leaves the canonical default
   untouched, which is exactly why spec 39-01 reports "at parity when enabled" rather than closing a row.
   Choosing opt-in up front would concede the target before measuring.
-- **Contingency, pre-registered:** if libc regresses, fall back to opt-in scope per spec 39-01 — and then
-  the **canonical row does not move** and the outcome is reported as "at parity when enabled", never "row
-  closed". This is the *fallback*, not the plan.
+- **If libc regresses, this spec STOPS.** It does **not** silently become an opt-in spec: opt-in requires
+  a public options entry point, which pulls in `API.md`, the `check-docs` guarded region, and the
+  `check-32` probe — precisely the surface this spec declined to add. Expanding scope mid-flight to
+  rescue a failed default would smuggle that work in under a spec that says "no public API".
+
+  **Outcome in that case:** record the measured result, report the row as **not closed**, and open a
+  **follow-up opt-in spec** that owns the API and documentation cost explicitly — as spec 39-01 did,
+  where opt-in was a deliberately scoped chunk rather than a contingency.
 - **The arm control is internal** — a build option consumed by the benchmark worker, not public API. It
   drives the §4 arms and the §9 negative control, and ships as no part of the library surface.
 
@@ -205,14 +260,15 @@ it.
 - **Dual stop-gate, construction binding.** Spec 35's combined row improved 0.038 ms while construction
   got *slower*; a combined-only gate would have authorized a large migration to buy nothing. **Gate
   `lazy-or-construction` explicitly.**
-- **libc must not regress.** If it does, outcome is opt-in scope per spec 39-01 — and then the canonical
-  row does not move, so report "at parity when enabled", never "row closed".
+- **libc must not regress. If it does, this spec STOPS** (§6) — record the result, report the row as not
+  closed, and open a follow-up opt-in spec that owns the API/docs cost. Do not expand this spec's surface
+  mid-flight.
 - Whole-board check for spec-28 layout noise; sub-~1.2x M4 ratios are at the measurement floor.
 
 ## 9. Acceptance
 
 - Private pending path per §2.1: never publishes unzeroed state, cleans up partial batches, stays
-  non-public. **Publication contract §2.3 holds** — pool owns until successful append, result owns after.
+  non-public. **Publication contract §2.4 holds** — pool owns until successful append, result owns after.
 - Scratch per §2.2: **exactly one** `[]Pending` allocation, comparator on `payload_addr`, `sortUnstable`,
   freed on every path; scratch failure retries the existing path and propagates only that path's error.
 - **Scope is lazy OR only**; `lazyXor` behaviour byte-identical to baseline.
