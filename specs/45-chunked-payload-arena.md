@@ -71,32 +71,68 @@ claiming it was free. It is free **on 64-bit only** — 16 → 16 bytes, verifie
 unconditional `@sizeOf == 16` assertion would also fail `check-32`.)*
 
 **Instead: identify arena payloads by address-range check against the chunk list.** Chunks are few
-(~128), kept sorted by base address, so a binary search answers "is this payload arena-backed?" This runs
-**once per container during repair**, never in the construction hot path. No header change, no width
+(~128), sorted once before use (§3.1), so a binary search answers "is this payload arena-backed?" This
+runs **once per container during repair or teardown**, never in the construction hot path. No header change, no width
 dependence, spec 32 untouched.
 
 ### 3.1 Chunk list
 
-Pin: chunk base pointers and lengths in a small growable array owned by the wrapper, kept sorted by base
-address (bump allocation appends in order within a run, but allocator-returned chunk addresses may not be
-monotonic, so sort on insert or sort once before repair). Payload alignment is **64 bytes**, matching
-`alignedAlloc(u64, .@"64", …)` — chunk bases must be 64-byte aligned and the slice stride must preserve
-it.
+Chunk base pointers and lengths in a small growable array owned by the wrapper.
+
+**Policy, decided — append unsorted during construction; sort exactly once before repair or ownership
+classification.** *(An earlier draft offered "kept sorted", "sort on insert", and "sort once" as if
+interchangeable; they have different construction costs, and construction is the row under test.)* The
+sort is over ~128 elements, is **infallible** (no allocation), and **belongs inside combined timing**.
+
+**Reserve chunk-list capacity BEFORE allocating a chunk.** Otherwise a list-growth failure after a
+successful chunk allocation **orphans that chunk** — it is allocated, unrecorded, and unfreeable.
+
+Payload alignment is **64 bytes**, matching `alignedAlloc(u64, .@"64", …)`: chunk bases must be 64-byte
+aligned and the slice stride must preserve it.
 
 ### 3.2 Lifetime
 
 1. `lazyOr` (wrapper form) allocates payloads from chunks owned by the wrapper.
-2. `repairAndTake` runs repair. Repair already converts most bitsets to arrays or runs; those payloads
-   simply stop being referenced.
+2. `repairAndTake` runs repair. Repair converts sparse bitsets to **arrays** (`bitsetToArray` when
+   cardinality ≤ `ArrayContainer.MAX_CARDINALITY`) and drops empty containers; **it does not convert to
+   runs** *(an earlier draft said "arrays or runs")*. Converted payloads simply stop being referenced.
 3. **Survivors are migrated out**: copy the 8 KB into a normally allocated payload and repoint `words`.
 4. **All chunks are freed as a whole**, then the plain `RoaringBitmap` is returned to the caller. **After
    this point no arena-backed payload exists anywhere.**
-5. **Wrapper `deinit` without repair** frees headers individually and chunks wholesale — it must **not**
-   route payloads through `BitsetContainer.deinit`, which would free into the middle of a chunk.
-6. **`clearRetainingCapacity` on the wrapper** must free chunks explicitly; retaining bitmap capacity does
-   not retain arena payloads.
+5. **Wrapper `deinit` without repair** — see §3.2.1; teardown is **not** uniform.
+6. **`clearRetainingCapacity` on the wrapper** must free chunks explicitly **and** apply §3.2.1
+   classification; retaining bitmap capacity does not retain arena payloads.
 
-Both **`repairAfterLazy` and `repairAfterLazyWithOptions`** must support arena-backed payloads.
+### 3.2.1 Mixed ownership — every bitset must be classified
+
+**Not all bitsets in the result are arena-backed.** `lazyMergeTwo` allocates *matched* bitsets from the
+arena, but **unmatched bitset containers are cloned with ordinary allocator-owned payloads**. Teardown,
+clearing, repair, and failure cleanup must therefore classify **each** container:
+
+| Container | Action |
+| --- | --- |
+| bitset, **arena** payload (address-range hit) | **destroy header only** — payload lives in a chunk |
+| bitset, **normal** payload (no hit) | **normal `BitsetContainer.deinit`** |
+| array / run | normal `deinit` |
+
+*(An earlier draft said "free headers individually and chunks wholesale", which would **leak every
+ordinary cloned bitset payload**.)*
+
+The address-range check (§3) is what distinguishes them, and it must be applied on **every** cleanup
+path, not only the success path.
+
+### 3.2.2 Wrapper API — public repair methods stay unchanged
+
+**Do not modify `RoaringBitmap.repairAfterLazy` / `repairAfterLazyWithOptions`.** They have no chunk-list
+context and must never receive the hidden bitmap. *(An earlier draft said the existing methods "must
+support arena-backed payloads" — that contradicts the wrapper design, whose whole point is that the
+bitmap is not exposed until repair completes.)*
+
+Pin these **wrapper** methods instead:
+
+- `repairAndTake()` → repairs, migrates survivors, frees chunks, returns the plain `RoaringBitmap`;
+- `repairAndTakeWithOptions(options)` → same, carrying `repairAfterLazyWithOptions`' options through;
+- `cardinality()` → for the required pre-repair check (§9), without exposing the bitmap.
 
 ### 3.3 Repair-failure transaction
 
@@ -133,8 +169,11 @@ construction order — ordering comes from the allocator, not from reordering wo
 Extend `src/bench_smp_layout.zig` (zero rawr code — model the header locally, do **not** import
 `BitsetContainer`).
 
-**Cells:** scattered allocation (today) versus chunked bump allocation at each candidate chunk size,
-zeroing in allocation order in both cases.
+**Cells:** **scattered** (today), **sorted** (spec 43's mechanism — the ceiling reference), and
+**chunked** at each candidate size. Zeroing in allocation order in every cell.
+
+The sorted cell is what makes the stop gate falsifiable: it measures, inside this prototype, how much
+ordering is available at all.
 
 **Must include, inside the timed region:** header allocations, chunk allocation **and chunk-list
 metadata maintenance**, exact **64-byte payload alignment**, chunk-boundary transitions, and both
@@ -142,8 +181,18 @@ allocation and zeroing.
 
 **Protocol:** the existing fresh-process controller — **≥5 process medians, each 3 warmup / 21 timed.**
 
-**Question:** does chunked bump allocation recover a comparable share of the −2.211 ms M4 ordering
-benefit that sorting delivered, with none of the sorting?
+### 6.1 Stop gate — numeric, decided in advance
+
+Let `available = scattered − sorted` (M4, SMP) — the ordering headroom this prototype can see.
+
+- **GO requires chunked to recover ≥50% of `available` on M4**, with **non-overlapping ranges** between
+  chunked and scattered.
+- **Zen 4: chunked must not be worse than scattered by more than 5%** on median.
+- Overlapping ranges → **rerun**; still overlapping → **inconclusive → NO-GO**.
+
+*(An earlier draft asked for a "comparable share", which is not falsifiable.)* 50% is a screen, not a
+prediction: below it the mechanism cannot plausibly cover the residual once production overheads are
+added, so the production work would be spent to fail. **Only the §7 gates can decide the row.**
 
 Run both hosts, SMP and libc. **NO-GO here ends the spec** with no production change.
 
@@ -188,16 +237,22 @@ reference rows:
 | `lazy-or-construction-arena` | candidate construction |
 | `lazy-or-repair-arena` | candidate combined `lazyOr+repair` |
 
-**Manifest count:** spec 44 landed at 44 rows; **+2 → 46**. Both guards must read exactly **46**:
+**Manifest count: 40 + 2 = 42.** Both guards must read exactly **42**:
 `src/bench_parity_worker.zig:778` and `scripts/run-compare-bench.sh:72`.
+
+*(An earlier draft said 44 → 46. Wrong: spec 44's diagnostic rows were **never committed to `main`** —
+that work remains uncommitted on `spec-43-lazy-construction-diagnostic`. Verified: `main` reads exactly
+**40** in both guards. Baseline from `main`, not from the diagnostic branch.)*
 
 **Timed boundaries:** construction times the wrapper `lazyOr` only, teardown outside, matching
 `bench_croaring.zig:507-512`. Combined times `lazyOr` + `repairAndTake`, teardown outside.
 
 ## 9. Retained requirements
 
-- **Failure injection** at chunk allocation, chunk-list growth, header allocation, migration allocation
-  during repair, and the existing clone/union sites. Inputs untouched, nothing leaked, leak-checking GPA,
+- **Failure injection** at chunk allocation, **chunk-list capacity reservation** (must not orphan a
+  chunk — §3.1), header allocation, migration allocation during repair, and the existing clone/union
+  sites. Include a case with **both arena-backed and ordinary cloned bitsets present** (§3.2.1), since
+  that is where misclassification leaks. Inputs untouched, nothing leaked, leak-checking GPA,
   never `c_allocator`.
 - **Correctness:** repaired output **byte-identical** to baseline and CRoaring — forced and selective
   lazy OR, all three container types, disjoint keys, empty inputs.
