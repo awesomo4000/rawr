@@ -30,9 +30,16 @@ expectation, not the guarantee.
 
 - **M4 SMP construction ≤ 1.30x**, and **materially better than `lazy-or-construction-baseline`** with
   **non-overlapping ranges**, same binary.
-- If construction lands worse than ~1.235x by more than measurement noise: **stop and investigate before
-  committing.** That would mean the cleanup cost something the diagnostic build was hiding, and shipping
-  it without understanding why would bake in a regression nobody chose.
+- **If construction lands repeatedly between ~1.235x and 1.30x** — inside the hard cap but worse than the
+  diagnostic result — the outcome is **neither automatic adoption nor automatic rollback**:
+  1. **investigate** and identify the cause (layout, the export narrowing, deleted arms, something real);
+  2. **report the measured value with that explanation**;
+  3. **require explicit owner re-acceptance of the new residual value before committing.**
+
+  The owner accepted a residual of ~1.235x, not an open-ended one below 1.30x. A worse-but-capped result
+  is a **different bargain** and the owner gets to decide it again. *(An earlier draft left this
+  underspecified: the hard cap permitted it while the regression rule only said "investigate", so no
+  branch actually decided.)*
 - **Combined `lazyOr+repair` within 5% on median** of `lazy-or-repair-baseline`, same binary.
 - **Zen 4: `candidate / baseline ≤ 1.05`** on both rows.
 - **Untouched rows: `>5%` triggers a RERUN and targeted inspection, not immediate failure.** The
@@ -77,10 +84,29 @@ spec ago; reversing that immediately would be incoherent.
   vehicle** for obtaining it either regressed or left a residual above the former gate. Any future
   proposal must state how it avoids that.
 
-**Scope the closures precisely.** Spec 45 closes **per-operation chunk allocation** — it does **not**
-close a persistent pool amortized across calls, an allocator change, or an upstream Zig `SmpAllocator`
-fix. Those are unexplored, and spec 45's data does not speak to them. Overstating this would foreclose
-directions the evidence never tested.
+**Scope the closures precisely — what is closed is narrower than "ordering".**
+
+**Closed:** this campaign's **per-operation ordering vehicles** — payload-address sorting, batched and
+slotted construction machinery, per-operation chunk allocation. Each was tested and each either regressed
+or left a residual above the former gate.
+
+**NOT closed, and not disproven:** persistent pools amortized across calls, allocator-level changes, and
+an upstream Zig `SmpAllocator` fix. **No measurement in this campaign speaks to them.** They require a
+**new spec**, not a re-litigation — and describing them as disproven would foreclose directions the
+evidence never tested.
+
+### 7.1 Two different measurements — keep them distinct
+
+- **47.5% (M4)** is *standalone-probe headroom*: scattered versus sorted zeroing in
+  `bench_smp_layout.zig`, with no rawr code.
+- **−2.211 ms (M4)** is *production ordering recovery*: spec 44's arm 3 versus arm 2, inside the real
+  merge.
+
+They are not the same quantity and must not be quoted interchangeably.
+
+**And the causal split matters:** the **baseline gap** is primarily allocator/address-order related,
+whereas **arm 5's residual also includes the machinery required to recover that ordering**. Attributing
+the whole residual to the allocator would misdirect the next attempt.
 
 ## Acceptance
 

@@ -17,8 +17,16 @@ coverage are green.
   `refs/stash` alone and is **reclaimable by `gc` once dropped**. The entire 1.235x result is one
   `git stash drop` from being lost.
 
-**Give it a real ref** — named branch or tag — **push it**, and **pin the resulting immutable hash** into
-this chunk and the toplevel §2.0. Do not productize out of a stash.
+**Two separate steps, in order:**
+
+1. **Create a durable local ref at `a1cb8c726686897b2e82dfed879dac540b52c8cd`** (branch or tag) so `gc`
+   can no longer reclaim it. **Pin that hash** here and in toplevel §2.0.
+2. **Selectively port the arm 5 changes onto current `main`.** **Do NOT apply the stash commit
+   wholesale** — it was taken atop the diagnostic branch and carries the multi-arm machinery this spec
+   exists to remove. Cherry-picking it in full would reintroduce exactly what §3 deletes.
+
+**Pushing the ref is an explicit owner action, not part of this chunk.** Creating the local ref is what
+makes the work safe; publishing it is a separate decision.
 
 ## 1. Promote
 
@@ -32,7 +40,10 @@ provenance does not lower the bar — this is production code now:
   any later fallible step;
 - `.reserved` slot initialization **built directly** — `Container.toTagged` on `.reserved` is
   `unreachable` and will panic;
-- `result.size = output_count`, so `errdefer result.deinit()` frees exactly the populated slots;
+- `result.size = output_count`, so `errdefer result.deinit()` **visits every slot**; reserved slots are
+  harmless because `Container.deinit` has `.reserved => {}` — a no-op. *(An earlier draft said it "frees
+  exactly the populated slots", which misdescribes the mechanism: it visits all of them and the reserved
+  ones do nothing.)*
 - **`cached_cardinality = -1` before success** — `initCapacity` leaves it `0` and direct-slot writes
   bypass `appendContainer`, so a populated result would otherwise report `cardinality() == 0`;
 - fused zero + accumulate per buffer, in address order;
@@ -46,7 +57,7 @@ The slotted path does **not** use `appendOwnedContainer`. Pin what it actually d
 1. **Assign the tagged pointer into its slot**, then
 2. **advance `transferred_count`**, with **no fallible operation between**.
 
-**Pending cleanup owns only the untransferred suffix; `result.deinit()` owns the populated slots.** Every
+**Pending cleanup owns only the untransferred suffix; `result.deinit()` owns the transferred prefix.** Every
 pending buffer is owned by exactly one party at every instant, and `transferred_count` is the single
 record of that boundary.
 
@@ -54,13 +65,22 @@ record of that boundary.
 
 The pre-adoption path stays callable, with **both** rows:
 
-| Retained row | Reference for |
+| Retained row | Definition |
 | --- | --- |
-| `lazy-or-construction-baseline` | the construction gate |
-| `lazy-or-repair-baseline` | the **combined** gate |
+| `lazy-or-construction-baseline` | **old** construction only |
+| `lazy-or-repair-baseline` | **old construction + repair** — mirrors the canonical *combined* row |
+
+**`lazy-or-repair-baseline` is NOT the existing repair-only row.** It is the old construction path
+followed by repair, so it is directly comparable to the candidate's combined row. Naming it after repair
+alone would invite exactly the wrong comparison.
 
 Gating the combined row without its own in-binary baseline would force the cross-run comparison spec
 43-02 forbids.
+
+**These are permanent, not scaffolding.** The retained implementation and both rows stay after adoption.
+**Removing them later requires re-measurement**, because deleting code changes binary layout and spec 28
+established that moves untouched rows with instruction-identical disassembly. Anyone tempted to tidy them
+away is proposing a measurement, not a cleanup.
 
 **Internal access is narrowed, not removed:** replace the multi-mode dispatch with **one narrowly named
 internal baseline export**, and keep a corresponding reason string in `check_docs.zig`'s internal
@@ -109,10 +129,13 @@ Every failure: **inputs untouched, nothing leaked**, leak-checking GPA, never `c
 
 ## Acceptance
 
-- **Arm 5 rescued from the stash into a pushed ref; immutable hash pinned** here and in the toplevel.
+- **Durable local ref created at the stash hash and pinned** here and in the toplevel; arm 5 **selectively
+  ported** onto `main`, not cherry-picked wholesale. *(Pushing the ref is an owner action, outside this
+  chunk.)*
 - Fused slotted construction is the **default** for `op == .bor`, per §1, with §1.1's ownership contract.
-- **Both** baseline rows retained and callable via the single narrowed internal export; `check_docs.zig`
-  manifest carries its reason string.
+- **Both** baseline rows retained and callable via the single narrowed internal export, with
+  `lazy-or-repair-baseline` defined as **old construction + repair**; `check_docs.zig` manifest carries
+  its reason string. Retention is **permanent** — later removal requires re-measurement.
 - Diagnostics per §3 **deleted**, not dormant.
 - **Manifest at 42, both guards updated.**
 - §5 correctness green, including **pre-repair `cardinality()`** and baseline-row equivalence.

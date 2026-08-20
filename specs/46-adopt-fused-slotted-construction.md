@@ -190,7 +190,10 @@ On success, update the umbrella (spec 31):
 
 ## 8. Out of scope
 
-- Any further attempt at the ordering lever — the family is closed (§7).
+- Further attempts at **this campaign's per-operation ordering vehicles** — payload-address sorting,
+  batched/slotted machinery, per-operation chunk allocation. Those are closed (§7).
+  **Allocator-level work and persistent pools are NOT closed** — they are untested here and require a
+  new spec, not a re-litigation.
 - Opt-in variants: this is a default change; there is no enable/disable knob.
 - Changes to `lazyXor` or any non-`bor` path.
 
