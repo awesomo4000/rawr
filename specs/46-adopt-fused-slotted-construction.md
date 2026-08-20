@@ -151,7 +151,8 @@ because the diagnostic looked good.
 
 - `lazy-or-construction` vs `lazy-or-construction-baseline` — must beat it with **non-overlapping
   ranges**;
-- `lazy-or-repair` vs `lazy-or-repair-baseline` — must not regress.
+- `lazy-or-repair` vs `lazy-or-repair-baseline` — **must not regress beyond 5% on median**, matching
+  §4.1 and `46-01` §3.
 
 A default that cannot be distinguished from the path it replaced has not earned the residual exception.
 Comparing either against a number from a different run is exactly the error spec 43-02 forbids.

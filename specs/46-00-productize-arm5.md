@@ -57,8 +57,15 @@ The slotted path does **not** use `appendOwnedContainer`. Pin what it actually d
 1. **Assign the tagged pointer into its slot**, then
 2. **advance `transferred_count`**, with **no fallible operation between**.
 
-**Pending cleanup owns only the untransferred suffix; `result.deinit()` owns the transferred prefix.** Every
-pending buffer is owned by exactly one party at every instant, and `transferred_count` is the single
+**Pending cleanup owns only the untransferred suffix of the pending array; `result.deinit()` owns the
+populated slots corresponding to the transferred pending prefix.**
+
+*(The prefix/suffix split lives in the **sorted pending array**, which is ordered by payload address. The
+result slots those entries map to are **keyed by output order and therefore non-contiguous** — so
+"`result` owns the transferred prefix" would misdescribe the layout. A cleanup routine that assumed a
+contiguous result prefix would free the wrong slots.)*
+
+Every pending buffer is owned by exactly one party at every instant, and `transferred_count` is the single
 record of that boundary.
 
 ## 2. Retain both baselines
