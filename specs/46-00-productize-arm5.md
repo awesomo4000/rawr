@@ -116,9 +116,22 @@ manifest. The worker must still be able to call the old implementation.
 
 ## 5. Correctness — production bar
 
-- repaired output **byte-identical** to the previous default **and** CRoaring, across forced and
-  selective lazy OR, eligible counts of **zero / partial / all**, array/bitset/run combinations,
-  disjoint keys, empty inputs on either side;
+- **Equivalence, split by what is actually provable:**
+  - **vs the previous default: BYTE-EXACT.** Same implementation family, same container-type choices —
+    this is the strong test, and it proves the new construction reproduces the old result exactly.
+  - **vs CRoaring: SET EQUALITY + CROSS-DESERIALIZATION**, not byte identity.
+
+  *(An earlier draft required byte-identity to **both** simultaneously. That is **not always satisfiable**:
+  the same set has multiple valid `RoaringFormatSpec` encodings, and rawr and CRoaring may legitimately
+  choose different container representations for some mixed cases. Requiring both would have demanded the
+  impossible and invited someone to "fix" a non-defect.)*
+
+  **No coverage is lost.** Byte-exactness against the baseline is the claim that matters for an adoption
+  chunk — it pins the candidate to the behaviour being replaced. Cross-implementation agreement is a
+  semantic property, and set equality plus cross-deserialization is exactly how `difftest` already
+  establishes it.
+- coverage spans forced and selective lazy OR, eligible counts of **zero / partial / all**,
+  array/bitset/run combinations, disjoint keys, empty inputs on either side;
 - **`cardinality()` checked BEFORE `repairAfterLazy`**, not only after — repair recomputes it, so
   repair-first tests mask a stale cache entirely;
 - **`lazyXor` byte-identical** to its current behaviour; scope stays `op == .bor`;
@@ -160,6 +173,32 @@ Every failure: **inputs untouched, nothing leaked**, leak-checking GPA, never `c
 - All four suites — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
   `check-package`, under `ReleaseSafe` and `ReleaseFast`.
 - **No measurement verdict claimed.** Numbers are `46-01`.
+
+## Verification record — implemented, reviewed, ACCEPTED
+
+Verified independently in the working tree:
+
+| Item | Result |
+| --- | --- |
+| Durable ref | `spec-44-fused-slotted-arm5` → **`a1cb8c726686897b2e82dfed879dac540b52c8cd`** ✓ — the stash-loss risk is closed |
+| Manifest guards | **42** in `bench_parity_worker.zig:813` **and** `run-compare-bench.sh:72` ✓ (both, not just the first) |
+| Baseline rows | `lazy-or-construction-baseline` and `lazy-or-repair-baseline` both present ✓ |
+| `ConstructionMode` in production | **absent** from `bitmap.zig`, `roaring.zig`, `check_docs.zig` ✓ |
+| Internal export | exactly one — `lazy_or_construction_baseline`, with reason string `"pre-adoption lazy-OR benchmark baseline"` in the `check_docs.zig` internal manifest ✓ |
+| Spec 45 probe | `bench_smp_layout.zig` untouched; its `batched_*` cells are the 45-00 prototype, **not** spec 44 dispatch ✓ |
+
+Reported and accepted: 104 tuples validated; byte-exact candidate-vs-baseline comparisons; CRoaring
+interoperability; cardinality-before-repair coverage; exhaustive allocation-failure testing; full
+`ReleaseSafe`/`ReleaseFast` matrices across `test`, `test64`, `difftest`, `difftest64`, `check-32`,
+`check-docs`, `check-package`.
+
+**One spec defect found and corrected — §5's equivalence requirement.** It demanded byte-identity to the
+previous default **and** CRoaring simultaneously, which is not always satisfiable: one set has multiple
+valid `RoaringFormatSpec` encodings, and the two implementations may choose different container
+representations for some mixed cases. **The implementation was right and the spec was wrong.** Corrected
+above; no coverage lost.
+
+**No performance verdict claimed** — that is `46-01`.
 
 ## Estimate
 

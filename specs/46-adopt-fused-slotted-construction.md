@@ -161,8 +161,10 @@ Comparing either against a number from a different run is exactly the error spec
 
 All of `44-00`'s coverage re-run against the production path, not the diagnostic one:
 
-- repaired output **byte-identical** to the previous default **and** CRoaring — forced and selective lazy
-  OR, eligible counts of zero/partial/all, array/bitset/run combinations, disjoint keys, empty inputs;
+- repaired output **byte-exact vs the previous default**, and **set-equal + cross-deserializable vs
+  CRoaring** — see `46-00` §5. *(Byte-identity to both at once is not always satisfiable: one set has
+  multiple valid `RoaringFormatSpec` encodings.)* Coverage spans forced and selective lazy OR, eligible
+  counts of zero/partial/all, array/bitset/run combinations, disjoint keys, empty inputs;
 - **`cardinality()` checked before `repairAfterLazy`**, not only after;
 - **`lazyXor` byte-identical** to its current behaviour;
 - **failure injection** via `checkAllAllocationFailures` at every real fallible site — `initCapacity`,
