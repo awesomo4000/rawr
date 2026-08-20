@@ -128,8 +128,10 @@ instruction-identical disassembly. Stripping four arms is exactly that kind of c
 ### 4.1 Acceptance thresholds
 
 - **M4 SMP construction ≤ 1.30x** and **materially better than the pre-adoption baseline** (non-overlapping
-  ranges). If it lands worse than ~1.235x by more than measurement noise, **stop and investigate before
-  committing** — that would mean the cleanup cost something the diagnostic build was hiding.
+  ranges). If it lands repeatedly between ~1.235x and 1.30x, **investigate, report with the explanation,
+  and obtain explicit owner re-acceptance before retaining the candidate as the final default and closing
+  the campaign** — see `46-01` §3 for the full branch. Ordinary local or cross-host commits for testing
+  are unaffected.
 - **Combined `lazyOr+repair` does not regress** beyond 5% on median.
 - **Zen 4: `candidate / baseline ≤ 1.05`** on both rows.
 - **Untouched rows: `>5%` triggers a RERUN and targeted inspection, not an immediate failure.** This
@@ -193,10 +195,12 @@ On success, update the umbrella (spec 31):
 - every other material row: at or under gate;
 - the closed families: allocator replacement (18), transient arenas (17), header elimination (35),
   first-touch/residency (36), read-traversal sorting (38), payload-address sorting (43), slotted+fused
-  machinery beyond this adoption (44), chunked/slab/arena allocation (45);
-- **the standing finding**: ordering is worth ~47% of construction time on M4, and **every tested
-  vehicle** for obtaining it either regressed or left a residual above the former gate. Any future
-  proposal must state how it avoids that.
+  machinery beyond this adoption (44), **per-operation** chunk allocation (45);
+- **the standing finding**, with its two measurements kept distinct (`46-01` §7.1): **47.5% (M4)** is
+  standalone **zeroing** headroom in `bench_smp_layout.zig` (scattered vs sorted, no rawr code), while
+  **−2.211 ms (M4)** is **production ordering recovery** (spec 44 arm 3 vs arm 2, inside the real merge).
+  **Every tested vehicle** for obtaining that ordering either regressed or left a residual above the
+  former gate. Any future proposal must state how it avoids that.
 
 **Scope the closures precisely — they are narrower than "ordering is closed":**
 
