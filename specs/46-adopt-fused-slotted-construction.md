@@ -12,12 +12,13 @@ re-measure, and close the parity campaign with an **accepted residual** rather t
 
 - Forced lazy-OR construction is a **narrow, explicitly invoked** operation, not a broad path.
 - The candidate improves rawr **~27.3%** on this row (≈1.70x → **1.235x** measured).
-- **Further vehicles have failed cleanly** — specs 43, 44, and 45 exhausted the
-  "allocate differently to obtain ordering" family; spec 45 came out *worse than baseline* on both hosts.
+- **Further vehicles have failed cleanly** — across specs 43, 44 and 45, **every tested vehicle either
+  regressed or left a residual above the former gate**; spec 45's per-operation chunk allocation came out
+  *worse than baseline* on both hosts.
 - **Zen 4 also improves** (20.749 → 18.570 ms).
 - The remaining cost is **allocator-related**, not a bitmap-algorithm deficiency: ordering is worth ~47%
-  of construction time (re-confirmed three times), and every mechanism to obtain it costs more than it
-  returns.
+  of construction time (re-confirmed three times), and **every tested vehicle for obtaining it either
+  regressed or left a residual above the former gate**.
 
 **Owner also accepts the measured M4 libc regression (+21.2%)**, consistent with the standing policy that
 libc regressions are reportable but not blocking, and that SMP is the performance-relevant allocator.
@@ -33,15 +34,33 @@ libc regressions are reportable but not blocking, and that SMP is the performanc
 ## 2. What is promoted
 
 Spec 44's **arm 5** — fused slotted construction — becomes the **default** for `op == .bor` (forced and
-selective lazy OR), from branch `spec-43-lazy-construction-diagnostic`.
+selective lazy OR).
+
+### 2.0 FIRST: materialize the source, before any other work
+
+**The arm 5 implementation is not on `spec-43-lazy-construction-diagnostic`.** That branch tip
+(`4b6bec4`) carries only baseline / batched / sorted. Verified.
+
+**Arm 5 survives only in stash commit `a1cb8c726686897b2e82dfed879dac540b52c8cd`** — reachable today,
+but a stash entry is held by `refs/stash` alone and is **reclaimable by `gc` if dropped**. The entire
+1.235x result is currently one `git stash drop` from gone.
+
+**Step one of this spec, before reading anything else: give that commit a real ref** — a named branch or
+tag — push it, and **pin the resulting immutable hash here**. Do not begin productizing from a stash.
 
 Everything the diagnostic version required is now **production code and the bar rises, not falls**:
 
 - eligible-pair pre-pass (exact count, not matched-pair count);
 - single `[]Pending` scratch, `sortUnstable` on `payload_addr`;
 - `initPendingBitset` file-private in `bitmap.zig`;
-- `.reserved` slot initialization built directly, `result.size = output_count`, cursor handoff **before**
-  `appendOwnedContainer`, no-reserved-slot check on success;
+- `.reserved` slot initialization built directly (never via `Container.toTagged`, which is `unreachable`
+  for `.reserved`), `result.size = output_count`, no-reserved-slot check on success;
+- **ownership contract as arm 5 actually works** — *(an earlier draft described spec 43's
+  `appendOwnedContainer` handoff, which this path does not use: it assigns **directly into reserved
+  slots**)*:
+  **assign the tagged pointer into its slot, then advance `transferred_count`**, with no fallible
+  operation between. **Pending cleanup owns only the untransferred suffix; `result.deinit()` owns the
+  populated slots.**
 - **`cached_cardinality = -1` before success**;
 - fused zero + accumulate per buffer in address order;
 - scratch-OOM falls through to the baseline loop reusing the initialized `result`; every other site
@@ -52,16 +71,29 @@ Everything the diagnostic version required is now **production code and the bar 
 **Delete, do not leave dormant:**
 
 - the `ConstructionMode` dispatch and arms 2, 3, and 4 code paths;
-- the internal export that exposed mode selection, and its manifest entry in `check_docs.zig`;
+- the **mode-selection** export (replaced by the single baseline export above);
 - source-travel / container-type diagnostic instrumentation;
 - the diagnostic rows added on the branch.
 
-**Keep exactly one thing from the diagnostics: the pre-adoption baseline path, as a single named
-diagnostic row** — `lazy-or-construction-baseline`. Without it there is no in-binary reference for the
-negative control in §4.3, and spec 43-02 established that cross-run comparisons do not hold.
+**Keep the pre-adoption baseline path and BOTH of its rows:**
 
-**Manifest:** `main` is at **40**. Adoption adds the one retained baseline row → **41**. Both guards:
+| Retained row | Reference for |
+| --- | --- |
+| `lazy-or-construction-baseline` | the construction gate |
+| `lazy-or-repair-baseline` | the **combined** gate |
+
+*(An earlier draft retained only the construction baseline while still gating the combined row — leaving
+that gate with **no in-binary reference**, which forces exactly the cross-run comparison spec 43-02
+forbids.)*
+
+**Manifest:** `main` is at **40**; +2 retained baseline rows → **42**. Both guards:
 `src/bench_parity_worker.zig:778`, `scripts/run-compare-bench.sh:72`.
+
+**Internal access is narrowed, not removed.** *(An earlier draft said to delete the internal export
+outright, which contradicts retaining baseline rows — the worker must still be able to call the old
+implementation.)* Replace the multi-mode dispatch with **one narrowly named internal baseline export**,
+retaining a corresponding reason string in `check_docs.zig`'s internal manifest. Remove the
+`ConstructionMode` enum and arms 2–4; keep exactly the one entry point the baseline rows need.
 
 ## 4. Re-measure — the number is NOT inherited
 
@@ -74,7 +106,7 @@ instruction-identical disassembly. Stripping four arms is exactly that kind of c
 
 - Canonical harness only, fresh process per cell, 3 warmup / 21 timed, **≥5 process medians with full
   ranges**, both hosts, all three tuples, **whole board**.
-- Report `lazy-or-construction`, `lazyOr+repair` combined, and the retained baseline row.
+- Report `lazy-or-construction`, `lazyOr+repair`, **and both retained baseline rows**.
 
 ### 4.1 Acceptance thresholds
 
@@ -83,7 +115,10 @@ instruction-identical disassembly. Stripping four arms is exactly that kind of c
   committing** — that would mean the cleanup cost something the diagnostic build was hiding.
 - **Combined `lazyOr+repair` does not regress** beyond 5% on median.
 - **Zen 4: `candidate / baseline ≤ 1.05`** on both rows.
-- **No other board row moves** beyond the 5% layout tolerance.
+- **Untouched rows: `>5%` triggers a RERUN and targeted inspection, not an immediate failure.** This
+  comparison is across different binaries, and spec 28 established that adding or removing code moves
+  untouched rows with instruction-identical disassembly. **Only a repeated, attributable regression fails
+  adoption**; unexplained one-off movement within layout noise does not.
 - **libc: reported, not gated.** Record the final number; ~+21.2% is accepted.
 
 ### 4.2 Rollback
@@ -93,9 +128,14 @@ because the diagnostic looked good.
 
 ### 4.3 Negative control, in-binary
 
-Against the retained `lazy-or-construction-baseline` row, in the same binary: the adopted default must
-beat it with **non-overlapping ranges**. A default that cannot be distinguished from the path it replaced
-has not earned the residual exception.
+**Both** candidate rows against **their own** retained baseline, in the **same binary**:
+
+- `lazy-or-construction` vs `lazy-or-construction-baseline` — must beat it with **non-overlapping
+  ranges**;
+- `lazy-or-repair` vs `lazy-or-repair-baseline` — must not regress.
+
+A default that cannot be distinguished from the path it replaced has not earned the residual exception.
+Comparing either against a number from a different run is exactly the error spec 43-02 forbids.
 
 ## 5. Correctness — production bar
 
@@ -114,20 +154,19 @@ All of `44-00`'s coverage re-run against the production path, not the diagnostic
 All four suites — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
 `check-package`, under `ReleaseSafe` and `ReleaseFast`.
 
-## 6. Documentation — a decision, not an assumption
+## 6. Documentation — DECIDED: shipped docs unchanged
 
-**Recommendation: shipped docs unchanged.** Spec 41 deliberately removed every performance claim from
-`README.md` and `API.md`, and re-introducing allocator performance guidance would reverse a decision made
-one spec ago.
+**Shipped `README.md` and `API.md` are not modified.** Spec 41 deliberately removed every performance
+claim from them one spec ago; re-introducing allocator performance guidance would reverse that decision
+immediately after making it.
 
-**Record instead in `docs/parity-measurement.md`** (repo-only, not in `.paths`): the accepted residual, its
-date, the libc figure, and the campaign summary.
+**Record in `docs/parity-measurement.md`** (repo-only, not in `.paths`): the accepted residual with its
+date, the final libc figure, and the campaign summary.
 
-**Open question for the owner, flagged not decided:** a **+21.2% libc regression on a default path** is
-arguably a *caveat* rather than a performance claim, and callers passing `c_allocator` are affected
-without any signal. If you want it surfaced to users, the honest form is a neutral note in `API.md`'s
-allocator guide — *"lazy-OR construction is allocator-sensitive; measure with your allocator"* — with **no
-numbers**. I have not written it; say the word either way.
+*(Considered and declined: a neutral "lazy-OR construction is allocator-sensitive" note in `API.md`'s
+allocator guide. It is defensible — a +21.2% libc regression on a default path is a caveat rather than a
+claim — but it reopens a settled decision for a narrow, explicitly-invoked operation. Revisit only if
+users report it.)*
 
 ## 7. Campaign closure
 
@@ -138,8 +177,16 @@ On success, update the umbrella (spec 31):
 - the closed families: allocator replacement (18), transient arenas (17), header elimination (35),
   first-touch/residency (36), read-traversal sorting (38), payload-address sorting (43), slotted+fused
   machinery beyond this adoption (44), chunked/slab/arena allocation (45);
-- **the standing finding**: ordering is worth ~47% of construction time on M4, and every mechanism to
-  obtain it costs more than it returns. Any future proposal must state how it avoids that.
+- **the standing finding**: ordering is worth ~47% of construction time on M4, and **every tested
+  vehicle** for obtaining it either regressed or left a residual above the former gate. Any future
+  proposal must state how it avoids that.
+
+**Scope the closures precisely — they are narrower than "ordering is closed":**
+
+- Spec 45 closes **per-operation chunk allocation**. It does **not** close a persistent pool amortized
+  across calls, an allocator change, or an upstream Zig `SmpAllocator` fix. Those remain unexplored, and
+  spec 45's data does not speak to them.
+- Spec 44's machinery closure is about **that** vehicle, not about all future construction strategies.
 
 ## 8. Out of scope
 
@@ -147,6 +194,9 @@ On success, update the umbrella (spec 31):
 - Opt-in variants: this is a default change; there is no enable/disable knob.
 - Changes to `lazyXor` or any non-`bor` path.
 
-## 9. Chunking
+## 9. Chunking — two chunks
 
-Not chunked — pending review. Plausibly single-chunk: promote, delete, re-measure, record.
+- **[46-00](46-00-productize-arm5.md)** — materialize arm 5 from the stash, productize it, retain both
+  baseline paths and rows, remove the other diagnostics, complete correctness and failure testing.
+- **[46-01](46-01-measure-and-close.md)** — two-host full-board measurement, rollback decision,
+  documentation, campaign record.
