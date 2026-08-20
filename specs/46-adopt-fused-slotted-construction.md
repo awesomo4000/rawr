@@ -16,9 +16,18 @@ re-measure, and close the parity campaign with an **accepted residual** rather t
   regressed or left a residual above the former gate**; spec 45's per-operation chunk allocation came out
   *worse than baseline* on both hosts.
 - **Zen 4 also improves** (20.749 → 18.570 ms).
-- The remaining cost is **allocator-related**, not a bitmap-algorithm deficiency: ordering is worth ~47%
-  of construction time (re-confirmed three times), and **every tested vehicle for obtaining it either
-  regressed or left a residual above the former gate**.
+- The remaining cost is **not a bitmap-algorithm deficiency**. Two distinct facts, kept distinct
+  (see `46-01` §7.1):
+  - the **baseline gap** is primarily **allocator / address-order** related;
+  - **arm 5's residual also includes the machinery required to recover that ordering** — it is not purely
+    allocator cost.
+
+  And two distinct **measurements**, not interchangeable: **47.5% (M4)** is standalone-probe headroom
+  (scattered vs sorted zeroing in `bench_smp_layout.zig`, no rawr code); **−2.211 ms (M4)** is production
+  ordering recovery (spec 44 arm 3 vs arm 2, inside the real merge).
+
+  **Every tested vehicle for obtaining that ordering either regressed or left a residual above the former
+  gate.**
 
 **Owner also accepts the measured M4 libc regression (+21.2%)**, consistent with the standing policy that
 libc regressions are reportable but not blocking, and that SMP is the performance-relevant allocator.
@@ -45,8 +54,16 @@ selective lazy OR).
 but a stash entry is held by `refs/stash` alone and is **reclaimable by `gc` if dropped**. The entire
 1.235x result is currently one `git stash drop` from gone.
 
-**Step one of this spec, before reading anything else: give that commit a real ref** — a named branch or
-tag — push it, and **pin the resulting immutable hash here**. Do not begin productizing from a stash.
+**Step one of this spec, before reading anything else: give that commit a durable LOCAL ref** — branch or
+tag — so `gc` can no longer reclaim it. **The immutable hash is already
+`a1cb8c726686897b2e82dfed879dac540b52c8cd`; creating a ref does not produce a new one**, so there is
+nothing further to pin.
+
+**Pushing is an explicit owner action, not part of this spec** — matching `46-00` §0. Creating the local
+ref makes the work safe; publishing it is a separate decision.
+
+Then **selectively port** arm 5 onto `main`. **Do not apply the stash commit wholesale** — it sits atop
+the diagnostic branch and carries the multi-arm machinery §3 removes. Do not productize from a stash.
 
 Everything the diagnostic version required is now **production code and the bar rises, not falls**:
 

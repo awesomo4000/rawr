@@ -65,10 +65,17 @@ record of that boundary.
 
 The pre-adoption path stays callable, with **both** rows:
 
-| Retained row | Definition |
-| --- | --- |
-| `lazy-or-construction-baseline` | **old** construction only |
-| `lazy-or-repair-baseline` | **old construction + repair** — mirrors the canonical *combined* row |
+| Retained row | Definition | Variants exposed | CRoaring reference |
+| --- | --- | --- | --- |
+| `lazy-or-construction-baseline` | **old** construction only | rawr/SMP, rawr/libc | canonical `lazy-or-construction` CRoaring/libc |
+| `lazy-or-repair-baseline` | **old construction + repair** — mirrors the canonical *combined* row | rawr/SMP, rawr/libc | canonical `lazy-or-repair` CRoaring/libc |
+
+**Baseline rows carry the two rawr tuples only and borrow the canonical CRoaring cell.** Emitting their
+own CRoaring cells would measure identical C code a second time under a new name — pure cost, and a
+second number that can drift from the canonical one and invite the wrong comparison.
+
+**So "all three tuples" for a baseline row means:** rawr/SMP + rawr/libc from the baseline row itself,
+plus the **referenced canonical CRoaring/libc** cell.
 
 **`lazy-or-repair-baseline` is NOT the existing repair-only row.** It is the old construction path
 followed by repair, so it is directly comparable to the candidate's combined row. Naming it after repair

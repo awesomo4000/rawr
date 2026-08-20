@@ -34,7 +34,12 @@ expectation, not the guarantee.
   diagnostic result — the outcome is **neither automatic adoption nor automatic rollback**:
   1. **investigate** and identify the cause (layout, the export narrowing, deleted arms, something real);
   2. **report the measured value with that explanation**;
-  3. **require explicit owner re-acceptance of the new residual value before committing.**
+  3. **require explicit owner re-acceptance of the new residual value before the candidate is retained
+     as the final default and the campaign is closed.**
+
+     **This does not block ordinary work in progress.** Local or cross-host commits needed to run Zen 4,
+     iterate, or share a candidate are fine and expected. What requires re-acceptance is **keeping it as
+     the shipped default and writing the residual into the record.**
 
   The owner accepted a residual of ~1.235x, not an open-ended one below 1.30x. A worse-but-capped result
   is a **different bargain** and the owner gets to decide it again. *(An earlier draft left this
