@@ -313,6 +313,39 @@ source-read reordering (spec 44 closed it); the microarchitectural attribution q
 **M** — the allocation change is small; the wrapper, migration path, failure transaction, and dual-gate
 measurement are the work.
 
+## 11.1 OUTCOME — NO-GO at `45-00`. Spec 45 ends. No production code written.
+
+Prototype details in [45-00](45-00-chunked-prototype.md).
+
+| Host | scattered | sorted control | best chunked | chunked / scattered |
+|---|---:|---:|---:|---:|
+| M4 SMP | 6.884 ms | 3.615 ms | 8.922 ms | **1.30x** |
+| Zen 4 SMP | 19.080 ms | 16.156 ms | 79.476 ms | **4.17x** |
+
+The ordering control **passed on both hosts** — so this is a valid candidate NO-GO, and the ordering
+headroom was re-confirmed at **47.5% on M4**. But chunk allocation cost **exceeded the entire ordering
+benefit**: `recovered` came out **negative** on both hosts (M4 −2.038 ms, Zen 4 −60.396 ms). The
+candidate is worse than the baseline, not merely short of the screen.
+
+**`45-01` and `45-02` were correctly never started.** The chunk split did its job — the NO-GO cost one
+prototype and zero production changes.
+
+### What this closes
+
+**The "allocate differently to obtain ordering" family is now exhausted**, across three specs:
+
+| Spec | Mechanism | Result |
+| --- | --- | --- |
+| 43 | batch + sort payload addresses | machinery ate the gain; 1.535x |
+| 44 | + metadata, direct slots, fusion | best measured **1.235x**, libc +21.2% |
+| 45 | chunk bump allocation | **worse than baseline** on both hosts |
+
+**Ordering is worth roughly half the construction time and every mechanism to obtain it costs more than
+it returns.** Spec 44's **1.235x** stands as the best measured result for this row.
+
+**Do not re-propose** payload-address sorting, batched construction, slot assembly, or chunked/slab/arena
+payload allocation. All are measured; all lose.
+
 ## 12. Chunking — cleared, three chunks
 
 - **[45-00](45-00-chunked-prototype.md)** — prototype, four cells, ordering control, chunk-size sweep.

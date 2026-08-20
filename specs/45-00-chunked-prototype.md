@@ -127,6 +127,38 @@ host-specific tuning needs explicit sign-off, never a silent default.
   - **INVALID-STOP** → **does not end spec 45**; diagnose the probe and rerun. No candidate number from
     that run may be reported.
 
+## Outcome — candidate NO-GO. Spec 45 ends here. No production code written.
+
+**Step 1 — ordering control PASSED on both hosts**, so this is a valid candidate result, not an
+INVALID/STOP. The two-step gate did its job: the probe reproduced the mechanism before any candidate
+number was interpreted.
+
+| Host | `scattered_interleaved` | sorted control | best `chunked_<size>` | chunked / scattered |
+|---|---:|---:|---:|---:|
+| M4 SMP | 6.884 ms | 3.615 ms | 8.922 ms | **1.30x** |
+| Zen 4 SMP | 19.080 ms | 16.156 ms | 79.476 ms | **4.17x** |
+
+**Step 2 — `recovered` is NEGATIVE on both hosts:** M4 **−2.038 ms**, Zen 4 **−60.396 ms**. The candidate
+is not merely short of the 50% screen; it is **worse than the baseline it had to beat**. No range
+analysis is needed at this magnitude.
+
+**Ordering headroom re-confirmed** (M4 6.884 → 3.615 = **−3.269 ms, 47.5%**). The mechanism is real, for
+the third independent time. **Chunk allocation simply costs more than the entire ordering benefit.**
+
+### Zen 4 is 3.2x worse relatively — hypothesis, NOT established
+
+Zen 4's relative penalty (4.17x) is **3.2x** M4's (1.30x). A plausible explanation is that freshly
+requested large chunks on Linux become new `mmap` regions whose pages fault in on first touch, whereas
+the existing path reuses resident pages.
+
+**This is a hypothesis and the probe does not isolate it.** Recording it as mechanism would repeat an
+error this campaign has made repeatedly. **No lever may be built on it without a measurement that
+establishes it.**
+
+**It does NOT contradict spec 36.** Spec 36 refuted first-touch/page-faults for the **existing** path,
+where pages were measured resident and reused (40 faults across ~134 MB, 100% reuse). Freshly allocated
+large chunks are a **different regime**. Do not read this as reopening spec 36.
+
 ## Estimate
 
 **S** — the probe exists; this adds cells alongside it.
