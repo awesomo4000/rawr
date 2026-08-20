@@ -50,8 +50,10 @@ expectation, not the guarantee.
 
 ## 4. Rollback
 
-If §3 fails, **restore the previous default**, keep the retained baseline rows or revert the manifest to
-40, and record the measured result. **Adoption is not automatic because the diagnostic looked good.**
+If §3 fails, **restore the previous default and revert the manifest to 40** — with the old path as the
+default again, the retained baseline rows measure the default twice under two names, so they serve no
+purpose. Record the measured result and the reason. **Adoption is not automatic because the diagnostic
+looked good.**
 
 ## 5. Documentation — decided
 
@@ -80,9 +82,9 @@ spec ago; reversing that immediately would be incoherent.
   header elimination (35), first-touch/residency (36), read-traversal sorting (38), payload-address
   sorting (43), slotted+fused machinery beyond this adoption (44), **per-operation** chunk allocation
   (45);
-- **the standing finding**: ordering is worth ~47% of construction time on M4, and **every tested
-  vehicle** for obtaining it either regressed or left a residual above the former gate. Any future
-  proposal must state how it avoids that.
+- **the standing finding**: address ordering is worth a large share of construction time on M4 — see
+  §7.1 for the two distinct measurements — and **every tested vehicle** for obtaining it either regressed
+  or left a residual above the former gate. Any future proposal must state how it avoids that.
 
 **Scope the closures precisely — what is closed is narrower than "ordering".**
 
