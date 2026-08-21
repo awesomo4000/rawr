@@ -33,7 +33,7 @@ header="${prefix}-header.txt"
 : >"$process_addresses"
 "$worker" --header >"$header" 2>&1
 
-cells=(
+legacy_cells=(
     alloc_words
     alloc_header_words
     interleaved_words
@@ -45,6 +45,25 @@ cells=(
     sort_zero_words
     sort_zero_header_words
 )
+
+spec45_cells=(
+    scattered_interleaved
+    batched_unsorted
+    batched_sorted
+    chunked_256k
+    chunked_1m
+    chunked_4m
+)
+
+case "${BENCH_SCOPE:-all}" in
+    all) cells=("${legacy_cells[@]}" "${spec45_cells[@]}") ;;
+    legacy) cells=("${legacy_cells[@]}") ;;
+    spec45) cells=("${spec45_cells[@]}") ;;
+    *)
+        printf 'BENCH_SCOPE must be all, legacy, or spec45\n' >&2
+        exit 2
+        ;;
+esac
 
 for allocator in smp libc; do
     for cell in "${cells[@]}"; do
@@ -126,24 +145,64 @@ sort -t $'\t' -k1,1 -k2,2 -k3,3 -k4,4n "$process_addresses" | awk -F '\t' '
     printf '\n%-5s %-29s %11s %11s %11s\n' alloc cell 'median ms' 'min ms' 'max ms'
     awk -F '\t' '$1 == "AGG" { printf "%-5s %-29s %11.3f %11.3f %11.3f\n", $2, $3, $4 / 1000000, $5 / 1000000, $6 / 1000000 }' "$aggregate_times"
 
-    printf '\nAddress-order controls\n'
-    printf '%s\n' '----------------------'
-    awk -F '\t' '
-        $1 == "AGG" { median[$2 SUBSEP $3] = $4 }
-        function value(allocator, cell) { return median[allocator SUBSEP cell] }
-        function ms(value) { return value / 1000000 }
-        END {
-            for (n = 1; n <= 2; n++) {
-                allocator = n == 1 ? "smp" : "libc"
-                words_recovery = value(allocator, "zero_order_words") - value(allocator, "zero_sorted_words")
-                header_recovery = value(allocator, "zero_order_header_words") - value(allocator, "zero_sorted_header_words")
-                header_penalty = value(allocator, "zero_order_header_words") - value(allocator, "zero_order_words")
-                printf "%s allocation-order -> address-order zero recovery: words %.3f ms, header+words %.3f ms\n", allocator, ms(words_recovery), ms(header_recovery)
-                printf "%s interleaved 16-byte header zeroing penalty: %.3f ms\n", allocator, ms(header_penalty)
-                printf "%s sort+zero total: words %.3f ms, header+words %.3f ms\n", allocator, ms(value(allocator, "sort_zero_words")), ms(value(allocator, "sort_zero_header_words"))
+    if [[ "${BENCH_SCOPE:-all}" != spec45 ]]; then
+        printf '\nAddress-order controls\n'
+        printf '%s\n' '----------------------'
+        awk -F '\t' '
+            $1 == "AGG" { median[$2 SUBSEP $3] = $4 }
+            function value(allocator, cell) { return median[allocator SUBSEP cell] }
+            function ms(value) { return value / 1000000 }
+            END {
+                for (n = 1; n <= 2; n++) {
+                    allocator = n == 1 ? "smp" : "libc"
+                    words_recovery = value(allocator, "zero_order_words") - value(allocator, "zero_sorted_words")
+                    header_recovery = value(allocator, "zero_order_header_words") - value(allocator, "zero_sorted_header_words")
+                    header_penalty = value(allocator, "zero_order_header_words") - value(allocator, "zero_order_words")
+                    printf "%s allocation-order -> address-order zero recovery: words %.3f ms, header+words %.3f ms\n", allocator, ms(words_recovery), ms(header_recovery)
+                    printf "%s interleaved 16-byte header zeroing penalty: %.3f ms\n", allocator, ms(header_penalty)
+                    printf "%s sort+zero total: words %.3f ms, header+words %.3f ms\n", allocator, ms(value(allocator, "sort_zero_words")), ms(value(allocator, "sort_zero_header_words"))
+                }
             }
-        }
-    ' "$aggregate_times"
+        ' "$aggregate_times"
+    fi
+
+    if [[ "${BENCH_SCOPE:-all}" != legacy ]]; then
+        printf '\nSpec 45 chunked-allocation screen\n'
+        printf '%s\n' '---------------------------------'
+        awk -F '\t' '
+            $1 == "AGG" { median[$2 SUBSEP $3] = $4; low[$2 SUBSEP $3] = $5; high[$2 SUBSEP $3] = $6 }
+            function value(table, allocator, cell) { return table[allocator SUBSEP cell] }
+            function ms(value) { return value / 1000000 }
+            END {
+                for (n = 1; n <= 2; n++) {
+                    allocator = n == 1 ? "smp" : "libc"
+                    available = value(median, allocator, "batched_unsorted") - value(median, allocator, "batched_sorted")
+                    control_clear = value(high, allocator, "batched_sorted") < value(low, allocator, "batched_unsorted")
+                    printf "%s available %.3f ms, control-ranges-clear=%s\n", allocator, ms(available), control_clear ? "yes" : "no"
+                    best = 0
+                    selected = ""
+                    for (c = 1; c <= 3; c++) {
+                        cell = c == 1 ? "chunked_256k" : (c == 2 ? "chunked_1m" : "chunked_4m")
+                        if (best == 0 || value(median, allocator, cell) < best) best = value(median, allocator, cell)
+                        recovered = value(median, allocator, "scattered_interleaved") - value(median, allocator, cell)
+                        share = available == 0 ? 0 : recovered / available
+                        candidate_faster = value(high, allocator, cell) < value(low, allocator, "scattered_interleaved")
+                        ranges_disjoint = candidate_faster || value(high, allocator, "scattered_interleaved") < value(low, allocator, cell)
+                        screen = available > 0 && recovered >= 0.50 * available && candidate_faster
+                        decision = allocator == "smp" ? (screen ? "GO" : "NO-GO") : "report-only"
+                        printf "%s %-12s recovered %.3f ms, share %.1f%%, ranges-disjoint=%s, candidate-faster=%s, decision=%s\n", allocator, cell, ms(recovered), share * 100, ranges_disjoint ? "yes" : "no", candidate_faster ? "yes" : "no", decision
+                    }
+                    if (allocator == "smp") {
+                        for (c = 1; c <= 3; c++) {
+                            cell = c == 1 ? "chunked_256k" : (c == 2 ? "chunked_1m" : "chunked_4m")
+                            if (selected == "" && value(median, allocator, cell) <= best * 1.05) selected = cell
+                        }
+                        printf "%s host-local smallest within 5%% of best: %s\n", allocator, selected
+                    }
+                }
+            }
+        ' "$aggregate_times"
+    fi
 
     printf '\nAddress statistics (allocation order)\n'
     printf '%-5s %-29s %-16s %16s %16s %16s\n' alloc cell metric median min max
@@ -153,6 +212,9 @@ sort -t $'\t' -k1,1 -k2,2 -k3,3 -k4,4n "$process_addresses" | awk -F '\t' '
     printf '%s\n' '- zero_sorted sorts outside timing and isolates traversal order; it is diagnostic only.'
     printf '%s\n' '- sort_zero includes sorting and reports the full cost; it is not a production proposal.'
     printf '%s\n' '- This executable imports no rawr or CRoaring code.'
+    if [[ "${BENCH_SCOPE:-all}" != legacy ]]; then
+        printf '%s\n' '- Spec 45 cells time allocation; retained result teardown remains outside timing.'
+    fi
 } | tee "$summary"
 
 printf '\nSaved to: %s\n' "$summary"

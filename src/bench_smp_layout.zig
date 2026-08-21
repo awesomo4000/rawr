@@ -11,6 +11,9 @@ const words_per_block = 1024;
 const block_bytes = words_per_block * @sizeOf(u64);
 const warmup_runs = 3;
 const timed_runs = 21;
+const chunk_256k_bytes = 256 * 1024;
+const chunk_1m_bytes = 1024 * 1024;
+const chunk_4m_bytes = 4 * 1024 * 1024;
 
 const Header = struct {
     words: *align(64) [words_per_block]u64,
@@ -37,6 +40,15 @@ const Cell = enum {
     sort_zero_words,
     sort_zero_header_words,
 
+    // Spec 45 cells. These time allocation as part of the operation and leave
+    // the historical cells above unchanged.
+    scattered_interleaved,
+    batched_unsorted,
+    batched_sorted,
+    chunked_256k,
+    chunked_1m,
+    chunked_4m,
+
     fn hasHeader(self: Cell) bool {
         return switch (self) {
             .alloc_header_words,
@@ -44,6 +56,12 @@ const Cell = enum {
             .zero_order_header_words,
             .zero_sorted_header_words,
             .sort_zero_header_words,
+            .scattered_interleaved,
+            .batched_unsorted,
+            .batched_sorted,
+            .chunked_256k,
+            .chunked_1m,
+            .chunked_4m,
             => true,
             else => false,
         };
@@ -70,7 +88,35 @@ const Cell = enum {
             else => false,
         };
     }
+
+    fn isSpec45(self: Cell) bool {
+        return switch (self) {
+            .scattered_interleaved,
+            .batched_unsorted,
+            .batched_sorted,
+            .chunked_256k,
+            .chunked_1m,
+            .chunked_4m,
+            => true,
+            else => false,
+        };
+    }
+
+    fn chunkBytes(self: Cell) ?usize {
+        return switch (self) {
+            .chunked_256k => chunk_256k_bytes,
+            .chunked_1m => chunk_1m_bytes,
+            .chunked_4m => chunk_4m_bytes,
+            else => null,
+        };
+    }
 };
+
+const Chunk = struct {
+    words: []align(64) u64,
+};
+
+const BlockPtr = *align(64) [words_per_block]u64;
 
 const AddressStats = struct {
     span: usize,
@@ -165,6 +211,8 @@ fn printHeader() void {
 }
 
 fn invoke(allocator: std.mem.Allocator, cell: Cell) !u64 {
+    if (cell.isSpec45()) return invokeSpec45(allocator, cell, false);
+
     const with_header = cell.hasHeader();
     const allocation_timed = cell.allocationTimed();
     const interleaved = cell == .interleaved_words or cell == .interleaved_header_words;
@@ -195,6 +243,142 @@ fn invoke(allocator: std.mem.Allocator, cell: Cell) !u64 {
     std.mem.doNotOptimizeAway(blocks[0..count]);
     freeAll(allocator, count, with_header);
     return elapsed;
+}
+
+fn invokeSpec45(allocator: std.mem.Allocator, cell: Cell, validate: bool) !u64 {
+    return switch (cell) {
+        .scattered_interleaved => invokeSpec45Scattered(allocator, validate),
+        .batched_unsorted => invokeSpec45Batched(allocator, false, validate),
+        .batched_sorted => invokeSpec45Batched(allocator, true, validate),
+        .chunked_256k, .chunked_1m, .chunked_4m => invokeSpec45Chunked(allocator, cell.chunkBytes().?, validate),
+        else => unreachable,
+    };
+}
+
+fn invokeSpec45Scattered(allocator: std.mem.Allocator, validate: bool) !u64 {
+    var count: usize = 0;
+    defer freeAll(allocator, count, true);
+
+    const start = monotonicNanos();
+    try allocateAll(allocator, true, true, &count);
+    const elapsed = monotonicNanos() - start;
+
+    if (validate) try validateRetainedBlocks(count);
+    std.mem.doNotOptimizeAway(blocks[0..count]);
+    return elapsed;
+}
+
+fn invokeSpec45Batched(allocator: std.mem.Allocator, sort_by_address: bool, validate: bool) !u64 {
+    var count: usize = 0;
+    defer freeAll(allocator, count, true);
+
+    var pending: ?[]BlockPtr = null;
+    errdefer if (pending) |items| allocator.free(items);
+
+    const start = monotonicNanos();
+    pending = try allocator.alloc(BlockPtr, block_count);
+    while (count < block_count) : (count += 1) {
+        try allocateRetainedBlock(allocator, count);
+        pending.?[count] = @ptrCast(blocks[count].ptr);
+    }
+    if (sort_by_address) {
+        std.mem.sortUnstable(BlockPtr, pending.?, {}, lessThanBlockAddress);
+    }
+    zeroBlockPointers(pending.?);
+    allocator.free(pending.?);
+    pending = null;
+    const elapsed = monotonicNanos() - start;
+
+    if (validate) try validateRetainedBlocks(count);
+    std.mem.doNotOptimizeAway(blocks[0..count]);
+    return elapsed;
+}
+
+fn invokeSpec45Chunked(allocator: std.mem.Allocator, chunk_bytes: usize, validate: bool) !u64 {
+    std.debug.assert(chunk_bytes % block_bytes == 0);
+    const blocks_per_chunk = chunk_bytes / block_bytes;
+    const words_per_chunk = chunk_bytes / @sizeOf(u64);
+
+    var chunks = std.array_list.Managed(Chunk).init(allocator);
+    defer {
+        for (chunks.items) |chunk| allocator.free(chunk.words);
+        chunks.deinit();
+    }
+
+    var count: usize = 0;
+    defer {
+        for (headers[0..count]) |header| allocator.destroy(header);
+    }
+
+    var chunk_offset: usize = blocks_per_chunk;
+    const start = monotonicNanos();
+    while (count < block_count) : (count += 1) {
+        const header = try allocator.create(Header);
+        errdefer allocator.destroy(header);
+
+        if (chunk_offset == blocks_per_chunk) {
+            try chunks.ensureUnusedCapacity(1);
+            const words = try allocator.alignedAlloc(u64, .@"64", words_per_chunk);
+            chunks.appendAssumeCapacity(.{ .words = words });
+            chunk_offset = 0;
+        }
+
+        const chunk = chunks.items[chunks.items.len - 1].words;
+        const word_offset = chunk_offset * words_per_block;
+        const block: BlockPtr = @ptrCast(@alignCast(chunk[word_offset..].ptr));
+        @memset(block, 0);
+        std.mem.doNotOptimizeAway(block);
+
+        header.* = .{ .words = block, .cardinality = 0 };
+        headers[count] = header;
+        blocks[count] = block[0..words_per_block];
+        addresses[count] = @intFromPtr(block);
+        chunk_offset += 1;
+    }
+    const elapsed = monotonicNanos() - start;
+
+    if (validate) {
+        const expected_chunks = std.math.divCeil(usize, block_count, blocks_per_chunk) catch unreachable;
+        if (chunks.items.len != expected_chunks) return error.InvalidChunkCount;
+        try validateRetainedBlocks(count);
+        try validateChunkOrder(count, blocks_per_chunk);
+    }
+    std.mem.doNotOptimizeAway(blocks[0..count]);
+    return elapsed;
+}
+
+fn allocateRetainedBlock(allocator: std.mem.Allocator, index: usize) !void {
+    const header = try allocator.create(Header);
+    errdefer allocator.destroy(header);
+
+    const block = try allocator.alignedAlloc(u64, .@"64", words_per_block);
+    header.* = .{ .words = block[0..words_per_block], .cardinality = 0 };
+    headers[index] = header;
+    blocks[index] = block;
+    addresses[index] = @intFromPtr(block.ptr);
+}
+
+fn validateRetainedBlocks(count: usize) !void {
+    if (count != block_count) return error.InvalidBlockCount;
+    for (blocks[0..count], headers[0..count]) |block, header| {
+        if (@intFromPtr(block.ptr) % 64 != 0) return error.InvalidAlignment;
+        if (header.words != block.ptr or header.cardinality != 0) return error.InvalidHeader;
+        for (block) |word| if (word != 0) return error.ZeroValidationFailed;
+    }
+}
+
+fn validateChunkOrder(count: usize, blocks_per_chunk: usize) !void {
+    for (addresses[0..count], 0..) |address, index| {
+        if (index == 0 or index % blocks_per_chunk == 0) continue;
+        if (address != addresses[index - 1] + block_bytes) return error.InvalidChunkOrder;
+    }
+}
+
+noinline fn zeroBlockPointers(memory: []const BlockPtr) void {
+    for (memory) |block| {
+        @memset(block, 0);
+        std.mem.doNotOptimizeAway(block);
+    }
 }
 
 fn allocateAll(
@@ -243,6 +427,11 @@ fn freeAll(allocator: std.mem.Allocator, count: usize, with_header: bool) void {
 }
 
 fn validateCell(allocator: std.mem.Allocator, cell: Cell) !void {
+    if (cell.isSpec45()) {
+        _ = try invokeSpec45(allocator, cell, true);
+        return;
+    }
+
     const with_header = cell.hasHeader();
     var count: usize = 0;
     defer freeAll(allocator, count, with_header);
@@ -295,6 +484,10 @@ fn absDiff(left: usize, right: usize) usize {
 
 fn lessThanAddress(_: void, left: []align(64) u64, right: []align(64) u64) bool {
     return @intFromPtr(left.ptr) < @intFromPtr(right.ptr);
+}
+
+fn lessThanBlockAddress(_: void, left: BlockPtr, right: BlockPtr) bool {
+    return @intFromPtr(left) < @intFromPtr(right);
 }
 
 fn monotonicNanos() u64 {
