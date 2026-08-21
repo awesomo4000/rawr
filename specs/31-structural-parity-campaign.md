@@ -2,6 +2,42 @@
 
 # Spec 31: Structural parity campaign (umbrella)
 
+> **FINAL CAMPAIGN DECISION (2026-08-20) — fused slotted construction retained as the default.**
+> **Accepted residual: 1.257x on M4.** `lazy-or-construction` remains **open with an accepted
+> residual**; no stronger status is claimed. The owner explicitly re-accepted the post-cleanup value
+> after spec 46 measured above the earlier 1.235x diagnostic result but below the 1.30x cap.
+>
+> Canonical M4 construction: candidate rawr/SMP **4.497 ms [4.453, 4.620]**, retained baseline
+> **5.956 ms [5.918, 6.010]**, CRoaring **3.577 ms [3.507, 3.601]**. The candidate is **0.755x**
+> baseline (24.5% faster) and **1.257x** CRoaring. Combined lazy-OR + repair is **13.845 ms
+> [13.776, 14.211]** versus baseline **15.066 ms [14.939, 15.262]** and CRoaring **12.846 ms
+> [12.691, 13.407]**: **0.919x** baseline and **1.078x** CRoaring.
+>
+> Zen 4/WSL2 candidate/baseline is **18.577/20.815 = 0.893x** for construction and
+> **34.817/37.353 = 0.932x** for the combined row, both with separated ranges. M4 rawr/libc
+> construction regresses from **3.916 to 4.625 ms (+18.1%)** and the combined row from **13.478 to
+> 14.258 ms (+5.8%)**; libc is reported but excluded from the owner decision.
+>
+> The 1.257x result was investigated rather than inherited. Production and the preserved spec-44 arm
+> have the same hot-function instruction sequence and size after restoring cached-cardinality update
+> placement; the remaining movement is consistent with the campaign's established binary/global-layout
+> sensitivity. Targeted reruns found no repeated untouched-row regression attributable to the change.
+>
+> **Campaign state:** every other material row is at or under its gate. Closed experiment families:
+> transient arenas (17), allocator replacement (18), header elimination (35), first-touch/residency
+> (36), repair read-traversal sorting (38), payload-address sorting (43), additional slotted/fused
+> machinery beyond the retained spec-44 path (44), and per-operation chunk allocation (45).
+>
+> These closures cover the tested **per-operation** ordering vehicles only. Persistent pools amortized
+> across calls, allocator-level changes, and an upstream Zig `SmpAllocator` fix remain untested rather
+> than disproven; any future attempt requires a new spec.
+>
+> Keep the standing measurements distinct: **47.5% on M4** is standalone scattered-versus-sorted
+> zeroing headroom in `bench_smp_layout.zig` with no rawr code; **2.211 ms on M4** is spec 44's
+> production ordering recovery inside the real merge. The baseline gap is primarily allocator/address-
+> order related, while the retained path's residual also contains the machinery cost required to
+> recover some of that ordering.
+
 > **Wave 1 outcome (2026-08-06).** **E1 (spec 32) — Run header GO (major), Array header NO-GO.** The
 > compact `RunContainer` header (32→16-byte SMP class) closed a whole cluster on M4: clone
 > 1.788x→0.672x, dense-AND 1.587x→0.845x, dense-OR 1.138x→0.702x, select 1.387x→0.864x, removeRange

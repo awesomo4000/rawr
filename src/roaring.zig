@@ -33,6 +33,7 @@ pub const optimize = @import("optimize.zig");
 pub const test_gen = @import("test_gen.zig");
 pub const roaring64_test_gen = @import("roaring64_test_gen.zig");
 pub const roaring64_test_support = @import("roaring64_test_support.zig");
+pub const lazy_or_construction_baseline = @import("bitmap.zig").lazy_or_construction_baseline;
 
 test {
     _ = @import("array_container.zig");

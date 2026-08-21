@@ -711,12 +711,23 @@ fn assertLazyOrCase(
     var eager = try a.bitwiseOr(allocator, b);
     defer eager.deinit();
 
+    var baseline = try rawr.lazy_or_construction_baseline.build(a, allocator, b, bitset_conversion);
+    defer baseline.deinit();
     var lazy = try a.lazyOr(allocator, b, bitset_conversion);
     defer lazy.deinit();
+    const expected_cardinality = eager.cardinality();
+    try std.testing.expectEqual(expected_cardinality, baseline.cardinality());
+    try std.testing.expectEqual(expected_cardinality, lazy.cardinality());
+    try baseline.repairAfterLazy();
     try lazy.repairAfterLazy();
+    try baseline.validate();
     try lazy.validate();
     const bytes = try lazy.serialize(allocator);
     defer allocator.free(bytes);
+    const baseline_bytes = try baseline.serialize(allocator);
+    defer allocator.free(baseline_bytes);
+    try std.testing.expectEqualSlices(u8, baseline_bytes, bytes);
+    try expectRawrEqual("lazyOr:baseline-eager", &baseline, &eager);
     try expectRawrEqual("lazyOr:rawr-eager", &lazy, &eager);
 
     var in_place = try a.clone(allocator);
@@ -733,6 +744,7 @@ fn assertLazyOrCase(
     const oracle_result = c.roaring_bitmap_lazy_or(oracle_a, oracle_b, bitset_conversion) orelse return error.CRoaringAllocFailed;
     defer c.roaring_bitmap_free(oracle_result);
     c.roaring_bitmap_repair_after_lazy(oracle_result);
+    try assertSameValues(allocator, "lazyOr:baseline-croaring", &baseline, oracle_result);
     try assertSameValues(allocator, "lazyOr:croaring", &lazy, oracle_result);
 }
 

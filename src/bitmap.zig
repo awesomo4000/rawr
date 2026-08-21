@@ -2130,6 +2130,19 @@ pub const RoaringBitmap = struct {
 
     const ManyOp = enum { bor, xor };
 
+    const LazyPendingBitset = struct {
+        payload_addr: usize,
+        header: *BitsetContainer,
+        src_a: TaggedPtr,
+        src_b: TaggedPtr,
+        slot: u32,
+    };
+
+    const LazySlottedCounts = struct {
+        output_count: u32,
+        eligible_count: usize,
+    };
+
     fn manyOrMerge(allocator: std.mem.Allocator, bitmaps: []const *const Self) !Self {
         if (bitmaps.len == 1) return bitmaps[0].clone(allocator);
 
@@ -2325,6 +2338,37 @@ pub const RoaringBitmap = struct {
         var result = try Self.initCapacity(allocator, max_result_size);
         errdefer result.deinit();
 
+        if (op == .bor) {
+            try lazyMergeTwoSlottedInto(allocator, a, b, bitset_conversion, &result, true);
+        } else {
+            try lazyMergeTwoBaselineInto(op, allocator, a, b, bitset_conversion, &result);
+        }
+
+        return result;
+    }
+
+    fn lazyMergeTwoBaseline(
+        allocator: std.mem.Allocator,
+        a: *const Self,
+        b: *const Self,
+        bitset_conversion: bool,
+    ) !Self {
+        const max_result_size = @min(a.size + b.size, @as(u32, 1) << 16);
+        var result = try Self.initCapacity(allocator, max_result_size);
+        errdefer result.deinit();
+
+        try lazyMergeTwoBaselineInto(.bor, allocator, a, b, bitset_conversion, &result);
+        return result;
+    }
+
+    fn lazyMergeTwoBaselineInto(
+        comptime op: ManyOp,
+        allocator: std.mem.Allocator,
+        a: *const Self,
+        b: *const Self,
+        bitset_conversion: bool,
+        result: *Self,
+    ) !void {
         var i: usize = 0;
         var j: usize = 0;
 
@@ -2374,6 +2418,159 @@ pub const RoaringBitmap = struct {
         }
 
         result.cached_cardinality = -1;
+    }
+
+    fn lazySlottedCounts(a: *const Self, b: *const Self, bitset_conversion: bool) LazySlottedCounts {
+        var output_count: u32 = 0;
+        var eligible_count: usize = 0;
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < a.size and j < b.size) {
+            const key_a = a.keys[i];
+            const key_b = b.keys[j];
+            output_count += 1;
+            if (key_a < key_b) {
+                i += 1;
+            } else if (key_a > key_b) {
+                j += 1;
+            } else {
+                const c_a = Container.fromTagged(a.containers[i]);
+                const c_b = Container.fromTagged(b.containers[j]);
+                if (bitset_conversion or isBitsetContainer(c_a) or isBitsetContainer(c_b)) {
+                    eligible_count += 1;
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+
+        output_count += @intCast((a.size - i) + (b.size - j));
+        return .{ .output_count = output_count, .eligible_count = eligible_count };
+    }
+
+    fn lazyMergeTwoSlottedInto(
+        allocator: std.mem.Allocator,
+        a: *const Self,
+        b: *const Self,
+        bitset_conversion: bool,
+        result: *Self,
+        comptime fallback_on_scratch_oom: bool,
+    ) !void {
+        const counts = lazySlottedCounts(a, b, bitset_conversion);
+        const pending = allocator.alloc(LazyPendingBitset, counts.eligible_count) catch |err| {
+            if (fallback_on_scratch_oom) {
+                try lazyMergeTwoBaselineInto(.bor, allocator, a, b, bitset_conversion, result);
+                return;
+            }
+            return err;
+        };
+        defer allocator.free(pending);
+
+        const reserved: TaggedPtr = .{ .tag = .reserved, .addr = 0 };
+        @memset(result.containers[0..counts.output_count], reserved);
+        result.size = counts.output_count;
+
+        var initialized_count: usize = 0;
+        var transferred_count: usize = 0;
+        errdefer {
+            for (pending[transferred_count..initialized_count]) |entry| entry.header.deinit(allocator);
+        }
+
+        for (pending) |*entry| {
+            const header = try initPendingBitset(allocator);
+            entry.* = .{
+                .payload_addr = @intFromPtr(header.words),
+                .header = header,
+                .src_a = undefined,
+                .src_b = undefined,
+                .slot = undefined,
+            };
+            initialized_count += 1;
+        }
+
+        var i: usize = 0;
+        var j: usize = 0;
+        var slot: u32 = 0;
+        var pending_index: usize = 0;
+        while (i < a.size and j < b.size) {
+            const key_a = a.keys[i];
+            const key_b = b.keys[j];
+            if (key_a < key_b) {
+                result.keys[slot] = key_a;
+                result.containers[slot] = try cloneContainer(allocator, a.containers[i]);
+                i += 1;
+            } else if (key_a > key_b) {
+                result.keys[slot] = key_b;
+                result.containers[slot] = try cloneContainer(allocator, b.containers[j]);
+                j += 1;
+            } else {
+                const tp_a = a.containers[i];
+                const tp_b = b.containers[j];
+                const c_a = Container.fromTagged(tp_a);
+                const c_b = Container.fromTagged(tp_b);
+                result.keys[slot] = key_a;
+                if (bitset_conversion or isBitsetContainer(c_a) or isBitsetContainer(c_b)) {
+                    if (pending_index >= pending.len) return error.LazyConstructionCountMismatch;
+                    pending[pending_index].src_a = tp_a;
+                    pending[pending_index].src_b = tp_b;
+                    pending[pending_index].slot = slot;
+                    pending_index += 1;
+                } else {
+                    const merged = try ops.containerUnion(allocator, c_a, c_b);
+                    result.containers[slot] = merged.toTagged();
+                }
+                i += 1;
+                j += 1;
+            }
+            slot += 1;
+        }
+
+        while (i < a.size) : (i += 1) {
+            result.keys[slot] = a.keys[i];
+            result.containers[slot] = try cloneContainer(allocator, a.containers[i]);
+            slot += 1;
+        }
+        while (j < b.size) : (j += 1) {
+            result.keys[slot] = b.keys[j];
+            result.containers[slot] = try cloneContainer(allocator, b.containers[j]);
+            slot += 1;
+        }
+        if (slot != counts.output_count or pending_index != pending.len) {
+            return error.LazyConstructionCountMismatch;
+        }
+
+        std.mem.sortUnstable(LazyPendingBitset, pending, {}, lazyPendingBitsetLessThan);
+        for (pending) |entry| {
+            @memset(entry.header.words, 0);
+            lazyAccumulateIntoBitset(.bor, entry.header, Container.fromTagged(entry.src_a));
+            lazyAccumulateIntoBitset(.bor, entry.header, Container.fromTagged(entry.src_b));
+            result.containers[entry.slot] = TaggedPtr.initBitset(entry.header);
+            transferred_count += 1;
+        }
+
+        for (result.containers[0..result.size]) |tp| {
+            if (tp.getType() == .reserved) return error.LazyConstructionReservedSlot;
+        }
+
+        result.cached_cardinality = -1;
+    }
+
+    fn lazyPendingBitsetLessThan(_: void, lhs: LazyPendingBitset, rhs: LazyPendingBitset) bool {
+        return lhs.payload_addr < rhs.payload_addr;
+    }
+
+    fn lazyMergeTwoSlottedForAllocationTesting(
+        allocator: std.mem.Allocator,
+        a: *const Self,
+        b: *const Self,
+        bitset_conversion: bool,
+    ) !Self {
+        const max_result_size = @min(a.size + b.size, @as(u32, 1) << 16);
+        var result = try Self.initCapacity(allocator, max_result_size);
+        errdefer result.deinit();
+
+        try lazyMergeTwoSlottedInto(allocator, a, b, bitset_conversion, &result, false);
         return result;
     }
 
@@ -2719,6 +2916,252 @@ pub const RoaringBitmap = struct {
     /// - `std.heap.ArenaAllocator`: fast batch alloc, bulk free only
     pub const allocator_guidance = void;
 };
+
+fn initPendingBitset(allocator: std.mem.Allocator) !*BitsetContainer {
+    const header = try allocator.create(BitsetContainer);
+    errdefer allocator.destroy(header);
+
+    const words = try allocator.alignedAlloc(u64, .@"64", BitsetContainer.NUM_WORDS);
+    header.* = .{
+        .words = words[0..BitsetContainer.NUM_WORDS],
+        .cardinality = 0,
+    };
+    return header;
+}
+
+/// Internal benchmark access to the pre-adoption lazy-OR construction path.
+pub const lazy_or_construction_baseline = struct {
+    pub fn build(
+        left: *const RoaringBitmap,
+        allocator: std.mem.Allocator,
+        right: *const RoaringBitmap,
+        bitset_conversion: bool,
+    ) !RoaringBitmap {
+        return RoaringBitmap.lazyMergeTwoBaseline(allocator, left, right, bitset_conversion);
+    }
+};
+
+test "fused slotted lazy OR propagates every allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        lazyOrSlottedAllocationFailureCase,
+        .{},
+    );
+}
+
+test "fused slotted lazy OR falls back only when pending scratch allocation fails" {
+    var fixture = try makeLazyOrAllocationFixture();
+    defer fixture.deinit();
+
+    const left_before = try fixture.left.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(left_before);
+    const right_before = try fixture.right.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(right_before);
+
+    var expected = try lazy_or_construction_baseline.build(
+        &fixture.left,
+        std.testing.allocator,
+        &fixture.right,
+        false,
+    );
+    defer expected.deinit();
+    try expected.repairAfterLazy();
+
+    var count_probe = LazyOrFailOnceAllocator{
+        .backing = std.testing.allocator,
+        .fail_index = std.math.maxInt(usize),
+    };
+    var count_result = try fixture.left.lazyOr(count_probe.allocator(), &fixture.right, false);
+    count_result.deinit();
+    const allocation_count = count_probe.alloc_index;
+
+    for (0..allocation_count) |fail_index| {
+        var failing = LazyOrFailOnceAllocator{
+            .backing = std.testing.allocator,
+            .fail_index = fail_index,
+        };
+        const attempted = fixture.left.lazyOr(failing.allocator(), &fixture.right, false);
+
+        if (fail_index == 2) {
+            var result = try attempted;
+            defer result.deinit();
+            try std.testing.expect(failing.failed);
+            try std.testing.expectEqual(expected.cardinality(), result.cardinality());
+            try result.repairAfterLazy();
+            try std.testing.expect(expected.equals(&result));
+            try expectNoReservedLazySlots(&result);
+        } else {
+            try std.testing.expectError(error.OutOfMemory, attempted);
+            try std.testing.expect(failing.failed);
+        }
+
+        try expectLazyOrInputUnchanged(&fixture.left, left_before);
+        try expectLazyOrInputUnchanged(&fixture.right, right_before);
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+    }
+}
+
+const LazyOrAllocationFixture = struct {
+    left: RoaringBitmap,
+    right: RoaringBitmap,
+
+    fn deinit(self: *LazyOrAllocationFixture) void {
+        self.left.deinit();
+        self.right.deinit();
+    }
+};
+
+const LazyOrFailOnceAllocator = struct {
+    backing: std.mem.Allocator,
+    fail_index: usize,
+    alloc_index: usize = 0,
+    failed: bool = false,
+    allocated_bytes: usize = 0,
+    freed_bytes: usize = 0,
+
+    const Self = @This();
+
+    fn allocator(self: *Self) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    const vtable: std.mem.Allocator.VTable = .{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        const index = self.alloc_index;
+        self.alloc_index += 1;
+        if (!self.failed and index == self.fail_index) {
+            self.failed = true;
+            return null;
+        }
+        const result = self.backing.rawAlloc(len, alignment, ret_addr) orelse return null;
+        self.allocated_bytes += len;
+        return result;
+    }
+
+    fn resize(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) bool {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        if (!self.backing.rawResize(memory, alignment, new_len, ret_addr)) return false;
+        if (new_len < memory.len) {
+            self.freed_bytes += memory.len - new_len;
+        } else {
+            self.allocated_bytes += new_len - memory.len;
+        }
+        return true;
+    }
+
+    fn remap(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        const result = self.backing.rawRemap(memory, alignment, new_len, ret_addr) orelse return null;
+        if (new_len < memory.len) {
+            self.freed_bytes += memory.len - new_len;
+        } else {
+            self.allocated_bytes += new_len - memory.len;
+        }
+        return result;
+    }
+
+    fn free(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        ret_addr: usize,
+    ) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.backing.rawFree(memory, alignment, ret_addr);
+        self.freed_bytes += memory.len;
+    }
+};
+
+fn makeLazyOrAllocationFixture() !LazyOrAllocationFixture {
+    const allocator = std.testing.allocator;
+    var left = try RoaringBitmap.init(allocator);
+    errdefer left.deinit();
+    var right = try RoaringBitmap.init(allocator);
+    errdefer right.deinit();
+
+    for (&[_]u16{ 1, 100, 1000 }) |low| _ = try left.add(lazyOrAllocationValue(1, low));
+    for (&[_]u16{ 2, 100, 2000 }) |low| _ = try right.add(lazyOrAllocationValue(1, low));
+    for (0..5000) |index| {
+        _ = try left.add(lazyOrAllocationValue(2, @intCast(index * 2)));
+        _ = try right.add(lazyOrAllocationValue(2, @intCast(index * 2 + 1)));
+    }
+    _ = try left.add(lazyOrAllocationValue(3, 7));
+
+    return .{ .left = left, .right = right };
+}
+
+fn lazyOrAllocationValue(key: u16, low: u16) u32 {
+    return (@as(u32, key) << 16) | low;
+}
+
+fn lazyOrSlottedAllocationFailureCase(result_allocator: std.mem.Allocator) !void {
+    var fixture = try makeLazyOrAllocationFixture();
+    defer fixture.deinit();
+
+    const left_before = try fixture.left.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(left_before);
+    const right_before = try fixture.right.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(right_before);
+
+    var expected = try lazy_or_construction_baseline.build(
+        &fixture.left,
+        std.testing.allocator,
+        &fixture.right,
+        false,
+    );
+    defer expected.deinit();
+    try expected.repairAfterLazy();
+
+    var result = RoaringBitmap.lazyMergeTwoSlottedForAllocationTesting(
+        result_allocator,
+        &fixture.left,
+        &fixture.right,
+        false,
+    ) catch |err| {
+        try expectLazyOrInputUnchanged(&fixture.left, left_before);
+        try expectLazyOrInputUnchanged(&fixture.right, right_before);
+        return err;
+    };
+    defer result.deinit();
+
+    try std.testing.expectEqual(expected.cardinality(), result.cardinality());
+    try expectNoReservedLazySlots(&result);
+    try result.repairAfterLazy();
+    try std.testing.expect(expected.equals(&result));
+    try expectLazyOrInputUnchanged(&fixture.left, left_before);
+    try expectLazyOrInputUnchanged(&fixture.right, right_before);
+}
+
+fn expectNoReservedLazySlots(bitmap: *const RoaringBitmap) !void {
+    for (bitmap.containers[0..bitmap.size]) |tagged| {
+        try std.testing.expect(tagged.getType() != .reserved);
+    }
+}
+
+fn expectLazyOrInputUnchanged(bitmap: *const RoaringBitmap, expected: []const u8) !void {
+    const actual = try bitmap.serialize(std.testing.allocator);
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+}
 
 test "RoaringBitmap capacity growth saturates" {
     try std.testing.expectEqual(@as(u32, 8), RoaringBitmap.grownCapacity(4, 5));

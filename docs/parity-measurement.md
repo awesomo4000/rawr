@@ -1370,6 +1370,61 @@ Artifacts: M4 canonical/noise/sweep are `misc/free-order-20260810-100253-aggrega
 `misc/parity-20260810-125040-summary.txt` (M4) and
 `misc/parity-20260810-130330-summary.txt` (Zen 4/WSL2).
 
+## Fused slotted lazy-OR construction adoption (2026-08-20)
+
+Spec 46 promoted spec 44's fused slotted construction path to the default forced and selective lazy-OR
+implementation. The previous implementation remains available only to the parity worker so the new
+default and its baseline can be measured in the same binary. The canonical manifest therefore contains
+42 rows and 104 tuples.
+
+**Accepted residual: 1.257x on M4.** This row remains open with an accepted residual; no stronger status
+is claimed. The owner explicitly re-accepted this post-cleanup result after the final binary measured
+above the earlier 1.235x diagnostic result but below the 1.30x acceptance cap.
+
+| host | row | candidate rawr/SMP | baseline rawr/SMP | CRoaring | candidate / baseline | candidate / CRoaring |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| M4 | lazy-OR construction | 4.497 ms [4.453, 4.620] | 5.956 ms [5.918, 6.010] | 3.577 ms [3.507, 3.601] | **0.755x** | **1.257x** |
+| M4 | lazy-OR + repair | 13.845 ms [13.776, 14.211] | 15.066 ms [14.939, 15.262] | 12.846 ms [12.691, 13.407] | **0.919x** | **1.078x** |
+| Zen 4 / WSL2 | lazy-OR construction | 18.577 ms [18.570, 18.669] | 20.815 ms [20.646, 20.859] | 84.559 ms [84.211, 84.995] | **0.893x** | 0.220x |
+| Zen 4 / WSL2 | lazy-OR + repair | 34.817 ms [33.086, 34.908] | 37.353 ms [37.265, 37.506] | 28.809 ms [28.772, 28.974] | **0.932x** | 1.209x |
+
+The M4 candidate is 24.5% faster than the retained construction baseline and 8.1% faster on the
+combined row, with non-overlapping ranges. Zen 4 improves by 10.8% and 6.8%, respectively, also with
+non-overlapping ranges. The unusually slow Zen 4/WSL2 CRoaring construction reference is reported as
+measured but is not used for the candidate-versus-baseline gate.
+
+The final M4 rawr/libc construction result is 4.625 ms [4.535, 4.963], versus 3.916 ms
+[3.908, 3.946] for the retained baseline: an 18.1% regression. The combined rawr/libc row moves from
+13.478 ms [13.455, 13.526] to 14.258 ms [14.044, 14.545], a 5.8% regression. These results are
+reported but excluded from the adoption decision under the owner policy recorded in spec 46.
+
+The shift from the earlier 1.235x diagnostic result was investigated rather than inherited. After the
+candidate's cached-cardinality store was returned to the same successful tail position as the preserved
+spec-44 implementation, the production and diagnostic hot functions had the same instruction sequence
+and size; only relocated global-address operands differed. Targeted reruns of untouched rows found no
+repeated regression attributable to the production change. The final number is therefore the canonical
+post-cleanup measurement, not the earlier diagnostic ratio.
+
+The campaign ends with every other material row at or under its gate. The closed experiment families
+are transient arenas (spec 17), allocator replacement (spec 18), header elimination (spec 35),
+first-touch/residency (spec 36), repair read-traversal sorting (spec 38), payload-address sorting
+(spec 43), the additional slotted/fused machinery rejected beyond the retained spec-44 path, and
+per-operation chunk allocation (spec 45).
+
+Those closures are deliberately narrow. They close the tested per-operation ordering vehicles, not a
+persistent pool amortized across calls, allocator-level changes, or an upstream Zig `SmpAllocator`
+change. No campaign measurement disproves those untested directions; any future attempt requires a new
+spec and must explain how it avoids the measured machinery cost.
+
+Keep the two address-order measurements distinct. The standalone allocator probe found 47.5% M4
+zeroing headroom between scattered and sorted traversal without rawr code. Spec 44 measured a separate
+2.211 ms production ordering recovery between its real-merge arms. The baseline gap is primarily
+allocator/address-order related, while the retained path's residual also includes the machinery needed
+to recover some of that ordering.
+
+Final canonical summaries: `misc/parity-20260821-003608-summary.txt` (M4) and
+`misc/parity-20260821-003825-zen4-summary.txt` (Zen 4/WSL2).
+
 ## Recommendation
 
 Use the canonical runner for performance decisions. Keep `bench_croaring` only as a quick broad

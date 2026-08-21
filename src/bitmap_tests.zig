@@ -3,6 +3,7 @@
 const std = @import("std");
 const RoaringBitmap = @import("bitmap.zig").RoaringBitmap;
 const OwnedBitmap = @import("bitmap.zig").OwnedBitmap;
+const lazy_or_construction_baseline = @import("bitmap.zig").lazy_or_construction_baseline;
 const FrozenBitmap = @import("frozen.zig").FrozenBitmap;
 const ArrayContainer = @import("array_container.zig").ArrayContainer;
 const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
@@ -473,6 +474,96 @@ test "dense set-operation construction is leak-free across allocation failures" 
         denseSetOperationAllocationFailureCase,
         .{},
     );
+}
+
+test "fused slotted lazy OR construction matches the pre-adoption path" {
+    var fixture = try makeLazyOrConstructionFixture();
+    defer fixture.deinit();
+
+    try expectLazyOrConstructionEquivalent(&fixture.left, &fixture.right, false);
+    try expectLazyOrConstructionEquivalent(&fixture.left, &fixture.right, true);
+
+    var empty = try RoaringBitmap.init(std.testing.allocator);
+    defer empty.deinit();
+    try expectLazyOrConstructionEquivalent(&empty, &fixture.right, false);
+    try expectLazyOrConstructionEquivalent(&fixture.left, &empty, false);
+    try expectLazyOrConstructionEquivalent(&empty, &empty, true);
+}
+
+const LazyOrConstructionFixture = struct {
+    left: RoaringBitmap,
+    right: RoaringBitmap,
+
+    fn deinit(self: *LazyOrConstructionFixture) void {
+        self.left.deinit();
+        self.right.deinit();
+    }
+};
+
+fn makeLazyOrConstructionFixture() !LazyOrConstructionFixture {
+    const allocator = std.testing.allocator;
+    var left = try RoaringBitmap.init(allocator);
+    errdefer left.deinit();
+    var right = try RoaringBitmap.init(allocator);
+    errdefer right.deinit();
+
+    for (&[_]u16{ 1, 100, 1000 }) |low| _ = try left.add(lazyOrValue(1, low));
+    for (&[_]u16{ 2, 100, 2000 }) |low| _ = try right.add(lazyOrValue(1, low));
+
+    for (0..5000) |index| {
+        _ = try left.add(lazyOrValue(2, @intCast(index * 2)));
+        _ = try right.add(lazyOrValue(2, @intCast(index * 2 + 1)));
+    }
+
+    _ = try left.addRange(lazyOrValue(3, 100), lazyOrValue(3, 20_000));
+    _ = try right.addRange(lazyOrValue(3, 10_000), lazyOrValue(3, 30_000));
+    _ = try left.add(lazyOrValue(4, 7));
+    _ = try right.add(lazyOrValue(5, 9));
+    _ = try left.runOptimize();
+    _ = try right.runOptimize();
+
+    try std.testing.expectEqual(TaggedPtr.ContainerType.array, left.containers[0].getType());
+    try std.testing.expectEqual(TaggedPtr.ContainerType.bitset, left.containers[1].getType());
+    try std.testing.expectEqual(TaggedPtr.ContainerType.run, left.containers[2].getType());
+
+    return .{ .left = left, .right = right };
+}
+
+fn lazyOrValue(key: u16, low: u16) u32 {
+    return (@as(u32, key) << 16) | low;
+}
+
+fn expectLazyOrConstructionEquivalent(
+    left: *const RoaringBitmap,
+    right: *const RoaringBitmap,
+    bitset_conversion: bool,
+) !void {
+    const allocator = std.testing.allocator;
+    var eager = try left.bitwiseOr(allocator, right);
+    defer eager.deinit();
+    var baseline = try lazy_or_construction_baseline.build(left, allocator, right, bitset_conversion);
+    defer baseline.deinit();
+    var candidate = try left.lazyOr(allocator, right, bitset_conversion);
+    defer candidate.deinit();
+
+    const expected_cardinality = eager.cardinality();
+    try std.testing.expectEqual(expected_cardinality, baseline.cardinality());
+    try std.testing.expectEqual(expected_cardinality, candidate.cardinality());
+    for (candidate.containers[0..candidate.size]) |tagged| {
+        try std.testing.expect(tagged.getType() != .reserved);
+    }
+
+    try baseline.repairAfterLazy();
+    try candidate.repairAfterLazy();
+    try baseline.validate();
+    try candidate.validate();
+
+    const baseline_bytes = try baseline.serialize(allocator);
+    defer allocator.free(baseline_bytes);
+    const candidate_bytes = try candidate.serialize(allocator);
+    defer allocator.free(candidate_bytes);
+    try std.testing.expectEqualSlices(u8, baseline_bytes, candidate_bytes);
+    try std.testing.expect(eager.equals(&candidate));
 }
 
 fn denseSetOperationAllocationFailureCase(result_allocator: std.mem.Allocator) !void {

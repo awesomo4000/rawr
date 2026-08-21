@@ -87,6 +87,11 @@ const allocating_variants = [_]Variant{
     .{ .implementation = .croaring, .allocator = .libc },
 };
 
+const rawr_allocating_variants = [_]Variant{
+    .{ .implementation = .rawr, .allocator = .smp },
+    .{ .implementation = .rawr, .allocator = .libc },
+};
+
 const non_allocating_variants = [_]Variant{
     .{ .implementation = .rawr, .allocator = .none },
     .{ .implementation = .croaring, .allocator = .none },
@@ -316,6 +321,21 @@ const manifest = [_]ManifestRow{
         .operation = .lazy_or_repair,
     },
     .{
+        .id = "lazy-or-repair-baseline",
+        .display_name = "lazyOr+repair (pre-adoption baseline)",
+        .corpus = "same sparse corpus as lazy-or-repair",
+        .seed = 54321,
+        .rawr_operation = "pre-adoption lazyOr construction plus repairAfterLazy",
+        .croaring_operation = "lazy-or-repair canonical CRoaring reference",
+        .allocation_class = .allocating,
+        .variants = &rawr_allocating_variants,
+        .reference = .{ .row_id = "lazy-or-repair", .variant = .{ .implementation = .croaring, .allocator = .libc } },
+        .setup_boundary = allocating_setup,
+        .teardown_boundary = allocating_teardown,
+        .validation_oracle = .portable_bytes,
+        .operation = .lazy_or_repair_baseline,
+    },
+    .{
         .id = "lazy-or-repair-descending",
         .display_name = "lazyOr+repair (sparse, descending frees)",
         .corpus = "same sparse corpus and full-cycle operation as lazy-or-repair with opt-in descending transient-bitset frees",
@@ -343,6 +363,21 @@ const manifest = [_]ManifestRow{
         .teardown_boundary = "result deinit/free outside the internally timed interval",
         .validation_oracle = .portable_bytes,
         .operation = .lazy_or_construction,
+    },
+    .{
+        .id = "lazy-or-construction-baseline",
+        .display_name = "lazyOr construction (pre-adoption baseline)",
+        .corpus = "same sparse corpus as lazy-or-construction",
+        .seed = 54321,
+        .rawr_operation = "pre-adoption lazyOr construction only",
+        .croaring_operation = "lazy-or-construction canonical CRoaring reference",
+        .allocation_class = .allocating,
+        .variants = &rawr_allocating_variants,
+        .reference = .{ .row_id = "lazy-or-construction", .variant = .{ .implementation = .croaring, .allocator = .libc } },
+        .setup_boundary = "inputs outside timing; pre-adoption lazy result construction inside timing",
+        .teardown_boundary = "result deinit/free outside the internally timed interval",
+        .validation_oracle = .portable_bytes,
+        .operation = .lazy_or_construction_baseline,
     },
     .{
         .id = "lazy-or-repair-only",
@@ -775,7 +810,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn validateManifest() !void {
-    if (manifest.len != 40) return error.InvalidManifestRowCount;
+    if (manifest.len != 42) return error.InvalidManifestRowCount;
     for (&manifest, 0..) |*row, i| {
         if (row.id.len == 0 or row.variants.len == 0 or row.batch_count == 0) return error.InvalidManifestRow;
         if (dashboard.parityRequiresAllocator(row.operation) != (row.allocation_class == .allocating)) {
