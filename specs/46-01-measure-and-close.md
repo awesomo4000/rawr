@@ -128,6 +128,50 @@ the whole residual to the allocator would misdirect the next attempt.
 - All four suites — `test`, `difftest`, `test64`, `difftest64` — plus `check-32`, `check-docs`,
   `check-package`.
 
+## Outcome — ADOPTED. Accepted residual 1.257x on M4 (2026-08-20).
+
+Every reported ratio and range re-derived independently; all agree.
+
+**M4, canonical, one binary:**
+
+| Row | candidate | retained baseline | CRoaring | vs baseline | vs CRoaring |
+|---|---:|---:|---:|---:|---:|
+| construction | 4.497 [4.453, 4.620] | 5.956 [5.918, 6.010] | 3.577 [3.507, 3.601] | **0.755x** | **1.257x** |
+| combined | 13.845 [13.776, 14.211] | 15.066 [14.939, 15.262] | 12.846 [12.691, 13.407] | **0.919x** | **1.078x** |
+
+Ranges **separated** on both gated comparisons (4.620 < 5.918; 14.211 < 14.939), so the in-binary
+negative control passes rather than merely appearing to.
+
+**Zen 4:** construction 0.893x, combined 0.932x — both improve, both with separated ranges.
+**libc (reported, excluded from the decision):** construction +18.1%, combined +5.8%.
+
+### The mid-band branch fired, and was followed
+
+1.257x sits between the diagnostic 1.235x and the 1.30x cap — **+1.8%**, inside the 5% layout tolerance
+but above the diagnostic result, which is exactly the case §3 said must not resolve itself automatically.
+It did not:
+
+- **investigated**, not inherited — production and the preserved spec-44 arm were confirmed to have the
+  same hot-function instruction sequence and size after restoring cached-cardinality update placement,
+  with the residual movement attributed to the campaign's established binary/global-layout sensitivity;
+- **targeted reruns** found no repeated untouched-row regression attributable to the change;
+- **owner re-accepted** the post-cleanup value explicitly.
+
+The investigation also caught a real placement issue in the cached-cardinality update — so the branch
+earned its keep beyond bookkeeping.
+
+### Worth stating plainly
+
+**The combined row is at 1.078x — inside the original ≤1.10x gate.** Only *construction* carries the
+residual. The user-visible lazy-OR cycle therefore meets the campaign's original bar; the accepted
+residual applies to the narrower, explicitly-invoked construction step measured in isolation.
+
+Record and language checked: "accepted residual", **open with an accepted residual**, no parity claim, no
+"at parity when enabled". Closures scoped to **per-operation** vehicles, with persistent pools,
+allocator-level changes, and an upstream `SmpAllocator` fix recorded as **untested rather than
+disproven**. The 47.5% standalone-headroom and 2.211 ms production-recovery figures are kept distinct,
+with the causal split intact.
+
 ## Estimate
 
 **S/M** — no new production logic; the two-host full-board run and the campaign record are the work.
