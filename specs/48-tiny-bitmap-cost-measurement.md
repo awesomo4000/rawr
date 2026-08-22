@@ -391,6 +391,16 @@ Out of scope:
 - **Recommendation recorded — including "no design warranted" if that is what the numbers say.** A
   "no design" verdict requires **both** Q3 and Q5 to support it (§1).
 
+## 11.1 Chunking — three chunks
+
+- **[48-00](48-00-harness-and-fixtures.md)** — harness, fixtures, references, accounting. **No results.**
+- **[48-01](48-01-sweep-and-curves.md)** — the sweep: Q1–Q4, curves and crossovers. **No verdict.**
+- **[48-02](48-02-mixed-corpus-and-recommendation.md)** — Q5 and the recommendation.
+
+The split puts **fixture correctness before any number exists**, so the pools and quantiles are verified
+without a result to be influenced by. And the recommendation is isolated in the last chunk because it
+requires **both** Q3 and Q5, which arrive in different chunks.
+
 ## 12. Estimate
 
 **M** — the benchmark itself is small, but CRoaring allocation accounting, the three shapes, and the
