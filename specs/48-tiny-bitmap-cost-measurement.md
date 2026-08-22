@@ -252,6 +252,7 @@ implementation** — Q5 is load-bearing, so its inputs must be fixed before any 
 | cardinality cap | **100,000** |
 | shape per bitmap | **spread** (§2) |
 | sampling | **inverse-CDF**: precompute `cum[k] = Σ_{i≤k} i^-s` in `f64` for `k = 1..cap`; draw `u = random.float(f64)`; take the smallest `k` with `cum[k] ≥ u * cum[cap]` by binary search |
+| corpus hash | **checked in**, asserted at generation |
 
 **Two separate PRNG streams — this must be pinned, not left to the implementation:**
 
@@ -268,7 +269,6 @@ many duplicates it hits. If value generation shared the Zipf stream, a single ex
 **every subsequent cardinality** in the corpus. The corpus hash would then bless whichever interpretation
 the implementer happened to pick, and two correct-looking implementations would produce different
 corpora.
-| corpus hash | **checked in**, asserted at generation |
 
 **Realized quantiles must be reported and asserted**: median in `[1,2]`, p99 in `[1000, 20000]`.
 
