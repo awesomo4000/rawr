@@ -13,8 +13,9 @@ Q5, so this chunk **states no verdict**.
 `Mtiny` across the sweep **0, 1, 2, 4, 6, 8, 12, 16, 20, 32, 64, 128**, for **all three shapes**
 (`localized`, `spread`, `one-per-container`).
 
-Cells: **rawr/SMP, rawr/libc, CRoaring/libc**, and the **heap-owned plain-list reference** under the
-matching allocators. Both hosts, **`ReleaseFast`, native CPU**.
+**Five timing tuples**, because the reference must run under both allocators to match rawr's two:
+**rawr/SMP, rawr/libc, CRoaring/libc, reference/SMP, reference/libc**. Both hosts, **`ReleaseFast`,
+native CPU**.
 
 Fresh process per cell, warmup then timed iterations, **≥5 process medians with full ranges**. Batching
 in **whole pool cycles** (102,400 = 100 × 1,024).
@@ -56,7 +57,7 @@ by **comparing SMP and libc cells** — never by subtracting within one. Any tra
 
 ## Acceptance
 
-- Full sweep run, three shapes, all cell types, both hosts, protocol per §1.
+- Full sweep run, three shapes, **all five tuples**, both hosts, protocol per §1.
 - Q1–Q4 answered with numbers, per shape where required.
 - Ratio curves computed from means; time curves per allocator; crossovers per the sustained rule.
 - Portable serialized sizes for rawr and CRoaring reported alongside the references.

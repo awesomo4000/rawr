@@ -39,11 +39,12 @@ cardinality 0 is covered by `48-01`'s sweep. Report it as count 0, share 0, timi
 
 ## 2.1 Which cells get the full decomposition
 
-*(The toplevel execution matrix lists four cell types; "one total cell" was ambiguous against it.)*
+*("One total cell" was ambiguous against the execution matrix — and the matrix is **five tuples**, not
+four: the plain-list reference must run under **both** allocators to match rawr's two.)*
 
 | Output | Cells |
 | --- | --- |
-| **mixed-corpus total** (measured) | **all four**: rawr/SMP, rawr/libc, CRoaring/libc, heap-owned reference — both hosts |
+| **mixed-corpus total** (measured) | **all five tuples**: rawr/SMP, rawr/libc, CRoaring/libc, **reference/SMP, reference/libc** — both hosts |
 | **band decomposition + projection + residual** | **rawr/SMP and rawr/libc only** |
 | **byte / allocation share** (measured, untimed) | rawr/SMP and rawr/libc |
 
@@ -65,9 +66,15 @@ these, then the owner decides:
 
 | Input | Pinned definition |
 | --- | --- |
-| **Q3 headline gap** | `spread` shape, **rawr/SMP**, cardinalities **1–12**, reported as time ratio **and** byte ratio vs the plain-list references |
+| **Q3 gap** | `spread` shape, **rawr/SMP**, **all six sweep points in 1–12 reported individually** — `1, 2, 4, 6, 8, 12` — each as time ratio **and** byte ratio vs the plain-list references. **No aggregate.** |
 | **tiny tail** | bands **1–2, 3–6, 7–12** (i.e. ≤12 — matching the cutoff above which ClickHouse does use Roaring) |
 | **Q5 shares** | **three separate numbers, never combined into an index**: time (projected, with residual), bytes (measured), allocations (measured) |
+
+**Why six numbers and not one:** the range holds six measured points, and a mean, a maximum, and an
+endpoint can each support a *different* owner decision. Choosing the reduction after seeing the curve
+would reintroduce exactly the post-hoc freedom §3 exists to remove. **Report all six; also state whether
+the ratio is monotonic across them**, since a non-monotonic curve is itself decision-relevant.
+*(An earlier draft said "headline gap" without a reduction rule.)*
 
 Cardinalities 1–12 and the ≤12 tail are chosen because that is where the survey's evidence actually sits
 (ClickHouse: 90–94% of tokens at ≤6, its own Roaring cutoff at >12) — not because they flatter any
@@ -104,8 +111,9 @@ the omission unexplained.
 - All four §2 parts reported, each labelled measured or projected, **with the signed projection
   residual**; cell scope per **§2.1**.
 - Byte/allocation share reported as measured.
-- **All §3 decision inputs reported with their pinned definitions** — Q3 headline gap, tiny-tail bands,
-  and the three separate Q5 shares. **No threshold invented, no automatic verdict.**
+- **All §3 decision inputs reported with their pinned definitions** — the **six individual Q3 ratios**
+  (plus monotonicity), tiny-tail bands, and the three separate Q5 shares. **No aggregate, no threshold
+  invented, no automatic verdict.**
 - **Candidate design named** per §3's create→build evidence if the numbers point at one, with "candidate"
   wording preserved. The accept/reject decision is explicitly **the owner's**.
 - Scope note per §4 included.

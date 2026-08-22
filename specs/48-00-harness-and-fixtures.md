@@ -38,13 +38,24 @@ result exists to be influenced by.
   *(An earlier draft claimed it catches a shared-PRNG-stream mistake. It does not: two deterministic
   processes produce the same output, including the same **wrong** output.)*
 
-- **Shared-stream guard — the real one.** Hash the **cardinality sequence on its own**, before and
-  independently of value generation, and check that hash in. If value generation ever draws from the Zipf
-  stream, the cardinality sequence changes and this hash fails.
+- **Shared-stream guard.** Check in **two** hashes: the **cardinality sequence on its own**, and the
+  **full corpus**.
 
-  **Plus a mutation test:** deliberately wire value generation to share the Zipf stream and confirm the
-  **cardinality-sequence hash assertion fails**. A guard that has never been seen to fail is not known to
-  work — this is the campaign's standing question applied to the fixture harness.
+  *(An earlier draft claimed any value draw from the Zipf stream changes the cardinality sequence. Too
+  broad: if the generator produces **all** cardinalities first and values afterwards, sharing the stream
+  leaves the cardinality sequence untouched — only the values differ.)*
+
+  So the two hashes catch different sharing patterns:
+
+  | Sharing pattern | cardinality hash | full-corpus hash |
+  | --- | --- | --- |
+  | **interleaved** (per bitmap: draw cardinality, then values) | **fails** | fails |
+  | **sequential** (all cardinalities, then all values) | unchanged | **fails** |
+
+  **Mutation test:** deliberately wire value generation to share the Zipf stream and confirm the guard
+  fires — **passing when EITHER hash fails**. The cardinality-only hash is retained as the isolation
+  check that tells the two patterns apart. A guard that has never been seen to fail is not known to
+  work.
 
 ### 2.2 Structural assertions — hashes bless whatever was generated
 
@@ -76,8 +87,8 @@ forever.
   (102,400 = 100 × 1,024).
 - All fixture pools and the mixed corpus generated, hashed, hashes checked in.
 - **Two-process determinism check passes** for every pool (nondeterminism only — see §2).
-- **Cardinality-sequence hash checked in**, and the **shared-stream mutation test demonstrates it fails**
-  when the streams are wired together.
+- **Both hashes checked in** — cardinality sequence and full corpus — and the **shared-stream mutation
+  test fires on at least one of them**, for both the interleaved and sequential sharing patterns.
 - **§2.2 structural assertions pass for every pool before its hash is accepted.**
 - Zipf quantiles asserted and reported.
 - Both plain-list references implemented per §5, described as references and not floors.
