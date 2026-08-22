@@ -44,12 +44,20 @@ Pin three shapes, and report **Q2 crossover separately for each**:
 | Shape | Definition — **pre-registered, not chosen at implementation time** |
 | --- | --- |
 | **localized** | `base + i*7`, `base = 3 << 16` — every value inside one container |
-| **spread** | sorted unique values drawn over a **10,000,000-row universe** (models row IDs in one data file; Delta/Iceberg DVs cover a bounded universe, often <10M), `std.Random.DefaultPrng`, **seed `0x48_5350_2026`** |
+| **spread** | over a **10,000,000-row universe** (models row IDs in one data file; Delta/Iceberg DVs cover a bounded universe, often <10M). **Rejection sampling:** draw `random.uintLessThan(u32, 10_000_000)` with `std.Random.DefaultPrng`, **seed `0x48_5350_2026`**; reject duplicates; repeat until `cardinality` distinct values exist; **sort ascending**. |
 | **one-per-container** | `i * 65536` — one value per distinct high key. **Negative control**: the library's own documented bad case |
 
 **All three shapes, at every cardinality in the Q2 sweep, get a checked-in fixture hash** (spec 40
 practice) asserted at generation — not just the mixed corpus. Silent corpus drift would change the answer
 without changing the reported inputs.
+
+**Fixture pool, decided: 1,024 distinct value sets per (shape, cardinality), cycled across the 100,000
+iterations.** The hash covers the whole pool.
+
+Rejected: **one fixture repeated 100,000 times** — it would sit in L1 and flatter the build phase, which
+is part of what we are measuring. Also rejected: **100,000 distinct sets** — generation cost and resident
+corpus memory would dominate the cell. 1,024 defeats single-fixture cache residency while keeping
+generation bounded and the hash tractable.
 
 ## 2.1 `Mtiny` — the lifecycle, defined
 
@@ -85,13 +93,19 @@ shortening the sequence.
 - **Q1 — End-to-end cost per bitmap**, per shape: wall time, allocation/free counts, byte figures (§6),
   serialized bytes.
 - **Q2 — Cost curve, per shape.** Sweep 0,1,2,4,6,8,12,16,20,32,64,128 and report the **complete
-  rawr/floor ratio curve** — **separately for time and for bytes**, which need not cross at the same
+  rawr / plain-list-reference ratio curve** — **separately for time and for bytes**, which need not cross at the same
   cardinality. *(An earlier draft asked when "fixed overhead stops dominating", which is not operational
   and could be decided post hoc.)*
 
   The curves are the primary output. A single crossover figure may be derived from them **only** against
-  the pre-registered threshold **ratio ≤ 2.0** — reported as `crossover_time` and `crossover_bytes`, or
-  "none in range".
+  the pre-registered threshold **ratio ≤ 2.0**, defined as **sustained**:
+
+  > the smallest **nonzero** sweep cardinality at which that point **and every subsequent measured point**
+  > remain ≤ 2.0; otherwise **"none in range"**.
+
+  Reported as `crossover_time` and `crossover_bytes`. *(Ratios need not be monotonic. Without "sustained"
+  and "nonzero", cardinality 0 could satisfy the threshold while later points exceed it, yielding a
+  misleading `crossover = 0`.)*
 
   **`crossover_bytes` means portable serialized bytes vs the §5a plain-list byte reference**, and nothing
   else. There are now several byte metrics (serialized, post-build live, lifecycle peak); **memory ratios
@@ -101,8 +115,8 @@ shortening the sequence.
   **Time ratios are reported per allocator, not collapsed:** `rawr/SMP ÷ reference/SMP` and
   `rawr/libc ÷ reference/libc` as separate curves. Picking one as canonical would hide precisely the
   allocator sensitivity §4 exists to expose.
-- **Q3 — Gap to the plain-list references** (§5). **The number that decides whether any design is worth
-  building** — though it bounds a simple alternative, not every possible one.
+- **Q3 — Gap to the plain-list references** (§5). **A primary decision input** — not a verdict on its
+  own, since the references bound a *simple* alternative and not inline or compressed ones.
 - **Q4 — Allocation activity and allocator sensitivity** (§4).
 - **Q5 — Aggregate significance** under a realistic mixed corpus (§7).
 
@@ -141,7 +155,7 @@ maximum win" — these bound a *simple* alternative, not every possible represen
 
 **(a) Plain-list byte reference** — serialized size only, no execution:
 - wire format: `u32 count` followed by `count` little-endian `u32` values;
-- a lower bound on bytes for a naive encoding.
+- the **byte count of the naive encoding**.
 
   **This is NOT format-inherent and NOT the interop contract.** *(An earlier draft called it
   "format-inherent", which is wrong: it is a hypothetical plain-list encoding, not the Roaring portable
@@ -234,7 +248,7 @@ reported as their own numbers (§5).
 
 - **Hosts:** M4 and Zen 4. **`ReleaseFast`, native CPU.** *(The §1 scratch numbers are Debug and are not
   comparable.)*
-- **Cells:** rawr/SMP, rawr/libc, CRoaring/libc, and the floor under the matching allocators.
+- **Cells:** rawr/SMP, rawr/libc, CRoaring/libc, and the **plain-list reference** under the matching allocators.
 - **Fresh process per cell**, warmup then timed iterations, **≥5 process medians with full ranges** —
   spec 35's warmed-context artifact read 1.155x where canonical read 1.727x.
 - **Timing boundaries, pinned:** serialized-buffer allocation **and** `serializedSizeInBytes` are
