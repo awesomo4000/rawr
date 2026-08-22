@@ -31,7 +31,10 @@ quote it. This spec produces the authoritative numbers.
   unnecessary complexity.
 - If **container header + payload** allocations dominate → inline storage becomes a **candidate**.
   *(A measurement can rule designs out; it cannot prove one is required.)*
-- If the **gap to the plain-list reference is small** → no design is warranted.
+- If the **gap to the plain-list reference is small** *and* **Q5 shows the tiny tail is a small share of
+  the mixed corpus** → no design is warranted. **Both conditions**: a large per-bitmap gap that touches a
+  negligible share of real work still does not justify a design, and neither does a small gap over a
+  dominant share.
 
 ## 2. Bitmap shape is a parameter, not a constant
 
@@ -54,10 +57,37 @@ without changing the reported inputs.
 **Fixture pool, decided: 1,024 distinct value sets per (shape, cardinality), cycled across the 100,000
 iterations.** The hash covers the whole pool.
 
+### 2.0.1 How fixture index `f ∈ 0..1023` varies each shape
+
+*(An earlier draft demanded 1,024 distinct sets while defining `localized` and `one-per-container` as a
+**single** deterministic set each — impossible as written. Each shape now varies with `f` while
+preserving its intended topology.)*
+
+| Shape | Fixture `f` | Topology preserved |
+| --- | --- | --- |
+| **localized** | `base_f = (3 + f) << 16`; values `base_f + i*7`, `i < card` | still exactly **one** container (max offset `127*7 = 889 < 65536`) |
+| **one-per-container** | values `(f + i) << 16`, `i < card` | still exactly **one value per container**; max key `1023 + 127 = 1150`, well under the 65,536-container limit |
+| **spread** | per-fixture reseed, below | still uniform over the 10M universe |
+
+**Cardinality 0 has a pool size of 1.** There is only one empty set; a 1,024-entry pool of identical
+empty fixtures would be meaningless.
+
+**Spread PRNG: deterministically reseeded per fixture**, not one global stream:
+
+```
+seed_f = 0x48_5350_2026 ^ (shape_id << 40) ^ (cardinality << 20) ^ f
+```
+
+A single global stream would make every fixture depend on the generation *order* of all fixtures before
+it — adding a sweep point, reordering shapes, or skipping a cell would silently change every subsequent
+fixture and invalidate the hash for reasons unrelated to the corpus. Per-fixture reseed makes each
+fixture independently reproducible.
+
 Rejected: **one fixture repeated 100,000 times** — it would sit in L1 and flatter the build phase, which
 is part of what we are measuring. Also rejected: **100,000 distinct sets** — generation cost and resident
-corpus memory would dominate the cell. 1,024 defeats single-fixture cache residency while keeping
-generation bounded and the hash tractable.
+corpus memory would dominate the cell. 1,024 **reduces repeated-fixture cache reuse** while keeping
+generation bounded and the hash tractable — at small cardinalities the whole pool may still fit in cache,
+so this mitigates the effect rather than eliminating it.
 
 ## 2.1 `Mtiny` — the lifecycle, defined
 
@@ -103,7 +133,9 @@ shortening the sequence.
   > the smallest **nonzero** sweep cardinality at which that point **and every subsequent measured point**
   > remain ≤ 2.0; otherwise **"none in range"**.
 
-  Reported as `crossover_time` and `crossover_bytes`. *(Ratios need not be monotonic. Without "sustained"
+  Reported as **`crossover_time_smp`**, **`crossover_time_libc`**, and **`crossover_bytes`** — the time
+  curves are per allocator (see below), so their crossovers are too. `crossover_bytes` is single:
+  serialized size does not depend on the allocator. *(Ratios need not be monotonic. Without "sustained"
   and "nonzero", cardinality 0 could satisfy the threshold while later points exceed it, yielding a
   misleading `crossover = 0`.)*
 
@@ -292,15 +324,19 @@ Out of scope:
   and the batching contract reported.
 - **All shapes and the mixed corpus fixture-hashed** per §2 and §7.1; realized quantiles reported and
   asserted.
-- **Q2 reported as full ratio curves** (time and bytes, per shape), with `crossover_time` /
-  `crossover_bytes` derived only against the pre-registered ratio ≤ 2.0.
+- **Q2 reported as full ratio curves** (time per allocator, and bytes, per shape), with
+  `crossover_time_smp` / `crossover_time_libc` / `crossover_bytes` derived only against the
+  pre-registered **sustained** ratio ≤ 2.0 rule.
 - CRoaring allocations counted via memory hooks including the caller-owned buffer; validation per §9
   (cardinality, full value set, rawr↔CRoaring cross-deserialization) passing outside timing.
 - Byte accounting reported at all five §6 checkpoints, teardown proven zero.
 - Corpus pinned per §7.1 with its hash; bands per §7.2; share reported per §7.3 with the projection
   labelled.
 - No board row moves; all four suites plus `check-32`, `check-docs`, `check-package` green.
-- **Recommendation recorded — including "no design warranted" if that is what the numbers say.**
+- **Fixture pools built per §2.0.1** — 1,024 per (shape, cardinality), pool size 1 at cardinality 0,
+  per-fixture reseed for `spread`; pool hash checked in.
+- **Recommendation recorded — including "no design warranted" if that is what the numbers say.** A
+  "no design" verdict requires **both** Q3 and Q5 to support it (§1).
 
 ## 12. Estimate
 
