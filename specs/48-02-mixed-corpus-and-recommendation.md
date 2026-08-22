@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: MPL-2.0 -->
 
-# Spec 48-02: Mixed corpus, aggregate share, and the recommendation
+# Spec 48-02: Mixed corpus, aggregate share, and the decision inputs
 
 Toplevel: [48-tiny-bitmap-cost-measurement.md](48-tiny-bitmap-cost-measurement.md).
 Gated on: [48-01](48-01-sweep-and-curves.md) complete.
 
-Answers **Q5** and produces the **recommendation** — the only chunk that reaches a conclusion, because
-the conclusion requires Q3 and Q5 together.
+Answers **Q5** and assembles the **decision inputs**. It is the only chunk that can, because the decision
+needs Q3 and Q5 together — but it **does not itself decide**: thresholds are the owner's (§3).
 
 ## 1. `Mtiny-mixed`
 
@@ -85,9 +85,9 @@ checkpoint delta:
 
 **"Candidate", not "required".** A measurement can rule designs out; it cannot prove one necessary.
 
-**And record the honest negative if that is what the numbers say.** The archetype-F story is compelling
-enough to create real pull toward finding a problem worth solving; "no design warranted" is a valid and
-valuable outcome.
+**And present the honest negative if that is what the numbers show.** The archetype-F story is compelling
+enough to create real pull toward finding a problem worth solving; "the numbers do not support a design"
+is a valid and valuable outcome, and must be reported as plainly as a positive one.
 
 ## 4. Scope reminder
 

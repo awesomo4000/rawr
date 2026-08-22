@@ -388,18 +388,20 @@ Out of scope:
 - **Q5 projection reported with its formula and its signed projection residual** (time and percentage)
   against the measured mixed total; band cells replay the filtered corpus in whole cycles; `0` band
   reports count 0, share 0, timing `N/A`.
-- **Recommendation recorded — including "no design warranted" if that is what the numbers say.** A
-  "no design" verdict requires **both** Q3 and Q5 to support it (§1).
+- **Decision inputs reported with their pinned definitions** (`48-02` §3) — Q3 headline gap, tiny-tail
+  bands, three separate Q5 shares. **No threshold is pre-registered and no automatic verdict is
+  produced**; the accept/reject call is the owner's, informed by **both** Q3 and Q5.
 
 ## 11.1 Chunking — three chunks
 
 - **[48-00](48-00-harness-and-fixtures.md)** — harness, fixtures, references, accounting. **No results.**
 - **[48-01](48-01-sweep-and-curves.md)** — the sweep: Q1–Q4, curves and crossovers. **No verdict.**
-- **[48-02](48-02-mixed-corpus-and-recommendation.md)** — Q5 and the recommendation.
+- **[48-02](48-02-mixed-corpus-and-recommendation.md)** — Q5 and the **decision inputs**.
 
 The split puts **fixture correctness before any number exists**, so the pools and quantiles are verified
-without a result to be influenced by. And the recommendation is isolated in the last chunk because it
-requires **both** Q3 and Q5, which arrive in different chunks.
+without a result to be influenced by. The decision inputs are isolated in the last chunk because they
+require **both** Q3 and Q5, which arrive in different chunks — and `48-02` **assembles** them rather than
+deciding: thresholds are the owner's call (`48-02` §3).
 
 ## 12. Estimate
 

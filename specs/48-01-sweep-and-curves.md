@@ -5,8 +5,8 @@
 Toplevel: [48-tiny-bitmap-cost-measurement.md](48-tiny-bitmap-cost-measurement.md).
 Gated on: [48-00](48-00-harness-and-fixtures.md) complete and green.
 
-Answers **Q1, Q2, Q3, Q4**. Q5 and the recommendation are `48-02` — and the recommendation needs both,
-so this chunk **states no verdict**.
+Answers **Q1, Q2, Q3, Q4**. Q5 and the decision inputs are `48-02` — and the decision needs Q3 **and**
+Q5, so this chunk **states no verdict**.
 
 ## 1. What to run
 
@@ -63,7 +63,8 @@ by **comparing SMP and libc cells** — never by subtracting within one. Any tra
 - Create→build delta reported per shape.
 - Lifecycle peak reported as both mean and maximum.
 - No board row moves; all four suites plus `check-32`, `check-docs`, `check-package` green.
-- **No recommendation and no design conclusion** — Q5 is required for that, and it is `48-02`.
+- **No verdict and no design conclusion** — Q5 is required for that, and it is `48-02`. Reporting the Q3
+  gap here is the deliverable; interpreting it is not.
 
 ## Estimate
 
