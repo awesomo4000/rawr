@@ -31,7 +31,7 @@ quote it. This spec produces the authoritative numbers.
   unnecessary complexity.
 - If **container header + payload** allocations dominate → inline storage becomes a **candidate**.
   *(A measurement can rule designs out; it cannot prove one is required.)*
-- If the **achievable floor is close to current cost** → no design is warranted.
+- If the **gap to the plain-list reference is small** → no design is warranted.
 
 ## 2. Bitmap shape is a parameter, not a constant
 
@@ -73,6 +73,9 @@ create
 The source and the byte buffer stay live across the deserialize precisely so checkpoint 4 shows peak
 concurrent residency, which is what a caller actually pays.
 
+**Outside the timed region:** value generation, uniqueness enforcement, and sorting. Those are corpus
+preparation, not the sequence under test — timing them would measure the harness.
+
 **Batching:** **100,000 bitmaps per timed cell**, calibrated so a cell runs long enough to time reliably;
 if 100k is too short at a given cardinality, raise the repeat count and **report it** rather than
 shortening the sequence.
@@ -87,10 +90,19 @@ shortening the sequence.
   and could be decided post hoc.)*
 
   The curves are the primary output. A single crossover figure may be derived from them **only** against
-  the pre-registered threshold **ratio ≤ 2.0** — reported as two numbers, `crossover_time` and
-  `crossover_bytes`, or "none in range".
-- **Q3 — The floor** (§5). Bounds the available win. **This is the number that decides whether any design
-  is worth building.**
+  the pre-registered threshold **ratio ≤ 2.0** — reported as `crossover_time` and `crossover_bytes`, or
+  "none in range".
+
+  **`crossover_bytes` means portable serialized bytes vs the §5a plain-list byte reference**, and nothing
+  else. There are now several byte metrics (serialized, post-build live, lifecycle peak); **memory ratios
+  are reported separately and get no crossover figure at all** — a peak-memory curve does not have the
+  same meaning as a size curve and should not be collapsed into one number.
+
+  **Time ratios are reported per allocator, not collapsed:** `rawr/SMP ÷ reference/SMP` and
+  `rawr/libc ÷ reference/libc` as separate curves. Picking one as canonical would hide precisely the
+  allocator sensitivity §4 exists to expose.
+- **Q3 — Gap to the plain-list references** (§5). **The number that decides whether any design is worth
+  building** — though it bounds a simple alternative, not every possible one.
 - **Q4 — Allocation activity and allocator sensitivity** (§4).
 - **Q5 — Aggregate significance** under a realistic mixed corpus (§7).
 
@@ -115,14 +127,19 @@ Report instead:
 Any isolated allocation-trace replay is **directional and non-additive** and must be labelled as such. It
 may not be subtracted from a measured total.
 
-## 5. Q3 — the floor, defined exactly
+## 5. Q3 — the plain-list references, defined exactly
 
 *(An earlier draft said "a plain sorted `[]u32` plus a length", which leaves capacity, serialization, and
 ownership unspecified — three things that dominate at this scale.)*
 
-Report **two** floors; they answer different questions:
+Report **two references**; they answer different questions.
 
-**(a) Hypothetical plain-list byte floor** — serialized size only, no execution:
+**Neither is a true floor** *(an earlier draft called them that)*: delta/VarInt or inline-in-header
+encodings can be smaller than the byte reference, and an inline representation can avoid the heap-owned
+reference's allocation entirely. Report **"gap to the plain-list reference"**, never "the available
+maximum win" — these bound a *simple* alternative, not every possible representation.
+
+**(a) Plain-list byte reference** — serialized size only, no execution:
 - wire format: `u32 count` followed by `count` little-endian `u32` values;
 - a lower bound on bytes for a naive encoding.
 
@@ -131,7 +148,7 @@ Report **two** floors; they answer different questions:
   format.)* **Report rawr's and CRoaring's actual portable serialized sizes separately** — those are the
   real format numbers, and the plain-list figure only says what a non-Roaring encoding could achieve.
 
-**(b) Executable heap-owned floor** — the same lifecycle as `Mtiny`:
+**(b) Heap-owned plain-list reference** — the same lifecycle as `Mtiny`:
 - capacity **known and allocated exactly** (no growth, no slack);
 - serialize: emit the §5(a) wire format;
 - deserialize: **copies** into an owned allocation (matching rawr's owning semantics — a borrowed variant
@@ -166,16 +183,23 @@ implementation** — Q5 is load-bearing, so its inputs must be fixed before any 
 | --- | --- |
 | generator | Zipf over cardinality, `std.Random.DefaultPrng` |
 | **seed** | `0x48_5A_49_50_2026` |
-| exponent `s` | **1.15** |
+| exponent `s` | **1.48** — verified: median **2**, p99 **4,935** over `1..100000` |
 | corpus count | **100,000** bitmaps |
 | cardinality cap | **100,000** |
 | shape per bitmap | **spread** (§2) |
+| sampling | **inverse-CDF**: precompute `cum[k] = Σ_{i≤k} i^-s` in `f64` for `k = 1..cap`; draw `u = random.float(f64)`; take the smallest `k` with `cum[k] ≥ u * cum[cap]` by binary search |
 | corpus hash | **checked in**, asserted at generation |
 
-**Realized quantiles must be reported and asserted** against the survey target — median in `[1,2]`, p99
-in `[1000, 20000]`. If the realized distribution misses the band, **the exponent is re-pinned in this
-spec and the corpus hash updated before measuring** — a documented, pre-registered change, never a
-silent tune after seeing results.
+**Realized quantiles must be reported and asserted**: median in `[1,2]`, p99 in `[1000, 20000]`.
+
+`s = 1.48` was **computed against this band, not guessed** — an earlier draft pinned `s = 1.15`, which
+yields median **21** and p99 **71,688**, missing the target so badly that the "re-pin if it misses"
+fallback would have fired on the first run. That would have made the escape hatch the actual mechanism,
+defeating the point of pre-registration. **A quantile-assertion failure now means the sampler is wrong,
+not that the exponent needs tuning.**
+
+**The mixed corpus has no `0` band** — Zipf support starts at cardinality 1. Cardinality 0 is covered by
+`Mtiny` (§2.1 sweep), not here.
 
 ### 7.2 "Tiny" is a set of bands, not a word
 
@@ -240,12 +264,13 @@ Out of scope:
 
 ## 11. Acceptance
 
-- `Mtiny` and `Mtiny-mixed` implemented as **sequence** benchmarks across all three §2 shapes, on both
-  hosts, per §9.
+- **`Mtiny` across all three §2 shapes; `Mtiny-mixed` on `spread` only** — both as **sequence**
+  benchmarks, both hosts, per §9. *(An earlier draft's acceptance demanded all three shapes for both,
+  contradicting §7.1's pinning of the mixed corpus to `spread`.)*
 - **Q1–Q5 each answered with numbers**, per shape where §2 requires it.
-- **Both floors** (§5a, §5b) measured, plus **rawr's and CRoaring's actual portable serialized sizes
-  reported separately**; **the available win stated as a number**, with an explicit verdict if it is
-  small.
+- **Both plain-list references** (§5a, §5b) measured, plus **rawr's and CRoaring's actual portable
+  serialized sizes reported separately**; **the gap to the plain-list reference stated as a number**, with
+  an explicit verdict if it is small. Do not describe it as a maximum achievable win.
 - CRoaring control run; conclusion phrased as **"unusually expensive vs the reference" or not**. **The
   phrase "Roaring-inherent" may not be used at all** — §5a is a hypothetical plain-list encoding, not the
   portable format, and allocation layout is an implementation choice on both sides.
