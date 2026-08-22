@@ -37,15 +37,45 @@ cardinality 0 is covered by `48-01`'s sweep. Report it as count 0, share 0, timi
 4. **Byte and allocation share** from the untimed accounting pass. **This part is measured, not
    projected**, and is the reliable half of Q5.
 
-## 3. The recommendation
+## 2.1 Which cells get the full decomposition
 
-**Both conditions are required for "no design warranted":**
+*(The toplevel execution matrix lists four cell types; "one total cell" was ambiguous against it.)*
 
-- the **gap to the plain-list reference is small** (Q3, from `48-01`), **and**
-- the **tiny tail is a small share of the mixed corpus** (Q5).
+| Output | Cells |
+| --- | --- |
+| **mixed-corpus total** (measured) | **all four**: rawr/SMP, rawr/libc, CRoaring/libc, heap-owned reference — both hosts |
+| **band decomposition + projection + residual** | **rawr/SMP and rawr/libc only** |
+| **byte / allocation share** (measured, untimed) | rawr/SMP and rawr/libc |
 
-A large per-bitmap gap over a negligible share of real work does not justify a design; neither does a
-small gap over a dominant share. Either alone is insufficient.
+The projection exists to **attribute rawr's own cost** and to show whether the allocator changes the
+tail's share — not to compare implementations band by band. CRoaring and the reference contribute totals
+for comparison; decomposing them would multiply the cell count for no question anyone asked.
+
+## 3. The decision — inputs pre-registered, thresholds are the OWNER'S
+
+*(An earlier draft required an automatic recommendation gated on "small gap" and "small share" with no
+metric or threshold defined — which would let the verdict be chosen after seeing the numbers, the exact
+failure this spec exists to prevent.)*
+
+**No threshold is pre-registered, and no automatic recommendation is required.** We do not yet know
+enough to set one honestly, and inventing a number would be false precision dressed as rigour.
+
+**Instead, the decision inputs are pre-registered so they cannot be selected post hoc.** Report exactly
+these, then the owner decides:
+
+| Input | Pinned definition |
+| --- | --- |
+| **Q3 headline gap** | `spread` shape, **rawr/SMP**, cardinalities **1–12**, reported as time ratio **and** byte ratio vs the plain-list references |
+| **tiny tail** | bands **1–2, 3–6, 7–12** (i.e. ≤12 — matching the cutoff above which ClickHouse does use Roaring) |
+| **Q5 shares** | **three separate numbers, never combined into an index**: time (projected, with residual), bytes (measured), allocations (measured) |
+
+Cardinalities 1–12 and the ≤12 tail are chosen because that is where the survey's evidence actually sits
+(ClickHouse: 90–94% of tokens at ≤6, its own Roaring cutoff at >12) — not because they flatter any
+outcome.
+
+**The owner applies judgement to those numbers.** A large per-bitmap gap over a negligible share does not
+justify a design, and neither does a small gap over a dominant share — but where those lines fall is a
+call this measurement cannot make for them.
 
 **If a design is warranted, name which one the evidence points at** — using `48-01`'s create→build
 checkpoint delta:
@@ -71,10 +101,13 @@ the omission unexplained.
 - `Mtiny-mixed` run on both hosts per the toplevel protocol; corpus hash asserted; realized quantiles
   reported.
 - Bands reported per §1, including the empty `0` band.
-- All four §2 parts reported, each labelled measured or projected, **with the signed projection residual**.
+- All four §2 parts reported, each labelled measured or projected, **with the signed projection
+  residual**; cell scope per **§2.1**.
 - Byte/allocation share reported as measured.
-- **Recommendation recorded**, satisfying §3's two-condition rule, with the candidate design named if one
-  is warranted and "candidate" wording preserved.
+- **All §3 decision inputs reported with their pinned definitions** — Q3 headline gap, tiny-tail bands,
+  and the three separate Q5 shares. **No threshold invented, no automatic verdict.**
+- **Candidate design named** per §3's create→build evidence if the numbers point at one, with "candidate"
+  wording preserved. The accept/reject decision is explicitly **the owner's**.
 - Scope note per §4 included.
 - No board row moves; no production change; all four suites plus `check-32`, `check-docs`,
   `check-package` green.

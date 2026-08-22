@@ -33,10 +33,36 @@ result exists to be influenced by.
 - **Teardown checkpoint proves zero** — every lifecycle returns to zero live bytes.
 - **Validation passes**: deserialized cardinality and full value set match the input, and rawr↔CRoaring
   cross-deserialization round-trips.
-- **Reproducibility check:** generate each pool **twice in separate processes** and confirm identical
-  hashes. This is what catches a shared-PRNG-stream mistake, which is otherwise invisible — a single
-  extra rejection in `spread` would shift every subsequent cardinality, and a hash produced once would
-  simply bless it.
+- **Determinism check:** generate each pool **twice in separate processes** and confirm identical hashes.
+  **This catches nondeterminism only** — uninitialised memory, address- or thread-dependent behaviour.
+  *(An earlier draft claimed it catches a shared-PRNG-stream mistake. It does not: two deterministic
+  processes produce the same output, including the same **wrong** output.)*
+
+- **Shared-stream guard — the real one.** Hash the **cardinality sequence on its own**, before and
+  independently of value generation, and check that hash in. If value generation ever draws from the Zipf
+  stream, the cardinality sequence changes and this hash fails.
+
+  **Plus a mutation test:** deliberately wire value generation to share the Zipf stream and confirm the
+  **cardinality-sequence hash assertion fails**. A guard that has never been seen to fail is not known to
+  work — this is the campaign's standing question applied to the fixture harness.
+
+### 2.2 Structural assertions — hashes bless whatever was generated
+
+A checked-in hash freezes the corpus; it does not establish the corpus is *correct*. Validation (§1)
+proves serialization preserves the generated set — **not** that the generated set matches the spec.
+
+Assert **before** accepting any hash:
+
+| Shape | Invariant |
+| --- | --- |
+| **localized** | exactly **one** distinct high key across the set |
+| **one-per-container** | exactly **`cardinality`** distinct high keys |
+| **spread** | **sorted ascending, unique, every value < 10,000,000** |
+| all shapes | set size **equals the requested cardinality** |
+| all nonzero pools | **1,024 pairwise-distinct sets** |
+
+An initially wrong generator whose output got hashed would otherwise be locked in and look reproducible
+forever.
 
 ## 3. Explicitly not in this chunk
 
@@ -46,10 +72,13 @@ result exists to be influenced by.
 
 ## Acceptance
 
-- `Mtiny` implemented per §2.1 with correct object lifetimes; batching in **whole pool cycles**
+- `Mtiny` implemented per **toplevel §2.1** with correct object lifetimes; batching in **whole pool cycles**
   (102,400 = 100 × 1,024).
 - All fixture pools and the mixed corpus generated, hashed, hashes checked in.
-- **Two-process reproducibility check passes** for every pool.
+- **Two-process determinism check passes** for every pool (nondeterminism only — see §2).
+- **Cardinality-sequence hash checked in**, and the **shared-stream mutation test demonstrates it fails**
+  when the streams are wired together.
+- **§2.2 structural assertions pass for every pool before its hash is accepted.**
 - Zipf quantiles asserted and reported.
 - Both plain-list references implemented per §5, described as references and not floors.
 - Accounting pass produces all §6 checkpoints, out of band from any timing.
