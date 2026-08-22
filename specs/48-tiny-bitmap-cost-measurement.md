@@ -2,115 +2,193 @@
 
 # Spec 48: Tiny-bitmap cost — measurement before design
 
-**Measurement only. No design decisions, no production changes.** The point is to produce the numbers
-that the small-representation design would branch on, *before* committing to a shape.
+**Measurement only. No design decisions, no production changes.** This spec produces the numbers a
+small-representation design would branch on, *before* any shape is committed to.
 
 ## 1. Why measure first
 
-External survey evidence says the tiny case is the most common real-world shape and the most
-under-benchmarked: ClickHouse measured **90–94% of distinct tokens at cardinality ≤6, median 1–2**, and
-built two non-Roaring encodings rather than pay Roaring's overhead. `groupBitmap` keeps a plain set below
-33 elements. Lucene switches away from Roaring below ~0.05% density and above 1%. Delta inlines small
-deletion vectors. Spark declined a build optimization because ~3 containers had nothing to win.
+Survey evidence says the tiny case is the most common real-world shape and the most under-benchmarked:
+ClickHouse measured **90–94% of distinct tokens at cardinality ≤6, median 1–2**, and built two
+non-Roaring encodings rather than pay Roaring's overhead. `groupBitmap` keeps a plain set below 33
+elements. Lucene switches away below ~0.05% density and above 1%. Delta inlines small deletion vectors.
+Spark declined a build optimization at ~3 containers.
 
-**Scratch measurement on rawr** (counting allocator, values `i*7`):
+**Scratch measurement on rawr** (counting allocator, values `i*7`, one host, **Debug**, untimed):
 
-| cardinality | allocations | live bytes | serialized |
+| cardinality | allocations | live-at-peak bytes | serialized |
 |---:|---:|---:|---:|
 | 0 | 2 | 40 | 8 |
 | 1 | 4 | 72 | 18 |
 | 6 | 5 | 80 | 28 |
 | 12 | 6 | 96 | 40 |
 
-An empty bitmap costs two allocations; a one-element bitmap costs four and 72 bytes for 4 bytes of data.
-**That scratch run is indicative, not authoritative** — it is one host, Debug, no timing, no distribution.
-This spec produces the real numbers.
+**Indicative only — not a result.** One host, Debug, no timing, one bitmap shape, no distribution. Do not
+quote it. This spec produces the authoritative numbers.
 
-**The design branches on results we do not have:**
+**The design branches on answers we do not have:**
 
-- If the cost is dominated by the two *top-level array* allocations, **lazy allocation alone** may be
-  enough, and inline storage is unnecessary complexity.
-- If the container header + payload allocations dominate, **inline small-set storage** is required.
-- If CRoaring shows the same profile, this is **Roaring-inherent** and the honest answer may be "document
-  it, tell callers to layer their own encoding" — which is CRoaring's own position.
-- If the achievable floor is close to current cost, **there is no win to chase**.
+- If the two **top-level array** allocations dominate → lazy allocation may suffice and inline storage is
+  unnecessary complexity.
+- If **container header + payload** allocations dominate → inline storage is required.
+- If the **achievable floor is close to current cost** → no design is warranted.
 
-Committing to a design before knowing which of those holds would be guessing.
+## 2. Bitmap shape is a parameter, not a constant
 
-## 2. Questions the measurement must answer
+**Cardinality alone does not determine cost.** The scratch run used `i*7`, which keeps every value inside
+one container. Six values spread across a large universe may need **six containers** — a completely
+different allocation profile at identical cardinality.
 
-- **Q1 — What does the tiny path cost end to end?** Per bitmap: wall time, allocation count, peak and
-  live bytes, serialized bytes.
-- **Q2 — Where is the crossover?** At what cardinality does fixed overhead stop dominating? Sweep
+Pin three shapes, and report **Q2 crossover separately for each**:
+
+| Shape | Definition |
+| --- | --- |
+| **localized** | all values within a single high-key container |
+| **spread** | sorted unique values over a fixed realistic universe (models real row IDs) |
+| **one-per-container** | one value per distinct high key — **negative control**, the library's own documented bad case |
+
+## 3. Questions the measurement must answer
+
+- **Q1 — End-to-end cost per bitmap**, per shape: wall time, allocation/free counts, byte figures (§6),
+  serialized bytes.
+- **Q2 — Crossover**, *per shape*: at what cardinality does fixed overhead stop dominating? Sweep
   0,1,2,4,6,8,12,16,20,32,64,128.
-- **Q3 — What is the floor?** What would the same sequence cost with an ideal minimal representation
-  (a plain sorted `[]u32` plus a length)? **This bounds the available win** and is the number that decides
-  whether any design is worth building.
-- **Q4 — Allocation versus everything else.** Split the per-bitmap cost into allocator time and the rest.
-  This is what distinguishes "lazy allocation suffices" from "inline storage required".
-- **Q5 — Does it matter in aggregate?** Under a realistic Zipf mix (median 2, p99 ~5000), what fraction
-  of total time and total bytes lands in the tiny tail? Measuring uniformly-tiny bitmaps alone would
-  overstate the case.
+- **Q3 — The floor** (§5). Bounds the available win. **This is the number that decides whether any design
+  is worth building.**
+- **Q4 — Allocation activity and allocator sensitivity** (§4).
+- **Q5 — Aggregate significance** under a realistic mixed corpus (§7).
 
-**Q3 and Q5 are the load-bearing ones.** Q1/Q2/Q4 describe the current state; Q3 says whether an
-improvement exists and Q5 says whether it is worth having.
+**Q3 and Q5 are load-bearing.** Q1/Q2/Q4 describe the current state; Q3 says whether an improvement
+exists, Q5 says whether it is worth having.
 
-## 3. Benchmark shape — sequences, not operations
+## 4. Q4 — allocation activity, NOT a time split
 
-Per the survey's own methodology point: compare **as a sequence**, because per-op measurement cannot see
-allocation strategy or fixed overhead. Our existing 40-row board is per-op and structurally blind here.
+*(Corrected: an earlier draft asked to split cost into "allocator time versus everything else." That is
+not cleanly measurable — allocation timing is context-sensitive, and subtracting an allocator
+microbenchmark from a total is exactly the class of error this campaign has repeatedly paid for.)*
 
-**`Mtiny`** — the full lifecycle, repeated ×100k:
+Report instead:
 
-```
-create → [add(v)]×card → serialize → deserialize → cardinality → free
-```
+- **allocation and free counts** per lifecycle;
+- **requested, live, and peak bytes** (§6 checkpoints);
+- **allocation-size histogram** — which size classes are hit, and how often;
+- **deltas at lifecycle checkpoints**;
+- **separate SMP and libc timing cells** — allocator sensitivity shown by *comparison across cells*, never
+  by subtraction within one.
 
-**`Mtiny-zipf`** — same sequence, cardinalities drawn from a Zipf tail (median 2, p99 ~5000), reporting
-the tiny-tail share of the total (Q5).
+Any isolated allocation-trace replay is **directional and non-additive** and must be labelled as such. It
+may not be subtracted from a measured total.
 
-Report **ns/bitmap and bytes/bitmap**, not aggregate throughput — the per-bitmap fixed cost *is* the
-subject.
+## 5. Q3 — the floor, defined exactly
 
-## 4. Controls
+*(An earlier draft said "a plain sorted `[]u32` plus a length", which leaves capacity, serialization, and
+ownership unspecified — three things that dominate at this scale.)*
 
-- **CRoaring reference, same sequence.** This is the control that decides attribution: if CRoaring shows
-  the same allocation profile, the cost is Roaring-inherent and the conclusion changes from "fix it" to
-  "document it". Without this control the result is uninterpretable.
-- **Floor reference (Q3):** the same sequence against a plain sorted `[]u32`. Not a proposal — a bound.
-- **Existing board unaffected:** this chunk adds measurement only; no board row may move.
+Report **two** floors; they answer different questions:
 
-## 5. Protocol
+**(a) Byte-format floor** — serialized size only, no execution:
+- wire format: `u32 count` followed by `count` little-endian `u32` values;
+- this is the honest lower bound on bytes and is **format-inherent**.
 
-Standard campaign discipline, because the failure modes are known:
+**(b) Executable heap-owned floor** — the same lifecycle as `Mtiny`:
+- capacity **known and allocated exactly** (no growth, no slack);
+- serialize: emit the §5(a) wire format;
+- deserialize: **copies** into an owned allocation (matching rawr's owning semantics — a borrowed variant
+  would be a different comparison and must not be conflated);
+- cardinality: the stored length, O(1);
+- **all** allocations counted, including the values array and the serialized buffer.
 
-- **Canonical harness style**: fresh process per cell, warmup then timed iterations, **≥5 process medians
-  with full ranges**. Spec 35's warmed-context artifact read 1.155x where canonical read 1.727x.
-- **Both hosts**, SMP and libc, allocator stated per cell.
-- **Allocation counting must not contaminate timing** — a counting allocator wrapper may not substitute
-  for the real allocator in a timed cell, nor run before one in the same process (spec 45-02 §4). Collect
-  allocation and byte figures in a **separate untimed run**.
-- **Release mode.** The scratch numbers above are Debug and are not comparable.
+## 6. Byte accounting — checkpoints, not one number
 
-## 6. Explicitly out of scope
+*(An earlier draft reported "live bytes" for a lifecycle ending in `free`, where the final answer is
+necessarily zero.)*
 
-- **Any design or production change.** No inline storage, no lazy allocation, no thresholds. This spec
-  produces numbers, not code paths.
-- Changing container types or serialization.
-- The expression-pipeline idea, which addresses a different archetype.
+Record byte and allocation figures at each checkpoint:
 
-## 7. Acceptance
+1. after `create`
+2. after build (all `add`s)
+3. after `serialize`
+4. after `deserialize`
+5. after complete teardown — **must be zero**
 
-- `Mtiny` and `Mtiny-zipf` implemented as **sequence** benchmarks, both hosts, protocol per §5.
-- **Q1–Q5 each answered explicitly with numbers**, not prose.
-- CRoaring control run for the same sequences; **the Roaring-inherent versus rawr-specific split stated
-  outright**.
-- Floor reference measured; **the available win stated as a number**, with the honest verdict if it is
-  small.
-- Allocation/byte figures collected out of band from timing.
+The create→build delta is precisely what distinguishes *lazy top-level allocation* from
+*container/header cost*, which is one of this spec's primary design questions (§1).
+
+## 7. Q5 — mixed corpus, reproducible, with a stated share method
+
+### 7.1 Corpus — pinned like a fixture
+
+Following spec 40's cross-width fixture practice:
+
+- exact generator and **pinned seed**;
+- cardinality cap and **corpus count**;
+- reported quantiles;
+- **checked-in corpus hash**, asserted at generation, so drift fails loudly rather than silently changing
+  the answer.
+
+### 7.2 "Tiny" is a set of bands, not a word
+
+Report per band: **0**, **1–2**, **3–6**, **7–12**, **13–32**, **33–128**, **129+**.
+
+### 7.3 Share method — stated, because the obvious approaches are wrong
+
+Per-item timers dominate the tiny cases; separately timing each band changes allocator history and
+therefore the answer.
+
+- **one mixed-corpus total cell** — the ground truth for total time;
+- **independent batched cells per band** — per-band cost, each in its own fresh process;
+- **a weighted projected share**, combining the two and **explicitly labelled a projection**, never
+  reported as measured;
+- **an exact byte and allocation share** from the untimed accounting pass — this one *is* measured, and is
+  the reliable half of Q5.
+
+## 8. Controls and what they do and do not establish
+
+**CRoaring reference, same sequences.** It answers: **is rawr unusually expensive relative to the
+reference implementation?**
+
+**It does NOT establish that any cost is "Roaring-inherent."** *(An earlier draft claimed exactly that.)*
+Allocation layout, container ownership, and execution time are **implementation choices**. CRoaring
+matching rawr means both made similar choices — not that improvement is impossible. **The only
+format-inherent quantity here is the portable serialized floor** (§5a), because that one is fixed by the
+interop contract.
+
+**Existing board unaffected:** measurement only; no board row may move.
+
+## 9. Execution matrix and protocol
+
+- **Hosts:** M4 and Zen 4. **`ReleaseFast`, native CPU.** *(The §1 scratch numbers are Debug and are not
+  comparable.)*
+- **Cells:** rawr/SMP, rawr/libc, CRoaring/libc, and the floor under the matching allocators.
+- **Fresh process per cell**, warmup then timed iterations, **≥5 process medians with full ranges** —
+  spec 35's warmed-context artifact read 1.155x where canonical read 1.727x.
+- **Timing boundaries, pinned:** serialized-buffer allocation **and** `serializedSizeInBytes` are
+  **inside** the timed region — they are part of the sequence a caller pays for. **Validation and a
+  consumed checksum are outside** it.
+- **Accounting is out of band:** a counting allocator may not substitute for the real allocator in a timed
+  cell, nor run before one in the same process (spec 45-02 §4).
+
+## 10. Out of scope
+
+- **Any design or production change** — no inline storage, no lazy allocation, no thresholds.
+- Container-type or serialization changes.
+- The expression-pipeline idea (different archetype).
+
+## 11. Acceptance
+
+- `Mtiny` and `Mtiny-mixed` implemented as **sequence** benchmarks across all three §2 shapes, on both
+  hosts, per §9.
+- **Q1–Q5 each answered with numbers**, per shape where §2 requires it.
+- **Both floors** (§5a, §5b) measured; **the available win stated as a number**, with an explicit verdict
+  if it is small.
+- CRoaring control run; conclusion phrased as **"unusually expensive vs the reference" or not** — the
+  phrase "Roaring-inherent" may be used **only** of the §5a serialized floor.
+- Byte accounting reported at all five §6 checkpoints, teardown proven zero.
+- Corpus pinned per §7.1 with its hash; bands per §7.2; share reported per §7.3 with the projection
+  labelled.
 - No board row moves; all four suites plus `check-32`, `check-docs`, `check-package` green.
 - **Recommendation recorded — including "no design warranted" if that is what the numbers say.**
 
-## 8. Estimate
+## 12. Estimate
 
-**S/M** — the benchmark is small; the two-host protocol and the controls are the work.
+**M** — the benchmark itself is small, but CRoaring allocation accounting, the three shapes, and the
+mixed-corpus attribution are careful harness work.
