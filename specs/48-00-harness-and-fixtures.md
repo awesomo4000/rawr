@@ -98,6 +98,52 @@ forever.
 - No board row moves; all four suites plus `check-32`, `check-docs`, `check-package` green.
 - **No measurement results claimed.**
 
+## Verification record — implemented, reviewed, ACCEPTED
+
+Verified independently in the working tree, not taken on report.
+
+| Item | Result |
+| --- | --- |
+| Production library untouched | ✓ — only `build.zig`, `tools/croaring_wrapper.h` (dev-only, **not** in `.paths`), and three new files |
+| Both hashes pinned | ✓ — **36 sweep pool hashes** (3 shapes × 12 cardinalities) plus `expected_mixed_cardinality_hash` and `expected_mixed_full_hash` |
+| Pool size 1 at cardinality 0 | ✓ — `if (cardinality == 0) 1 else sweep_pool_size` |
+| Whole pool cycles | ✓ — `sweep_iterations = sweep_pool_size * 100` = **102,400** |
+| Per-fixture reseed with `shape_id` | ✓ — `sweepValueSeed(shape, cardinality, fixture_index)` |
+| Structural assertions run **before** hashing | ✓ — `validateFixture` is called per fixture inside `generateSweepPool`, before the pool is returned |
+| All six §2.2 invariants present | ✓ — `CardinalityMismatch`, `NotSortedUnique`, `LocalizedTopologyMismatch`, `SpreadValueOutOfRange`, `OnePerContainerTopologyMismatch`, `DuplicateFixture` |
+
+**`zig build check-tiny-setup` output, run here:**
+
+```
+quantiles: median=2 p99=4961
+mutation interleaved: caught cardinality=true full=true
+mutation sequential: caught cardinality=false full=true
+tiny setup: OK
+```
+
+**The mutation result matches §2's predicted table exactly** — and the sequential row is the important
+one: `cardinality=false, full=true`. That **empirically confirms the correction** to this spec. The
+original single-hash design would have let sequential stream-sharing through undetected; only the
+full-corpus hash catches it. The guard is now demonstrated, not assumed.
+
+**Quantile note, so nobody later "fixes" it:** realized p99 is **4,961** against the **4,935** computed
+by exact inverse-CDF during spec review. These differ by 0.5% because one is a *theoretical distribution
+quantile* and the other a *realized sample quantile* at n=100,000. Both sit inside the asserted
+`[1000, 20000]` band; the difference is sampling variation, not an error.
+
+**Independent structural-guard control (not built into the harness).** The mutation test covers the PRNG
+guards; the §2.2 structural assertions had none. I seeded a defect — changed `fillLocalized`'s stride from
+`*7` to `*70000` so values spill across containers — and the guard fired with the correct named error:
+
+```
+error: LocalizedTopologyMismatch
+```
+
+**Suggested follow-up, not a blocker:** promote that into a permanent mutation case alongside the two PRNG
+ones, so the structural guards are self-verifying rather than depending on a reviewer to check them once.
+
+No timing claims made, per the chunk's scope.
+
 ## Estimate
 
 **M** — the fixtures and the CRoaring accounting are the work.
