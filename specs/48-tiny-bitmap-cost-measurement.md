@@ -29,7 +29,8 @@ quote it. This spec produces the authoritative numbers.
 
 - If the two **top-level array** allocations dominate → lazy allocation may suffice and inline storage is
   unnecessary complexity.
-- If **container header + payload** allocations dominate → inline storage is required.
+- If **container header + payload** allocations dominate → inline storage becomes a **candidate**.
+  *(A measurement can rule designs out; it cannot prove one is required.)*
 - If the **achievable floor is close to current cost** → no design is warranted.
 
 ## 2. Bitmap shape is a parameter, not a constant
@@ -40,18 +41,54 @@ different allocation profile at identical cardinality.
 
 Pin three shapes, and report **Q2 crossover separately for each**:
 
-| Shape | Definition |
+| Shape | Definition — **pre-registered, not chosen at implementation time** |
 | --- | --- |
-| **localized** | all values within a single high-key container |
-| **spread** | sorted unique values over a fixed realistic universe (models real row IDs) |
-| **one-per-container** | one value per distinct high key — **negative control**, the library's own documented bad case |
+| **localized** | `base + i*7`, `base = 3 << 16` — every value inside one container |
+| **spread** | sorted unique values drawn over a **10,000,000-row universe** (models row IDs in one data file; Delta/Iceberg DVs cover a bounded universe, often <10M), `std.Random.DefaultPrng`, **seed `0x48_5350_2026`** |
+| **one-per-container** | `i * 65536` — one value per distinct high key. **Negative control**: the library's own documented bad case |
+
+**All three shapes, at every cardinality in the Q2 sweep, get a checked-in fixture hash** (spec 40
+practice) asserted at generation — not just the mixed corpus. Silent corpus drift would change the answer
+without changing the reported inputs.
+
+## 2.1 `Mtiny` — the lifecycle, defined
+
+*(Restored: the revision referenced "the same lifecycle as `Mtiny`" after the definition had been lost in
+an edit, and the original `×100k` batching contract went with it.)*
+
+**Object lifetimes are part of the definition** — checkpoints 3 and 4 (§6) are uninterpretable without
+them:
+
+```text
+create
+→ add sorted unique values                         (shape per §2)
+→ serialized-size query
+→ allocate serialization buffer
+→ serialize
+→ owning deserialize, WHILE source bitmap and bytes remain live
+→ cardinality (on the deserialized bitmap)
+→ free deserialized bitmap, then bytes, then source
+```
+
+The source and the byte buffer stay live across the deserialize precisely so checkpoint 4 shows peak
+concurrent residency, which is what a caller actually pays.
+
+**Batching:** **100,000 bitmaps per timed cell**, calibrated so a cell runs long enough to time reliably;
+if 100k is too short at a given cardinality, raise the repeat count and **report it** rather than
+shortening the sequence.
 
 ## 3. Questions the measurement must answer
 
 - **Q1 — End-to-end cost per bitmap**, per shape: wall time, allocation/free counts, byte figures (§6),
   serialized bytes.
-- **Q2 — Crossover**, *per shape*: at what cardinality does fixed overhead stop dominating? Sweep
-  0,1,2,4,6,8,12,16,20,32,64,128.
+- **Q2 — Cost curve, per shape.** Sweep 0,1,2,4,6,8,12,16,20,32,64,128 and report the **complete
+  rawr/floor ratio curve** — **separately for time and for bytes**, which need not cross at the same
+  cardinality. *(An earlier draft asked when "fixed overhead stops dominating", which is not operational
+  and could be decided post hoc.)*
+
+  The curves are the primary output. A single crossover figure may be derived from them **only** against
+  the pre-registered threshold **ratio ≤ 2.0** — reported as two numbers, `crossover_time` and
+  `crossover_bytes`, or "none in range".
 - **Q3 — The floor** (§5). Bounds the available win. **This is the number that decides whether any design
   is worth building.**
 - **Q4 — Allocation activity and allocator sensitivity** (§4).
@@ -85,9 +122,14 @@ ownership unspecified — three things that dominate at this scale.)*
 
 Report **two** floors; they answer different questions:
 
-**(a) Byte-format floor** — serialized size only, no execution:
+**(a) Hypothetical plain-list byte floor** — serialized size only, no execution:
 - wire format: `u32 count` followed by `count` little-endian `u32` values;
-- this is the honest lower bound on bytes and is **format-inherent**.
+- a lower bound on bytes for a naive encoding.
+
+  **This is NOT format-inherent and NOT the interop contract.** *(An earlier draft called it
+  "format-inherent", which is wrong: it is a hypothetical plain-list encoding, not the Roaring portable
+  format.)* **Report rawr's and CRoaring's actual portable serialized sizes separately** — those are the
+  real format numbers, and the plain-list figure only says what a non-Roaring encoding could achieve.
 
 **(b) Executable heap-owned floor** — the same lifecycle as `Mtiny`:
 - capacity **known and allocated exactly** (no growth, no slack);
@@ -117,13 +159,23 @@ The create→build delta is precisely what distinguishes *lazy top-level allocat
 
 ### 7.1 Corpus — pinned like a fixture
 
-Following spec 40's cross-width fixture practice:
+Following spec 40's cross-width fixture practice. **Pre-registered here, not chosen during
+implementation** — Q5 is load-bearing, so its inputs must be fixed before any number is seen:
 
-- exact generator and **pinned seed**;
-- cardinality cap and **corpus count**;
-- reported quantiles;
-- **checked-in corpus hash**, asserted at generation, so drift fails loudly rather than silently changing
-  the answer.
+| Parameter | Value |
+| --- | --- |
+| generator | Zipf over cardinality, `std.Random.DefaultPrng` |
+| **seed** | `0x48_5A_49_50_2026` |
+| exponent `s` | **1.15** |
+| corpus count | **100,000** bitmaps |
+| cardinality cap | **100,000** |
+| shape per bitmap | **spread** (§2) |
+| corpus hash | **checked in**, asserted at generation |
+
+**Realized quantiles must be reported and asserted** against the survey target — median in `[1,2]`, p99
+in `[1000, 20000]`. If the realized distribution misses the band, **the exponent is re-pinned in this
+spec and the corpus hash updated before measuring** — a documented, pre-registered change, never a
+silent tune after seeing results.
 
 ### 7.2 "Tiny" is a set of bands, not a word
 
@@ -148,9 +200,9 @@ reference implementation?**
 
 **It does NOT establish that any cost is "Roaring-inherent."** *(An earlier draft claimed exactly that.)*
 Allocation layout, container ownership, and execution time are **implementation choices**. CRoaring
-matching rawr means both made similar choices — not that improvement is impossible. **The only
-format-inherent quantity here is the portable serialized floor** (§5a), because that one is fixed by the
-interop contract.
+matching rawr means both made similar choices — not that improvement is impossible. **And "Roaring-inherent" is not a conclusion this measurement can reach at all** — §5a is a hypothetical
+plain-list encoding, not the portable format. The portable sizes rawr and CRoaring actually emit are
+reported as their own numbers (§5).
 
 **Existing board unaffected:** measurement only; no board row may move.
 
@@ -166,8 +218,21 @@ interop contract.
   consumed checksum are outside** it.
 - **Accounting is out of band:** a counting allocator may not substitute for the real allocator in a timed
   cell, nor run before one in the same process (spec 45-02 §4).
+- **CRoaring allocation accounting, pinned:** count via CRoaring's **memory hooks**, and include the
+  **caller-owned serialization buffer** — both must appear in the untimed accounting pass, or the
+  comparison silently favours CRoaring by omitting allocations rawr is charged for.
+- **Validation, outside timing** — beyond a consumed checksum: the deserialized bitmap's **cardinality and
+  full value set must match the input**, and **rawr↔CRoaring cross-deserialization** must round-trip. A
+  measurement of a sequence that produced wrong results is not a measurement.
 
-## 10. Out of scope
+## 10. Scope and out of scope
+
+**Scope: `RoaringBitmap` / `u32` only.** `Roaring64Bitmap` is **deferred, not dismissed** — the survey
+flags tiny 64-bit bitmaps explicitly (Delta and Iceberg deletion vectors are 64-bit and frequently tiny),
+but adding it doubles the matrix and 64-bit has no benchmark harness at all yet. `10-21-bench64` is the
+natural home; this spec's findings should inform it.
+
+Out of scope:
 
 - **Any design or production change** — no inline storage, no lazy allocation, no thresholds.
 - Container-type or serialization changes.
@@ -178,10 +243,20 @@ interop contract.
 - `Mtiny` and `Mtiny-mixed` implemented as **sequence** benchmarks across all three §2 shapes, on both
   hosts, per §9.
 - **Q1–Q5 each answered with numbers**, per shape where §2 requires it.
-- **Both floors** (§5a, §5b) measured; **the available win stated as a number**, with an explicit verdict
-  if it is small.
-- CRoaring control run; conclusion phrased as **"unusually expensive vs the reference" or not** — the
-  phrase "Roaring-inherent" may be used **only** of the §5a serialized floor.
+- **Both floors** (§5a, §5b) measured, plus **rawr's and CRoaring's actual portable serialized sizes
+  reported separately**; **the available win stated as a number**, with an explicit verdict if it is
+  small.
+- CRoaring control run; conclusion phrased as **"unusually expensive vs the reference" or not**. **The
+  phrase "Roaring-inherent" may not be used at all** — §5a is a hypothetical plain-list encoding, not the
+  portable format, and allocation layout is an implementation choice on both sides.
+- **`Mtiny` lifecycle implemented exactly as §2.1**, including object lifetimes across the deserialize,
+  and the batching contract reported.
+- **All shapes and the mixed corpus fixture-hashed** per §2 and §7.1; realized quantiles reported and
+  asserted.
+- **Q2 reported as full ratio curves** (time and bytes, per shape), with `crossover_time` /
+  `crossover_bytes` derived only against the pre-registered ratio ≤ 2.0.
+- CRoaring allocations counted via memory hooks including the caller-owned buffer; validation per §9
+  (cardinality, full value set, rawr↔CRoaring cross-deserialization) passing outside timing.
 - Byte accounting reported at all five §6 checkpoints, teardown proven zero.
 - Corpus pinned per §7.1 with its hash; bands per §7.2; share reported per §7.3 with the projection
   labelled.
