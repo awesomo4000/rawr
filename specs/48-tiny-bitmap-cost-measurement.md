@@ -55,7 +55,7 @@ practice) asserted at generation — not just the mixed corpus. Silent corpus dr
 without changing the reported inputs.
 
 **Fixture pool, decided: 1,024 distinct value sets per (shape, cardinality), cycled across the 100,000
-iterations.** The hash covers the whole pool.
+iterations** (§ Aggregation: 102,400 = 100 whole cycles). The hash covers the whole pool.
 
 ### 2.0.1 How fixture index `f ∈ 0..1023` varies each shape
 
@@ -77,6 +77,10 @@ empty fixtures would be meaningless.
 ```
 seed_f = 0x48_5350_2026 ^ (shape_id << 40) ^ (cardinality << 20) ^ f
 ```
+
+`shape_id`: **`localized = 0`, `spread = 1`, `one-per-container = 2`.** Only `spread` draws from the PRNG
+today, but leaving the symbol undefined would make the formula unimplementable as written, and a fixed
+assignment keeps seeds collision-free if another shape ever needs one.
 
 A single global stream would make every fixture depend on the generation *order* of all fixtures before
 it — adding a sweep point, reordering shapes, or skipping a cell would silently change every subsequent
@@ -111,12 +115,26 @@ create
 The source and the byte buffer stay live across the deserialize precisely so checkpoint 4 shows peak
 concurrent residency, which is what a caller actually pays.
 
+### Aggregation — pinned, because `spread` fixtures are not identical
+
+Within a pool, `spread` fixtures differ in container count, allocation count, serialized size, and
+checkpoint bytes. How those collapse to one number must be fixed in advance:
+
+- **Aggregate totals ÷ lifecycle count.** Sum across the cell, then divide.
+- **Ratios are computed from those means — never as the mean of per-fixture ratios.** The two differ, and
+  averaging ratios silently overweights cheap fixtures.
+- **Run whole pool cycles so every fixture is weighted equally: 102,400 iterations = 100 × 1,024**
+  *(not 100,000, which would truncate mid-pool and overweight the first 768 fixtures of the last cycle)*.
+  At cardinality 0 the pool is 1, so any count is a whole cycle.
+- **Lifecycle peak bytes: report BOTH mean and maximum.** The mean describes the typical bitmap; the
+  maximum describes what a caller must provision for, and for a heavy-tailed corpus they are far apart.
+
 **Outside the timed region:** value generation, uniqueness enforcement, and sorting. Those are corpus
 preparation, not the sequence under test — timing them would measure the harness.
 
-**Batching:** **100,000 bitmaps per timed cell**, calibrated so a cell runs long enough to time reliably;
-if 100k is too short at a given cardinality, raise the repeat count and **report it** rather than
-shortening the sequence.
+**Batching:** **102,400 bitmaps per timed cell** (100 whole pool cycles), calibrated so a cell runs long
+enough to time reliably; if that is too short at a given cardinality, raise the repeat count **in whole
+pool cycles** and **report it** — never shorten the sequence, and never end mid-cycle.
 
 ## 3. Questions the measurement must answer
 
@@ -258,8 +276,19 @@ therefore the answer.
 
 - **one mixed-corpus total cell** — the ground truth for total time;
 - **independent batched cells per band** — per-band cost, each in its own fresh process;
-- **a weighted projected share**, combining the two and **explicitly labelled a projection**, never
-  reported as measured;
+- **a weighted projected share**, computed explicitly as
+
+  ```
+  projected_band_time = band_count × mean_time_per_bitmap(band)      // from that band's independent cell
+  projected_share(b)  = projected_band_time(b) / Σ_bands projected_band_time
+  ```
+
+  **explicitly labelled a projection**, never reported as measured. **Also report the discrepancy between
+  `Σ projected_band_time` and the measured mixed-corpus total** — that difference is the projection's own
+  error bar, and quoting the share without it would hide how much the band decomposition misses.
+
+  **The `0` band reports count 0, share 0, and timing `N/A`** — the mixed corpus excludes cardinality 0
+  (§7.1); it is covered by `Mtiny`'s sweep instead;
 - **an exact byte and allocation share** from the untimed accounting pass — this one *is* measured, and is
   the reliable half of Q5.
 
@@ -334,7 +363,11 @@ Out of scope:
   labelled.
 - No board row moves; all four suites plus `check-32`, `check-docs`, `check-package` green.
 - **Fixture pools built per §2.0.1** — 1,024 per (shape, cardinality), pool size 1 at cardinality 0,
-  per-fixture reseed for `spread`; pool hash checked in.
+  per-fixture reseed for `spread` with `shape_id` as assigned; pool hash checked in.
+- **Cells run whole pool cycles** (102,400 = 100 × 1,024); aggregation by totals ÷ lifecycle count, ratios
+  from means not mean-of-ratios; lifecycle peak reported as **both** mean and maximum.
+- **Q5 projection reported with its formula and its discrepancy** against the measured mixed total; `0`
+  band reports count 0, share 0, timing `N/A`.
 - **Recommendation recorded — including "no design warranted" if that is what the numbers say.** A
   "no design" verdict requires **both** Q3 and Q5 to support it (§1).
 
