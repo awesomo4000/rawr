@@ -54,8 +54,8 @@ Pin three shapes, and report **Q2 crossover separately for each**:
 practice) asserted at generation — not just the mixed corpus. Silent corpus drift would change the answer
 without changing the reported inputs.
 
-**Fixture pool, decided: 1,024 distinct value sets per (shape, cardinality), cycled across the 100,000
-iterations** (§ Aggregation: 102,400 = 100 whole cycles). The hash covers the whole pool.
+**Fixture pool, decided: 1,024 distinct value sets per (shape, cardinality), cycled across the 102,400
+iterations** (100 whole cycles — see § Aggregation). The hash covers the whole pool.
 
 ### 2.0.1 How fixture index `f ∈ 0..1023` varies each shape
 
@@ -124,7 +124,7 @@ checkpoint bytes. How those collapse to one number must be fixed in advance:
 - **Ratios are computed from those means — never as the mean of per-fixture ratios.** The two differ, and
   averaging ratios silently overweights cheap fixtures.
 - **Run whole pool cycles so every fixture is weighted equally: 102,400 iterations = 100 × 1,024**
-  *(not 100,000, which would truncate mid-pool and overweight the first 768 fixtures of the last cycle)*.
+  *(not 100,000, which would truncate mid-pool and overweight the first 672 fixtures of the last cycle)*.
   At cardinality 0 the pool is 1, so any count is a whole cycle.
 - **Lifecycle peak bytes: report BOTH mean and maximum.** The mean describes the typical bitmap; the
   maximum describes what a caller must provision for, and for a heavy-tailed corpus they are far apart.
@@ -252,6 +252,22 @@ implementation** — Q5 is load-bearing, so its inputs must be fixed before any 
 | cardinality cap | **100,000** |
 | shape per bitmap | **spread** (§2) |
 | sampling | **inverse-CDF**: precompute `cum[k] = Σ_{i≤k} i^-s` in `f64` for `k = 1..cap`; draw `u = random.float(f64)`; take the smallest `k` with `cum[k] ≥ u * cum[cap]` by binary search |
+
+**Two separate PRNG streams — this must be pinned, not left to the implementation:**
+
+1. **The Zipf stream draws cardinalities and nothing else.** One stream, seeded as above, advanced once
+   per corpus entry.
+2. **Each bitmap's `spread` values use its own seed**, derived from position and cardinality:
+
+   ```
+   value_seed = 0x48_5A_49_50_2026 ^ (corpus_index << 20) ^ cardinality
+   ```
+
+**Why it matters:** `spread` uses *rejection* sampling, so the number of draws consumed depends on how
+many duplicates it hits. If value generation shared the Zipf stream, a single extra rejection would shift
+**every subsequent cardinality** in the corpus. The corpus hash would then bless whichever interpretation
+the implementer happened to pick, and two correct-looking implementations would produce different
+corpora.
 | corpus hash | **checked in**, asserted at generation |
 
 **Realized quantiles must be reported and asserted**: median in `[1,2]`, p99 in `[1000, 20000]`.
@@ -275,7 +291,10 @@ Per-item timers dominate the tiny cases; separately timing each band changes all
 therefore the answer.
 
 - **one mixed-corpus total cell** — the ground truth for total time;
-- **independent batched cells per band** — per-band cost, each in its own fresh process;
+- **independent batched cells per band** — per-band cost, each in its own fresh process. **Each band cell
+  replays the actual mixed-corpus bitmaps that fall in that band**, cycled in **whole cycles** over that
+  band's membership — *not* freshly generated bitmaps of comparable cardinality. Otherwise the projection
+  multiplies band counts from one distribution by costs measured on another;
 - **a weighted projected share**, computed explicitly as
 
   ```
@@ -283,9 +302,9 @@ therefore the answer.
   projected_share(b)  = projected_band_time(b) / Σ_bands projected_band_time
   ```
 
-  **explicitly labelled a projection**, never reported as measured. **Also report the discrepancy between
-  `Σ projected_band_time` and the measured mixed-corpus total** — that difference is the projection's own
-  error bar, and quoting the share without it would hide how much the band decomposition misses.
+  **explicitly labelled a projection**, never reported as measured. **Also report the projection residual** —
+  `Σ projected_band_time − measured mixed-corpus total`, as **signed time and signed percentage**.
+  Quoting the share without it would hide how much the band decomposition misses.
 
   **The `0` band reports count 0, share 0, and timing `N/A`** — the mixed corpus excludes cardinality 0
   (§7.1); it is covered by `Mtiny`'s sweep instead;
@@ -366,8 +385,9 @@ Out of scope:
   per-fixture reseed for `spread` with `shape_id` as assigned; pool hash checked in.
 - **Cells run whole pool cycles** (102,400 = 100 × 1,024); aggregation by totals ÷ lifecycle count, ratios
   from means not mean-of-ratios; lifecycle peak reported as **both** mean and maximum.
-- **Q5 projection reported with its formula and its discrepancy** against the measured mixed total; `0`
-  band reports count 0, share 0, timing `N/A`.
+- **Q5 projection reported with its formula and its signed projection residual** (time and percentage)
+  against the measured mixed total; band cells replay the filtered corpus in whole cycles; `0` band
+  reports count 0, share 0, timing `N/A`.
 - **Recommendation recorded — including "no design warranted" if that is what the numbers say.** A
   "no design" verdict requires **both** Q3 and Q5 to support it (§1).
 
