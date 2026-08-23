@@ -11,11 +11,15 @@ counts as passing*.
 
 ## 1. The finding that shapes this spec
 
-**All OS-conditional code lives in the benchmark harness, not the shipped library.** Verified:
-`bench_time.zig`, `bench_croaring.zig`, `bench_smp_layout.zig`, `bench_lazy_or_residency.zig`, and
-`build.zig`'s `addBenchmarkPlatformShim` (which has an **OpenBSD** C shim and links libc). Nothing in
-`bitmap.zig`, `container.zig`, `serialize.zig`, `roaring64.zig`, or the frozen types branches on
-`builtin.os.tag`.
+**All OS-conditional code lives in the benchmark harness, not the shipped library.**
+
+**Verified across the exact shipped set** — every one of the 32 files in `build.zig.zon`'s `.paths`,
+**including the nine test files that ship** (`bitmap_tests.zig`, `property_tests.zig`,
+`roaring64_tests.zig`, …). None contains `builtin.os` or `os.tag`. *(An earlier check excluded test files;
+they are in `.paths`, so they are Tier 1 and had to be included. The answer did not change.)*
+
+The OS-conditional code is in `bench_time.zig`, `bench_croaring.zig`, `bench_smp_layout.zig`,
+`bench_lazy_or_residency.zig`, and `build.zig`'s `addBenchmarkPlatformShim` — none of which ship.
 
 **Arch-conditional code is confined to `array_simd.zig`:** `has_x86_simd` requires `x86_64` + AVX,
 `has_neon` requires `aarch64` + NEON. Everything else takes scalar paths — already proven by `check-32`
@@ -39,7 +43,12 @@ Two cells are already continuously exercised by the parity campaign and need no 
 - **macOS / aarch64** (M4) — full suites, benches, board.
 - **Linux / x86_64** (WSL2) — full suites, benches, board, plus native 32-bit `x86-linux-musl`.
 
-That leaves **10 cells** genuinely unverified.
+That leaves **10 of the 12 runtime cells** (2 arches × 6 OS families) genuinely unverified.
+
+**Note the two counts differ and should not be conflated:** the §3 *compile* matrix has **16 cells**
+(2 arches × 8 target triples, since Linux and Windows each have two ABIs), while the §4 *runtime* matrix
+has **12** (2 arches × 6 OS families). The evidence table (§6) is keyed by compile target; runtime status
+attaches to the OS family.
 
 ## 3. Tier 1 — compile matrix first (cheap, catches most)
 
@@ -50,9 +59,13 @@ established that its enumerated surface *is* the guard boundary. Reuse it verbat
 Add **`zig build check-portability`**: compile that probe for every target in the matrix.
 
 - No execution, no host needed — this is pure cross-compilation and runs on any dev machine.
-- Targets: `{aarch64, x86_64}` × `{linux-gnu, linux-musl, macos, windows-gnu, freebsd, netbsd, openbsd}`,
-  plus whatever Zig 0.16 actually supports — **record which targets Zig cannot target at all**, since
-  that is itself a finding.
+- Targets: `{aarch64, x86_64}` × `{linux-gnu, linux-musl, macos, windows-gnu, **windows-msvc**, freebsd,
+  netbsd, openbsd}` — **record which of these Zig 0.16 cannot target at all**, since that is itself a
+  finding. Include **both Windows ABIs**: `gnu` and `msvc` differ in libc and linking, and a consumer on
+  Windows may be using either.
+- **`check-portability` does NOT replace `check-32`.** They cover **different axes** — `check-32` is the
+  *pointer-width* matrix (wasm32, x86, arm, riscv32), this is the *arch × OS* matrix at 64-bit. Merging
+  them would quietly drop 32-bit coverage. Keep both steps.
 - **This is the single highest-value step.** Most portability breakage is a compile error, and this finds
   it without a single VM.
 
@@ -74,8 +87,9 @@ a testing gap, not a library defect.
   there. Check: `std.heap.smp_allocator` availability and behaviour, 64-byte `alignedAlloc`, and whether
   `check-package`'s generated consumer project builds under the Windows shell/path rules.
 - **BSDs** — **OpenBSD already has a bench shim and a custom `openbsd_c_allocator`
-  (`bench_time.zig:427-442`)**, which means someone hit real problems there before. Whether that was
-  Tier 1 or Tier 2 should be established, not guessed. FreeBSD and NetBSD are untried.
+  (`bench_time.zig:427-442`)**. That is evidence of **prior platform-specific work**; whether it was
+  forced by a defect or chosen as a preference is **not established by its existence**, and it sits in
+  Tier 2 either way. Establish which, rather than inferring. FreeBSD and NetBSD are untried.
 - **aarch64 on Linux/BSD/Windows** — NEON gating is on `builtin.cpu.arch == .aarch64` **plus** the NEON
   feature bit, so a target without the feature silently takes scalar paths. Confirm which path each
   aarch64 cell actually takes, and record it.
@@ -112,8 +126,10 @@ different.
 - `README.md` support statement matches the table — **verified vs compiles distinguished**.
 - Any **Tier 1** breakage either fixed or recorded as a known limitation with its error.
 - **Tier 2 gaps recorded as testing gaps, never as user-facing unsupported platforms.**
-- No regression on the two known-good cells; existing suites, `check-32`, `check-docs`, `check-package`
-  all still green.
+- The two known-good cells still pass: suites, `check-32`, `check-docs`, `check-package` **green**.
+  *(Green, not "no regression" — performance is out of scope per §8, so there is no timing claim here.)*
+  `check-docs` and `check-package` are **host-local** checks, run on the dev machine; they are not part of
+  the per-target matrix.
 
 ## 8. Out of scope
 
