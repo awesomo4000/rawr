@@ -88,15 +88,19 @@ threshold.
 
 `rawr/CR` is `rawr/libc ÷ CRoaring/libc` — a same-allocator comparison.
 
-| | full sweep | above cardinality 8 |
-|---|---|---|
-| **both hosts** | **0.85x – 1.95x** | **0.85x – 1.75x** |
-| M4 only | 1.10x – 1.66x | 1.10x – 1.31x |
-| Zen 4 only | 0.85x – 1.95x | 0.85x – 1.75x |
+| | full sweep | cardinality **≥ 8** | cardinality **> 8** |
+|---|---|---|---|
+| **both hosts** | **0.85x – 1.95x** | 0.85x – 1.75x | **0.85x – 1.44x** |
+| M4 only | 1.10x – 1.66x | 1.10x – 1.31x | 1.10x – 1.31x |
+| Zen 4 only | 0.85x – 1.95x | 0.85x – 1.75x | 0.85x – 1.44x |
 
-*(An earlier version of this record quoted "1.1x–1.4x", which was **M4-only** and understated the spread
-in **both** directions: Zen 4 reaches **1.95x** at cardinality 0, and rawr is sometimes **faster** than
-CRoaring — 0.85x at `spread` 128 on Zen 4.)*
+*(Both cutoffs are given because they differ materially on Zen 4 — cardinality 8 itself carries the
+**1.75x** localized point, so including or excluding it moves the upper bound by 0.31x. An earlier
+version labelled the `≥ 8` numbers as "above cardinality 8".)*
+
+*(An earlier version quoted "1.1x–1.4x", which was **M4-only** and understated the spread in **both**
+directions: Zen 4 reaches **1.95x** at cardinality 0, and rawr is sometimes **faster** than CRoaring —
+0.85x at `spread` 128 on Zen 4.)*
 
 **The host difference is the point.** Zen 4 shows rawr at **1.7–1.95x** of CRoaring at the smallest
 cardinalities — the archetype-F region that motivated this whole spec. "rawr ≈ CRoaring" is true on M4
@@ -105,7 +109,8 @@ and materially weaker on Zen 4, so the conclusion must not be stated host-free.
 ### One place rawr IS measurably behind
 
 **Allocations per lifecycle** (localized, cards 1–8): rawr **13–14**, CRoaring **9**, plain-list reference
-**3**. CRoaring also uses `resize` (1–3 per lifecycle) where rawr uses none — different growth strategies.
+**3**. CRoaring also uses `resize` — **0–3** per lifecycle over cards 1–8, with **zero at cardinality 1** —
+where rawr uses none. Different growth strategies.
 
 **The corresponding time gap is host-dependent:** **+11% to +50% on M4**, **+53% to +77% on Zen 4**.
 *(An earlier version said "10–40%", again M4-only.)*
