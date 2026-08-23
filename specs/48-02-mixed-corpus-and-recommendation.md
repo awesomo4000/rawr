@@ -164,20 +164,35 @@ per-bitmap tax that amortizes. For `spread`, each added value adds a container, 
 tax that never amortizes within this range**. That distinction shapes what any design would have to do:
 lazy top-level allocation cannot touch it, because the cost is not in the top level.
 
-### Whole-corpus totals — worth reading directly
+### Whole-corpus totals — BOTH hosts
 
-| tuple | M4 total | vs |
-|---|---:|---|
-| rawr/smp | 260.836 ms | — |
-| croaring/libc | 271.943 ms | **rawr/SMP is faster than CRoaring/libc** |
-| rawr/libc | 353.519 ms | **1.30x** croaring/libc, same allocator |
-| reference/smp | 29.971 ms | rawr/smp is **8.70x** the plain list |
-| reference/libc | 16.513 ms | — |
+| tuple | M4 | Zen 4 |
+|---|---:|---:|
+| rawr/smp | 260.836 ms | 334.367 ms |
+| rawr/libc | 353.519 ms | 452.724 ms |
+| croaring/libc | 271.943 ms | 315.400 ms |
+| reference/smp | 29.971 ms | 169.948 ms |
+| reference/libc | 16.513 ms | 56.920 ms |
 
-**Caveat on the reference:** `reference/libc` (16.5 ms) is **1.8x faster than `reference/smp`** (30.0 ms).
-The plain list prefers libc while rawr prefers SMP. Same-allocator pairing is the right comparison and the
-spec pinned it — but a reader should know the plain-list gap would look **worse** if the reference were
-run under its own best allocator.
+| comparison | M4 | Zen 4 |
+|---|---:|---:|
+| rawr/smp vs croaring/libc | **−4.1%** (rawr faster) | **+6.0%** (rawr slower) |
+| rawr/libc ÷ croaring/libc (same allocator) | **1.30x** | **1.44x** |
+| reference: smp ÷ libc | **1.81x** | **2.99x** |
+| **rawr/smp ÷ reference/smp** | **8.70x** | **1.97x** |
+
+*(An earlier version of this record gave M4 figures only and read "rawr/SMP is faster than
+CRoaring/libc". Across hosts the honest statement is **near parity** — 4% faster on M4, 6% slower on
+Zen 4.)*
+
+**The last row is the one neither summary flagged, and it matters most.** The whole-corpus gap to the
+plain list is **8.70x on M4 but only 1.97x on Zen 4** — a 4.4x swing in the headline comparison. The cause
+is the *reference*, not rawr: `reference/smp` is 2.99x slower than `reference/libc` on Zen 4 versus 1.81x
+on M4, so the plain list's own allocator sensitivity moves the target.
+
+**Consequence for the decision:** the gap a redesign would chase is **not a stable quantity**. It depends
+heavily on host and on which allocator the reference is granted. That is an argument against acting on
+it, independent of the share numbers.
 
 ### Candidate evidence, as reported
 
@@ -186,7 +201,32 @@ dominates, pointing at **inline small-set storage**. Consistent with `create` be
 create→build grows with container count. **Candidates, not requirements** — and §3's thresholds remain the
 owner's.
 
-**No decision recorded in this chunk, correctly.**
+### Recommendation received — DO NOT change the default representation
+
+Implementer's read, recorded as input to the owner:
+
+> **Do not change rawr's default representation based on this measurement. Park inline small-set storage
+> as a workload-specific opportunity.**
+
+Reasoning, all supported above:
+
+- ≤12 consumes **~5% of rawr/SMP lifecycle time**, so eliminating it entirely buys **~5%** on this corpus.
+- The cost is **per-container, not fixed initialization** — so **lazy top-level allocation cannot fix the
+  rising curve**; only inline storage could, at real representation complexity.
+- The plain-list gap is **host-unstable** (8.70x M4 vs 1.97x Zen 4) because the reference is itself
+  allocator-sensitive.
+- rawr is at **near parity with CRoaring** on the realistic corpus.
+
+**The one open question that survives:** tiny sets are **17.1% of allocation calls**. A highly concurrent
+deployment dominated by tiny bitmaps could behave differently, and **this harness is single-threaded**.
+That would need a **dedicated multithreaded contention benchmark** before any core-design change is
+reconsidered — it is not answered by anything measured here.
+
+**Condition for revisiting:** a real target workload shown to be overwhelmingly tiny, allocation-contentious,
+and important enough to justify the added representation complexity.
+
+**Owner decision pending** — thresholds were never pre-registered (§3), and this is a recommendation, not
+a verdict.
 
 ## Estimate
 
