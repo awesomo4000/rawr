@@ -139,8 +139,14 @@ guards; the §2.2 structural assertions had none. I seeded a defect — changed 
 error: LocalizedTopologyMismatch
 ```
 
-**Suggested follow-up, not a blocker:** promote that into a permanent mutation case alongside the two PRNG
-ones, so the structural guards are self-verifying rather than depending on a reviewer to check them once.
+**Follow-up LANDED** (committed `abdf517`): `verifyStructuralMutationGuards` seeds a defect for **all six**
+named errors — `CardinalityMismatch`, `NotSortedUnique`, `LocalizedTopologyMismatch`,
+`SpreadValueOutOfRange`, `OnePerContainerTopologyMismatch`, `DuplicateFixture` — wired into
+`check-tiny-setup` as `mutation_structural`. Broader than the single case verified during review; every
+structural guard is now self-verifying rather than depending on a reviewer checking it once.
+
+Also noted: `verifyPinnedHashesAndFixtures` rejects a zero hash (`error.UnpinnedSweepHash` /
+`UnpinnedMixedHash`), which catches the "table left unfilled" mode a hash comparison alone would not.
 
 No timing claims made, per the chunk's scope.
 
