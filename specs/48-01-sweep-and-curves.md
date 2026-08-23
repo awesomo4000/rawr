@@ -81,28 +81,34 @@ spec 48-02"*; both hosts.
 card 2 = 1.67x with every subsequent point ≤ 2.0, giving `crossover_bytes=2`. Not the first point under
 threshold.
 
-### The finding the summary understated: rawr ≈ CRoaring
+### The key result — scoped to both hosts
 
-| shape | `rawr/CR` at card 0 | at card 6 | at card 128 |
-|---|---:|---:|---:|
-| localized | 1.66x | 1.11x | 1.14x |
-| spread | 1.54x | 1.37x | 1.11x |
-| one-per-container | 1.57x | 1.39x | 1.22x |
+> **CRoaring confirms that most of the plain-list gap is shared by both implementations; rawr still has
+> measurable implementation-specific overhead, especially at the smallest cardinalities.**
 
-**rawr sits at ~1.1–1.4x of CRoaring across the whole tiny range**, tightening above cardinality 8. So the
-5–77x gap to a plain list is **not a rawr defect** — it is what Roaring costs *as both implementations
-build it*. That is the question the CRoaring control exists to answer, and the answer is "rawr is not
-unusually expensive."
+`rawr/CR` is `rawr/libc ÷ CRoaring/libc` — a same-allocator comparison.
 
-**Per the spec's own rule, this still may not be called "Roaring-inherent."** Both implementations making
-similar choices is not proof the choices are forced.
+| | full sweep | above cardinality 8 |
+|---|---|---|
+| **both hosts** | **0.85x – 1.95x** | **0.85x – 1.75x** |
+| M4 only | 1.10x – 1.66x | 1.10x – 1.31x |
+| Zen 4 only | 0.85x – 1.95x | 0.85x – 1.75x |
+
+*(An earlier version of this record quoted "1.1x–1.4x", which was **M4-only** and understated the spread
+in **both** directions: Zen 4 reaches **1.95x** at cardinality 0, and rawr is sometimes **faster** than
+CRoaring — 0.85x at `spread` 128 on Zen 4.)*
+
+**The host difference is the point.** Zen 4 shows rawr at **1.7–1.95x** of CRoaring at the smallest
+cardinalities — the archetype-F region that motivated this whole spec. "rawr ≈ CRoaring" is true on M4
+and materially weaker on Zen 4, so the conclusion must not be stated host-free.
 
 ### One place rawr IS measurably behind
 
-**Allocations per lifecycle:** rawr **13–14**, CRoaring **9**, plain-list reference **3** (card 1–8,
-localized). rawr does ~50% more allocations than CRoaring while costing only ~10–40% more time — so the
-extra allocations are not proportionally expensive, but they are real and they are rawr-specific. CRoaring
-also uses `resize` (1–3 per lifecycle) where rawr uses none: different growth strategies.
+**Allocations per lifecycle** (localized, cards 1–8): rawr **13–14**, CRoaring **9**, plain-list reference
+**3**. CRoaring also uses `resize` (1–3 per lifecycle) where rawr uses none — different growth strategies.
+
+**The corresponding time gap is host-dependent:** **+11% to +50% on M4**, **+53% to +77% on Zen 4**.
+*(An earlier version said "10–40%", again M4-only.)*
 
 **This is the most actionable number in the chunk** and belongs in `48-02`'s design-candidate reasoning.
 
@@ -124,9 +130,12 @@ useful independent signal that the portable encoding is doing what it should.
 **`spread`, SMP, cardinality 16 → 20: time DROPS 8.5%** (761.21 → 696.28 ns) while **libc rises 24.3%**
 (1256.16 → 1561.77 ns) over the same step. One-per-container is monotonic on both.
 
-An allocator-specific non-monotonicity is exactly the size-class behaviour this campaign has documented
-before. **`48-02` must state monotonicity per §3, so this point needs an explanation rather than being
-smoothed** — and it is a reason the spec forbade reducing the 1–12 range to a single headline figure.
+**Zen 4 is monotonic across the same points.** The M4 behaviour is **consistent with** allocator
+size-class effects, which this campaign has documented before — but consistency is not proof, and nothing
+here isolates the mechanism. *(An earlier version of this record asserted the cause.)*
+
+**`48-02` must state monotonicity per §3, so this point needs an account rather than smoothing** — and it
+is a reason the spec forbade reducing the 1–12 range to a single headline figure.
 
 ### Cross-check against independent measurement
 
