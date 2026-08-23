@@ -185,14 +185,19 @@ lazy top-level allocation cannot touch it, because the cost is not in the top le
 CRoaring/libc". Across hosts the honest statement is **near parity** — 4% faster on M4, 6% slower on
 Zen 4.)*
 
-**The last row is the one neither summary flagged, and it matters most.** The whole-corpus gap to the
-plain list is **8.70x on M4 but only 1.97x on Zen 4** — a 4.4x swing in the headline comparison. The cause
-is the *reference*, not rawr: `reference/smp` is 2.99x slower than `reference/libc` on Zen 4 versus 1.81x
-on M4, so the plain list's own allocator sensitivity moves the target.
+**The last row is the one neither summary flagged.** The whole-corpus gap to the plain list is **8.70x on
+M4 but only 1.97x on Zen 4** — a 4.4x swing in the headline comparison — while `reference/smp` is 2.99x
+slower than `reference/libc` on Zen 4 versus 1.81x on M4.
 
-**Consequence for the decision:** the gap a redesign would chase is **not a stable quantity**. It depends
-heavily on host and on which allocator the reference is granted. That is an argument against acting on
-it, independent of the share numbers.
+> **The plain-list comparison is not a stable design target: reference performance varies substantially
+> by host and allocator, so the observed gap cannot be attributed solely to rawr's representation.**
+
+*(An earlier version of this record said "the cause is the reference, not rawr" — an over-attribution.
+The data establish that the comparison is strongly host- and allocator-conditioned and that reference
+performance contributes heavily; they do **not** isolate the reference as the sole cause.)*
+
+**Consequence for the decision:** the gap a redesign would chase is not a stable quantity, which is an
+argument against acting on it independent of the share numbers.
 
 ### Candidate evidence, as reported
 
@@ -213,8 +218,8 @@ Reasoning, all supported above:
 - ≤12 consumes **~5% of rawr/SMP lifecycle time**, so eliminating it entirely buys **~5%** on this corpus.
 - The cost is **per-container, not fixed initialization** — so **lazy top-level allocation cannot fix the
   rising curve**; only inline storage could, at real representation complexity.
-- The plain-list gap is **host-unstable** (8.70x M4 vs 1.97x Zen 4) because the reference is itself
-  allocator-sensitive.
+- The plain-list gap is **host- and allocator-conditioned** (8.70x M4 vs 1.97x Zen 4), so it is not a
+  stable design target.
 - rawr is at **near parity with CRoaring** on the realistic corpus.
 
 **The one open question that survives:** tiny sets are **17.1% of allocation calls**. A highly concurrent
@@ -225,8 +230,19 @@ reconsidered — it is not answered by anything measured here.
 **Condition for revisiting:** a real target workload shown to be overwhelmingly tiny, allocation-contentious,
 and important enough to justify the added representation complexity.
 
-**Owner decision pending** — thresholds were never pre-registered (§3), and this is a recommendation, not
-a verdict.
+### OWNER DECISION (2026-08-23) — accepted
+
+**Do not change rawr's default representation.** Keep the measurement harness. **Close spec 48.** Park
+inline small-set storage as a workload-specific idea.
+
+Evidence the owner cited as sufficient: tiny bitmaps are 77.5% of objects but ~5% of measured lifecycle
+time; fixing that tail perfectly saves ~5% on this modelled corpus; inline storage adds substantial
+representation and correctness complexity; rawr is already near CRoaring on the whole corpus.
+
+**Retained follow-up — the only one:** a **dedicated multithreaded tiny-bitmap benchmark**. The 17.1%
+allocation-call share suggests contention *could* matter, but the single-threaded measurements here
+**neither confirm nor reject it**. **No production redesign until a real concurrent workload demonstrates
+material impact.**
 
 ## Estimate
 

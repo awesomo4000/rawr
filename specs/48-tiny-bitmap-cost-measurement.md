@@ -403,6 +403,39 @@ without a result to be influenced by. The decision inputs are isolated in the la
 require **both** Q3 and Q5, which arrive in different chunks — and `48-02` **assembles** them rather than
 deciding: thresholds are the owner's call (`48-02` §3).
 
+## 11.2 OUTCOME — CLOSED. No design change. (2026-08-23)
+
+**Owner decision: do not change rawr's default representation.** Harness retained; inline small-set
+storage parked as a workload-specific idea. Full inputs in
+[48-02](48-02-mixed-corpus-and-recommendation.md).
+
+| Finding | Value |
+| --- | --- |
+| ≤12 share of **bitmaps** | 77.537% |
+| ≤12 share of **time** (SMP) | **4.591% M4 / 5.125% Zen 4** |
+| ≤12 share of **allocation calls** | 17.075% |
+| `129+`: bitmaps → time | 7.284% → **87.330%** |
+| rawr vs CRoaring, whole corpus | **near parity** — 4% faster M4, 6% slower Zen 4 |
+| Q3 ratios across cardinality 1→12 | **rising**, 5.80x → 31.64x (M4) |
+
+**Three things this measurement established that a naive benchmark would have missed:**
+
+1. **Shape, not cardinality, drives cost** — at cardinality 128 the gap ranges 12x (localized) to 77x
+   (one-per-container). A shape-free sweep would have produced a meaningless average.
+2. **The cost is per-container, not fixed initialization** — the Q3 curve *rises* across the tiny range,
+   so lazy top-level allocation cannot address it. Only inline storage could.
+3. **The plain-list comparison is not a stable design target** — reference performance varies
+   substantially by host and allocator (8.70x M4 vs 1.97x Zen 4 whole-corpus), so the gap cannot be
+   attributed solely to rawr's representation.
+
+**Retained follow-up:** a dedicated **multithreaded tiny-bitmap contention benchmark**. 17.1% of
+allocation calls sit in the tail; single-threaded measurement neither confirms nor rejects that this
+matters under contention. No production redesign until a real concurrent workload shows material impact.
+
+**The measurement-before-design discipline paid off:** the survey evidence was compelling enough that
+committing to inline storage first would have been easy, and it would have bought ~5% at real complexity
+cost.
+
 ## 12. Estimate
 
 **M** — the benchmark itself is small, but CRoaring allocation accounting, the three shapes, and the
