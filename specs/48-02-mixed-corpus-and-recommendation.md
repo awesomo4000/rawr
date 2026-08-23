@@ -120,6 +120,74 @@ the omission unexplained.
 - No board row moves; no production change; all four suites plus `check-32`, `check-docs`,
   `check-package` green.
 
+## Outcome — decision inputs assembled, no verdict taken (correct)
+
+Reports: `misc/tiny-mixed-bench-20260823-100002-summary.txt` (M4),
+`misc/tiny-mixed-bench-20260823-100806-summary.txt` (Zen 4).
+
+**Protocol verified in the artifacts:** five tuples in the measured totals; band decomposition for
+**rawr/smp and rawr/libc only** per §2.1; `0` band present as count 0 / share 0 / `N/A`; residual given as
+signed ms **and** percentage; corpus hash and realized quantiles printed (median 2, p99 4961); header
+states *"No automatic verdict or threshold is applied; the owner decides from Q3 and Q5."*
+
+### Q5 — the tail is most of the objects and almost none of the work
+
+| | value |
+|---|---:|
+| ≤12 share of **bitmaps** | **77.537%** |
+| ≤12 share of projected **time** — M4 SMP / Zen 4 SMP / M4 libc | **4.591% / 5.125% / 7.315%** |
+| ≤12 share of **requested bytes** | **5.806%** |
+| ≤12 share of **allocation calls** | **17.075%** |
+| `129+` — share of bitmaps → share of time | **7.284% → 87.330%** |
+
+**Projection residuals are small**, so the shares are trustworthy: M4 SMP **−3.527%**, M4 libc
+**+1.114%**, Zen 4 **−1.482%**.
+
+**This is why Q5 was made load-bearing.** A uniformly-tiny benchmark would have shown 5–31x gaps and read
+as urgent. Under a realistic Zipf mix the tail is ~5% of time, and **7.284% of bitmaps in the `129+` band
+account for 87% of it**.
+
+**The one number that is not small: allocation calls at 17.075%** — roughly 3.7x the tail's time share.
+The tail is allocation-dense relative to its cost. Single-threaded measurement will not show whatever that
+implies under allocator contention.
+
+### Q3 — six ratios, and they are monotonically INCREASING
+
+`spread`, rawr/SMP vs plain list, cardinalities 1, 2, 4, 6, 8, 12:
+
+- **M4:** 5.80x, 7.53x, 10.52x, 15.24x, 18.99x, 31.64x
+- **Zen 4:** 6.31x, 8.14x, 11.49x, 16.23x, 19.73x, 25.42x
+
+**Monotonically increasing on both hosts** — the required monotonicity statement, and the interpretively
+important one: **the gap widens with cardinality across the tiny range.** So this is *not* a fixed
+per-bitmap tax that amortizes. For `spread`, each added value adds a container, so it is a **per-container
+tax that never amortizes within this range**. That distinction shapes what any design would have to do:
+lazy top-level allocation cannot touch it, because the cost is not in the top level.
+
+### Whole-corpus totals — worth reading directly
+
+| tuple | M4 total | vs |
+|---|---:|---|
+| rawr/smp | 260.836 ms | — |
+| croaring/libc | 271.943 ms | **rawr/SMP is faster than CRoaring/libc** |
+| rawr/libc | 353.519 ms | **1.30x** croaring/libc, same allocator |
+| reference/smp | 29.971 ms | rawr/smp is **8.70x** the plain list |
+| reference/libc | 16.513 ms | — |
+
+**Caveat on the reference:** `reference/libc` (16.5 ms) is **1.8x faster than `reference/smp`** (30.0 ms).
+The plain list prefers libc while rawr prefers SMP. Same-allocator pairing is the right comparison and the
+spec pinned it — but a reader should know the plain-list gap would look **worse** if the reference were
+run under its own best allocator.
+
+### Candidate evidence, as reported
+
+Cardinality 1 favours **lazy top-level allocation**; from cardinality 2 upward container/header storage
+dominates, pointing at **inline small-set storage**. Consistent with `create` being a flat 40 bytes while
+create→build grows with container count. **Candidates, not requirements** — and §3's thresholds remain the
+owner's.
+
+**No decision recorded in this chunk, correctly.**
+
 ## Estimate
 
 **S/M** — one corpus, one benchmark, careful attribution and write-up.
