@@ -36,6 +36,27 @@ typedef struct roaring64_statistics_s {
     uint64_t cardinality;
 } roaring64_statistics_t;
 
+// Allocator hooks used by repository-only accounting harnesses.
+typedef void *(*roaring_malloc_p)(size_t);
+typedef void *(*roaring_realloc_p)(void *, size_t);
+typedef void *(*roaring_calloc_p)(size_t, size_t);
+typedef void (*roaring_free_p)(void *);
+typedef void *(*roaring_aligned_malloc_p)(size_t, size_t);
+typedef void (*roaring_aligned_free_p)(void *);
+
+typedef struct roaring_memory_s {
+    roaring_malloc_p malloc;
+    roaring_realloc_p realloc;
+    roaring_calloc_p calloc;
+    roaring_free_p free;
+    roaring_aligned_malloc_p aligned_malloc;
+    roaring_aligned_free_p aligned_free;
+} roaring_memory_t;
+
+void roaring_init_memory_hook(roaring_memory_t memory_hook);
+void *roaring_malloc(size_t size);
+void roaring_free(void *ptr);
+
 // Creation and destruction
 roaring_bitmap_t *roaring_bitmap_create(void);
 roaring_bitmap_t *roaring_bitmap_copy(const roaring_bitmap_t *r);

@@ -251,6 +251,40 @@ pub fn build(b: *std.Build) void {
     );
     bench_parity_worker_step.dependOn(&b.addInstallArtifact(bench_parity_worker_exe, .{}).step);
 
+    // Spec 48 fixture, lifecycle, and allocation-accounting setup checker.
+    const bench_tiny_setup_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_tiny_setup.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_tiny_setup_mod.addImport("rawr", bench_lib_mod);
+    addTranslatedCImport(b, bench_tiny_setup_mod, .{
+        .header = "tools/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_tiny_setup_exe = b.addExecutable(.{
+        .name = "bench_tiny_setup",
+        .root_module = bench_tiny_setup_mod,
+    });
+    const bench_tiny_setup_step = b.step(
+        "bench-tiny-setup",
+        "Build the spec 48 tiny-bitmap setup checker",
+    );
+    bench_tiny_setup_step.dependOn(&b.addInstallArtifact(bench_tiny_setup_exe, .{}).step);
+
+    const run_tiny_setup = b.addRunArtifact(bench_tiny_setup_exe);
+    run_tiny_setup.addArg("check");
+    const check_tiny_setup_step = b.step(
+        "check-tiny-setup",
+        "Validate spec 48 fixtures, lifecycle, and accounting",
+    );
+    check_tiny_setup_step.dependOn(&run_tiny_setup.step);
+
     // Fresh-process lazy-OR page-residency diagnosis worker.
     const bench_lazy_residency_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_lazy_or_residency.zig"),
