@@ -9,8 +9,16 @@ Produces the comparison. **No board row moves and nothing is gated on the outcom
 
 ## 1. Runs
 
-Full matrix on **M4 and Zen 4**: three datasets × seven operations × two implementations, **one process
-per cell**, ≥5 processes each, `ReleaseFast`, native CPU.
+Full matrix on **M4 and Zen 4**: three datasets × seven operations × two implementations.
+
+**Each process executes exactly one cell; at least five independent processes execute each cell.**
+*(An earlier draft said "one process per cell" and then required five per cell — contradictory.)*
+
+**Mechanically required, per host:** **42 cells** (3 × 7 × 2) and, at `RUNS=5`, **exactly 210 process
+results**. The controller validates these counts against its worker manifest and **fails on any
+shortfall** — an omitted operation must not yield a plausible partial report.
+
+`ReleaseFast`, native CPU.
 
 ## 2. Artifact audit — before reading any number
 
@@ -23,12 +31,33 @@ Confirm from the emitted artifacts, not from the harness source:
 - **one process per cell** — the run manifest shows no cell sharing a process;
 - allocator pairing, host, and denominators present in the header.
 
+### 2.1 Cross-host, not just within-host
+
+The above checks run inside each host's controller. **Also compare across M4 and Zen 4:**
+
+- **corpus fingerprints identical** — both hosts must have loaded the same corpus;
+- **semantic digests identical** — both hosts must have computed the same results;
+- **source cardinality totals identical**;
+- **per-implementation container histograms identical**.
+
+A per-host audit passing twice does not establish that the two hosts measured the same thing.
+
 **Any failure here invalidates the timings.** Audit first, interpret second.
 
 ## 3. Explicit comparison with the contaminated scratch run
 
-The §1 table in the toplevel came from a run with **three known defects**: all seven operations in one
-process (allocator conditioning), unequal construction paths, and shell-glob corpus ordering.
+The §1 table in the toplevel came from a run with known methodology problems. **Record precisely what
+changed and what did not** — an earlier draft listed construction as a corrected defect, which is wrong:
+
+| scratch run | this harness | status |
+| --- | --- | --- |
+| all seven operations in **one process** | **one cell per process** | **corrected** |
+| corpus order from **shell glob** | **bytewise sort**, pinned, fingerprinted | **pinned** — order may be unchanged, but it is now deterministic and verified rather than inherited |
+| rawr `fromSorted` vs CRoaring `create` + `add_many` | **the same two paths** | **NOT corrected** — pinned in `50-01` §2 and made **observable** via container histograms |
+
+**So unequal construction remains a live confound**, not a resolved one. If the histograms show materially
+different container representations, the OR/ANDNOT comparison is between two different starting states and
+must be reported that way.
 
 **Report, per operation and dataset, the clean result beside the scratch result**, and state plainly
 whether each of the three preliminary claims survives:

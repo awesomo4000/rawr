@@ -71,10 +71,19 @@ running it first would condition SMP against the measured operation.
 4. **source cardinality total identical**, and **container histogram identical within each implementation
    across repetitions** — these catch **setup nondeterminism** that no digest would reveal.
 
+   **Source cardinality must be read from the constructed bitmap objects**, not from the parsed input
+   count. The parsed count would agree even if construction dropped or duplicated values, which is
+   precisely the failure this check exists to catch.
+
 **Serialized bytes are reported, not required equal** — equivalent sets have multiple valid portable
 encodings (spec 46-00). Each implementation deserializes and semantically validates its own output.
 
 ## 6. Controller and reporting
+
+**`scripts/run-realdata-bench.sh`**, and its **worker manifest is the source of truth**: it enumerates
+every `(implementation, dataset, operation)` cell, and the controller **validates the exact expected row
+and process counts** before reporting. Without that, an omitted operation yields a plausible-looking
+partial report rather than a failure.
 
 - **≥5 processes** per cell; report **median of process medians** and **full range**.
 - **Ratios from aggregates:** `median(rawr process medians) / median(CRoaring process medians)` —
