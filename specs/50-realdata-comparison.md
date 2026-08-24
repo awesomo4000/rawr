@@ -48,8 +48,10 @@ legal status generally.
 - downloads from `RoaringBitmap/real-roaring-datasets` **pinned to commit
   `929d8088817840f43ffaa8592b49373b5a2d43b2`** — a branch URL is not reproducible;
 - **downloads to a temporary file, verifies the pinned SHA-256, then atomically renames** into
-  `misc/realdata/`. Verification happens **before extraction**, so an interrupted download can never be
-  mistaken for a valid corpus;
+  `misc/realdata/`. Verification happens **before extraction**;
+- **extracts into a temporary directory and atomically renames that too** — atomic archive download alone
+  does not protect against an interrupted *extraction* leaving a partial corpus that looks valid;
+- **hashes portably**: `sha256sum` when present, falling back to `shasum -a 256` (macOS);
 - is idempotent: skips an archive already present and verified;
 - defaults to the small three; larger sets **opt-in by name**.
 
@@ -59,7 +61,12 @@ legal status generally.
 | `census1881.zip` | `68f4dc3a7cea6821d9cd844e027f313b5c0089c2252a3b689c0f6949e5d3c9a3` |
 | `wikileaks-noquotes.zip` | `012d941bbd2c3fb85452233a9b82be6eb3ab4b324719425b876d30423279be99` |
 
-`census-income`, `weather_sept_85`, `dimension_*` are opt-in — `weather_sept_85` alone is 30 MB zipped.
+**The first implementation supports exactly these three names and no others.** *(An earlier draft
+accepted `dimension_*` as an open-ended argument, which is incoherent under a pinned-corpus protocol —
+an unpinned archive has no digest and no expected entry count.)*
+
+Adding `census-income`, `weather_sept_85`, or `dimension_*` later means **adding a manifest entry**:
+name, SHA-256, and expected entry count. **An unknown name is rejected, not fetched.**
 
 **Record provenance in `docs/`**: source repository, the pinned commit, that the repository states no
 dataset license at that revision, and that this is why the data is fetched rather than vendored.
@@ -92,8 +99,31 @@ their internal text format): one file per bitmap, single line, comma-separated a
 | toArray | `toArray` into a caller buffer | `roaring_bitmap_to_uint32_array` |
 | serialize + deserialize | `serialize` → `deserialize` | `portable_serialize` → `portable_deserialize_safe` |
 
-Results are constructed and freed inside the timed region on both sides, so allocator behaviour is part
-of what is measured — that is the point.
+Result allocation and teardown are **inside** the timed region **where applicable** — `toArray` writes
+into a preallocated caller buffer and allocates nothing.
+
+### 3.0 Input construction — pinned, because it can fake a result
+
+**Container representation strongly affects OR and ANDNOT cost**, so how the source bitmaps are built is
+part of the experiment, not setup detail. A construction change could otherwise masquerade as an
+optimisation.
+
+| | path |
+| --- | --- |
+| rawr | `RoaringBitmap.fromSorted(alloc, values)` |
+| CRoaring | `roaring_bitmap_create()` + `roaring_bitmap_add_many(n, values)` |
+
+These are each library's bulk path for sorted input. **They are not guaranteed to produce identical
+container types** — if the histograms differ materially, that is a **finding to report**, not something to
+smooth over.
+
+- **`runOptimize` is NOT called** on either side in this implementation. Stated explicitly so it is a
+  decision rather than an omission; a run-optimized arm is a **separate future variant**, not a silent
+  change.
+- **Construction preserves archive order** (§2.2).
+- **Report outside timing, per dataset and per implementation:** source cardinality total and a
+  **container-type histogram** (array / bitset / run). These go in the header so a reader can see the two
+  sides started from comparable representations.
 
 ### 3.1 Allocators — stated, not incidental
 
@@ -134,17 +164,33 @@ Report **both** total cycle time and time ÷ denominator.
 
 - **Outside** timing: corpus load and parse, bitmap construction, caller output buffers, the pointer array
   passed to `orMany` / `or_many`.
-- **Inside** timing: result allocation and teardown for every operation that produces one — allocator
-  behaviour is part of what is being compared.
+- **Inside** timing: result allocation and teardown **where applicable** — allocator behaviour is part of
+  what is being compared. **`toArray` is the exception**: it writes into a preallocated caller buffer and
+  allocates nothing.
 
 ## 5. Correctness gate — per operation, not aggregate
 
 *(An earlier draft compared only total-union cardinality, total value count, and total serialized bytes.
 Those **do not validate pairwise OR or ANDNOT at all** — 199 results per row went unchecked.)*
 
-**Emit a deterministic semantic digest for every operation**, computed **outside** timing, covering for
-each result: its **boundary** (which pair produced it), its **cardinality**, and its **ordered values**.
-Compare digests between implementations. A mismatch **fails the run**.
+**Emit a deterministic semantic digest for every operation**, covering for each result: its **boundary**
+(which pair produced it), its **cardinality**, and its **ordered values**.
+
+**Compute it AFTER all timed cycles complete — never before.** A validation pass allocates and frees the
+same result shapes as the measured operation, so running it first would condition SMP and contaminate
+exactly what is being measured. *(An earlier draft said only "outside timing", which permits before.)*
+
+**Digest comparison happens in the controller, not in the worker**, and covers two things:
+
+1. **rawr vs CRoaring** — a mismatch **fails the run**;
+2. **repeat consistency within each implementation** — the same implementation must produce the same
+   digest across its ≥5 processes. A single implementation disagreeing with itself means nondeterminism,
+   and no timing from that cell is interpretable.
+
+**Digest algorithm, pinned for stability across hosts and Zig versions:** FNV-1a 64, fed
+**little-endian-framed** — for each result, `u32` pair index, `u64` cardinality, then each `u32` value in
+ascending order. No `std.hash` default that may change, no pointer or address input, no host-endian
+writes.
 
 **Serialized bytes are reported, not required to match.** Equivalent sets have multiple valid portable
 encodings, and rawr and CRoaring may legitimately choose different container representations — the same
@@ -161,8 +207,9 @@ semantically validates it**, and the byte counts are reported side by side as da
 
 ## 7. Acceptance
 
-- `scripts/fetch-realdata.sh` downloads, **verifies pinned SHA-256s**, is idempotent, and defaults to the
-  small three; larger sets opt-in by name.
+- `scripts/fetch-realdata.sh` downloads from the **pinned commit**, **verifies pinned SHA-256s before
+  extraction** with portable hashing, uses temp-file **and** temp-directory atomic renames, is idempotent,
+  and **rejects any name not in the manifest**.
 - **No dataset file is committed**; `misc/realdata/` confirmed gitignored.
 - Provenance recorded in `docs/`: pinned commit, and that the repository states no dataset license at
   that revision.
@@ -170,9 +217,12 @@ semantically validates it**, and the byte counts are reported side by side as da
 - **Corpus ordering pinned per §2.2** — bytewise entry sort, exactly 200 entries, ascending-`u32`
   validation, ordered fingerprint reported.
 - `bench-realdata` builds via the existing CRoaring wiring; not in `.paths`.
-- All §3 operations implemented identically on both sides.
-- **§5 per-operation semantic digests** computed outside timing and compared; a mismatch **fails the
-  run**. Serialized bytes reported, not required equal; each side self-validates its own output.
+- All §3 operations implemented identically on both sides; **§3.0 construction pinned**, `runOptimize`
+  not called, **container-type histograms reported** per dataset and implementation.
+- **§5 per-operation semantic digests computed AFTER all timed cycles**, compared in the controller for
+  **both** rawr-vs-CRoaring **and** repeat consistency within each implementation; a mismatch **fails the
+  run**. Digest algorithm as pinned. Serialized bytes reported, not required equal; each side
+  self-validates its own output.
 - **§4 isolation honoured**: one process per (implementation, dataset, operation); warmup/cycle/median
   policy and per-operation denominators reported.
 - Protocol per §4; **allocator pairing stated in the report header**.
