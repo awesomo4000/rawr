@@ -268,6 +268,15 @@ semantically validates it**, and the byte counts are reported side by side as da
   isolation removes the OR/ANDNOT gap.
 - No board row moves; existing suites and checks green.
 
+## 7.1 Chunking — three chunks
+
+- **[50-00](50-00-fetch-and-corpus.md)** — pinned fetcher, provenance, deterministic loader, fingerprint.
+- **[50-01](50-01-harness-and-protocol.md)** — worker/controller, operations, timing boundaries, digests.
+- **[50-02](50-02-runs-and-audit.md)** — two-host runs, artifact audit, explicit scratch comparison.
+
+Corpus correctness lands before any timing exists; the instrument is verified before it produces a
+comparison; and the comparison is audited before it is interpreted.
+
 ## 8. Estimate
 
 **M** — the scratch harness builds, but this needs a worker/controller split, cross-process digest and
