@@ -50,7 +50,9 @@ legal status generally.
 - **downloads to a temporary file, verifies the pinned SHA-256, then atomically renames** into
   `misc/realdata/`. Verification happens **before extraction**;
 - **extracts into a temporary directory and atomically renames that too** — atomic archive download alone
-  does not protect against an interrupted *extraction* leaving a partial corpus that looks valid;
+  does not protect against an interrupted *extraction* leaving a partial corpus that looks valid. **The
+  temporary directory must live under the destination's parent** (`misc/realdata/`), so the rename is
+  same-filesystem and therefore actually atomic;
 - **hashes portably**: `sha256sum` when present, falling back to `shasum -a 256` (macOS);
 - is idempotent: skips an archive already present and verified;
 - defaults to the small three; larger sets **opt-in by name**.
@@ -79,8 +81,14 @@ dataset license at that revision, and that this is why the data is fetched rathe
   scratch run used shell glob, which orders `csv0, csv1, csv10, csv100, …`)*;
 - **require exactly 200 entries** per dataset, fail otherwise;
 - **validate each file is ascending, unique `u32`** on load;
-- emit an **ordered corpus fingerprint** and report it in the header, so two runs can be shown to have
-  operated on the same sequence.
+- emit an **ordered corpus fingerprint** and report it in the header.
+
+**Fingerprint algorithm, pinned:** FNV-1a 64 with little-endian framing — for each bitmap in order:
+`u32` ordinal, `u64` value count, then each `u32` value ascending.
+
+**The controller must confirm the fingerprint is identical across every implementation and every process
+for that dataset**, and fail otherwise. Two sides operating on different corpora would produce timings
+that look comparable and are not.
 
 **Format** (established by inspection; upstream documents the archives as bitmap-testing data but not
 their internal text format): one file per bitmap, single line, comma-separated ascending `u32`.
@@ -160,10 +168,22 @@ across rows without them:
 
 Report **both** total cycle time and time ÷ denominator.
 
+**Ratios are computed from aggregates, never from per-run ratios:**
+
+```
+ratio = median(rawr process medians) / median(CRoaring process medians)
+```
+
+**Not** the median or mean of per-run ratios — those differ, and averaging ratios overweights fast runs.
+Same rule the parity board uses.
+
 **Setup boundaries, pinned:**
 
-- **Outside** timing: corpus load and parse, bitmap construction, caller output buffers, the pointer array
-  passed to `orMany` / `or_many`.
+- **Before** timing — only what is unavoidable: corpus load and parse, bitmap construction, caller output
+  buffers, and the pointer array passed to `orMany` / `or_many`.
+- **After timing, or in a separate process:** metadata output, container-type histogram computation and
+  reporting, and semantic validation. **Nothing that walks the bitmaps may run before the timed cycles** —
+  it would warm caches and condition the allocator against the very operation being measured.
 - **Inside** timing: result allocation and teardown **where applicable** — allocator behaviour is part of
   what is being compared. **`toArray` is the exception**: it writes into a preallocated caller buffer and
   allocates nothing.
@@ -188,8 +208,11 @@ exactly what is being measured. *(An earlier draft said only "outside timing", w
    and no timing from that cell is interpretable.
 
 **Digest algorithm, pinned for stability across hosts and Zig versions:** FNV-1a 64, fed
-**little-endian-framed** — for each result, `u32` pair index, `u64` cardinality, then each `u32` value in
-ascending order. No `std.hash` default that may change, no pointer or address input, no host-endian
+**little-endian-framed** — for each result: `u32` **result index**, `u64` cardinality, then each `u32`
+value in ascending order.
+
+*(**Result index**, not "pair index": it is the pair index for adjacent-pair operations, the **source
+index** for `toArray` and serialize+deserialize, and **zero** for total union.)* No `std.hash` default that may change, no pointer or address input, no host-endian
 writes.
 
 **Serialized bytes are reported, not required to match.** Equivalent sets have multiple valid portable
@@ -213,7 +236,6 @@ semantically validates it**, and the byte counts are reported side by side as da
 - **No dataset file is committed**; `misc/realdata/` confirmed gitignored.
 - Provenance recorded in `docs/`: pinned commit, and that the repository states no dataset license at
   that revision.
-- **Fetch verifies before extraction**, via temp file + atomic rename.
 - **Corpus ordering pinned per §2.2** — bytewise entry sort, exactly 200 entries, ascending-`u32`
   validation, ordered fingerprint reported.
 - `bench-realdata` builds via the existing CRoaring wiring; not in `.paths`.
@@ -224,7 +246,12 @@ semantically validates it**, and the byte counts are reported side by side as da
   run**. Digest algorithm as pinned. Serialized bytes reported, not required equal; each side
   self-validates its own output.
 - **§4 isolation honoured**: one process per (implementation, dataset, operation); warmup/cycle/median
-  policy and per-operation denominators reported.
+  policy and per-operation denominators reported; **ratios computed from aggregate medians, not from
+  per-run ratios**.
+- **Corpus fingerprint confirmed identical** across every implementation and process for a dataset;
+  mismatch fails the run.
+- **Metadata, histograms, and validation run after timing or in a separate process** — nothing that walks
+  the bitmaps precedes the timed cycles.
 - Protocol per §4; **allocator pairing stated in the report header**.
 - **Measurements are valid per §4 and §5.** **No required direction of result.** *(An earlier draft
   demanded the scratch run's direction be reproduced — that would make the acceptance criterion a
@@ -235,5 +262,6 @@ semantically validates it**, and the byte counts are reported side by side as da
 
 ## 8. Estimate
 
-**S** — the harness exists in scratch form and builds; the work is the fetch script, provenance, the
-correctness gate, and the protocol.
+**M** — the scratch harness builds, but this needs a worker/controller split, cross-process digest and
+fingerprint enforcement, atomic fetching with portable hashing, and per-operation process isolation with
+portable reporting. *(An earlier estimate of S predated those requirements.)*
