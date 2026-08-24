@@ -86,9 +86,15 @@ dataset license at that revision, and that this is why the data is fetched rathe
 **Fingerprint algorithm, pinned:** FNV-1a 64 with little-endian framing — for each bitmap in order:
 `u32` ordinal, `u64` value count, then each `u32` value ascending.
 
-**The controller must confirm the fingerprint is identical across every implementation and every process
-for that dataset**, and fail otherwise. Two sides operating on different corpora would produce timings
-that look comparable and are not.
+**The controller must confirm, across every implementation and every process for that dataset:**
+
+- the **corpus fingerprint** is identical;
+- the **source cardinality total** is identical;
+- the **container-type histogram** is identical *within* each implementation across its repetitions.
+
+Fail otherwise. The fingerprint catches a different corpus; the latter two catch **setup
+nondeterminism** — construction that varies run to run even when the semantic input is equal, which would
+make timings incomparable without any digest ever disagreeing.
 
 **Format** (established by inspection; upstream documents the archives as bitmap-testing data but not
 their internal text format): one file per bitmap, single line, comma-separated ascending `u32`.
@@ -182,8 +188,10 @@ Same rule the parity board uses.
 - **Before** timing — only what is unavoidable: corpus load and parse, bitmap construction, caller output
   buffers, and the pointer array passed to `orMany` / `or_many`.
 - **After timing, or in a separate process:** metadata output, container-type histogram computation and
-  reporting, and semantic validation. **Nothing that walks the bitmaps may run before the timed cycles** —
-  it would warm caches and condition the allocator against the very operation being measured.
+  reporting, and semantic validation. **No additional validation, metadata, or reporting pass may run
+  before the warmup/timed protocol** — such a pass would warm caches and condition the allocator against
+  the very operation being measured. *(An earlier draft said "nothing that walks the bitmaps", which
+  contradicts itself: the required warmup cycle walks them by design.)*
 - **Inside** timing: result allocation and teardown **where applicable** — allocator behaviour is part of
   what is being compared. **`toArray` is the exception**: it writes into a preallocated caller buffer and
   allocates nothing.
