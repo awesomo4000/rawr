@@ -9,9 +9,10 @@ clean checkout**, without committing any dataset to the repository.
 
 ## 1. Why
 
-Every row on the parity board is **synthetic**. The standard `real-roaring-datasets` corpora are what
-CRoaring and the Java implementation tune against, which makes them the closest thing to a shared
-baseline — and rawr has never been run on them.
+Every row on the parity board is **synthetic**. The `real-roaring-datasets` corpora are **used by the
+Roaring benchmark ecosystem**, which makes them the closest thing to a shared baseline — and rawr has
+never been run on them. *(An earlier draft said they are what CRoaring and Java "tune against"; no source
+here establishes that.)*
 
 **A scratch run produced a result worth being able to repeat** (M4, ReleaseFast, rawr/SMP vs
 CRoaring/libc, 3 process reps × 7 internal — **preliminary, not board-grade**):
@@ -27,24 +28,30 @@ CRoaring/libc, 3 process reps × 7 internal — **preliminary, not board-grade**
 | serialize+deserialize | **0.53x** | 0.98x | **0.72x** |
 
 rawr wins most operations. **Two density-dependent losses — pairwise OR and ANDNOT on the denser sets —
-while n-way union sits at 1.02–1.10x.** That contrast is the reason this harness should exist rather than
-stay in a scratch directory.
+while n-way union sits at 1.02–1.10x.**
+
+**That table may be contaminated, which is itself an argument for this spec.** The scratch run executed
+**all seven operations in one process, in order**, so AND conditioned the allocator before OR ran. §4's
+per-operation process isolation exists precisely because the campaign has measured that effect before
+(spec 35: 1.155x vs 1.727x from process history alone). **Treat the OR/ANDNOT gap as a lead to verify,
+not a result.**
 
 ## 2. Data — downloaded, never committed
 
-**No dataset file may enter the repository.** The upstream README states **no license**, and the corpora
-are ~180 MB zipped.
+**No dataset file may enter the repository.** The corpora are ~180 MB zipped, and **the upstream
+repository states no dataset license as of revision `929d8088817840f43ffaa8592b49373b5a2d43b2`
+(2021-06-25)** — the phrasing matters: this is the state of that revision, not a claim about the data's
+legal status generally.
 
-`scripts/fetch-realdata.sh`:
+### 2.1 `scripts/fetch-realdata.sh`
 
-- downloads from `RoaringBitmap/real-roaring-datasets` into **`misc/realdata/`** (`misc/` is already
-  gitignored);
-- **verifies a pinned SHA-256 per archive** and fails loudly on mismatch — corpus drift must not silently
-  change results;
+- downloads from `RoaringBitmap/real-roaring-datasets` **pinned to commit
+  `929d8088817840f43ffaa8592b49373b5a2d43b2`** — a branch URL is not reproducible;
+- **downloads to a temporary file, verifies the pinned SHA-256, then atomically renames** into
+  `misc/realdata/`. Verification happens **before extraction**, so an interrupted download can never be
+  mistaken for a valid corpus;
 - is idempotent: skips an archive already present and verified;
-- takes an optional dataset list, defaulting to the small three.
-
-Pinned digests for the initial set:
+- defaults to the small three; larger sets **opt-in by name**.
 
 | archive | SHA-256 |
 | --- | --- |
@@ -52,14 +59,24 @@ Pinned digests for the initial set:
 | `census1881.zip` | `68f4dc3a7cea6821d9cd844e027f313b5c0089c2252a3b689c0f6949e5d3c9a3` |
 | `wikileaks-noquotes.zip` | `012d941bbd2c3fb85452233a9b82be6eb3ab4b324719425b876d30423279be99` |
 
-Larger sets (`census-income`, `weather_sept_85`, `dimension_*`) are **opt-in by name**, not default —
-`weather_sept_85` alone is 30 MB zipped.
+`census-income`, `weather_sept_85`, `dimension_*` are opt-in — `weather_sept_85` alone is 30 MB zipped.
 
-**Record provenance in `docs/`**: source repository, that no license is stated, and that this is why the
-data is fetched rather than vendored.
+**Record provenance in `docs/`**: source repository, the pinned commit, that the repository states no
+dataset license at that revision, and that this is why the data is fetched rather than vendored.
 
-**Format** (established by inspection, since upstream does not document it): one file per bitmap, a
-single line, comma-separated ascending `u32`. 200 bitmaps per dataset.
+### 2.2 Corpus ordering is load-bearing
+
+**Adjacent-pair operations mean bitmap order changes what is measured.** Pin it:
+
+- **sort archive entry names bytewise** — do not rely on shell glob order or filesystem order *(the
+  scratch run used shell glob, which orders `csv0, csv1, csv10, csv100, …`)*;
+- **require exactly 200 entries** per dataset, fail otherwise;
+- **validate each file is ascending, unique `u32`** on load;
+- emit an **ordered corpus fingerprint** and report it in the header, so two runs can be shown to have
+  operated on the same sequence.
+
+**Format** (established by inspection; upstream documents the archives as bitmap-testing data but not
+their internal text format): one file per bitmap, single line, comma-separated ascending `u32`.
 
 ## 3. The harness
 
@@ -81,8 +98,10 @@ of what is measured — that is the point.
 ### 3.1 Allocators — stated, not incidental
 
 **rawr uses `std.heap.smp_allocator`; CRoaring uses its default libc `malloc`** (no memory hooks
-installed). This is a **cross-allocator comparison by construction** — each library on the allocator it
-would actually be deployed with, matching how the parity board pairs rawr/SMP against CRoaring/libc.
+installed). This is a **cross-allocator comparison by construction**, and it is **this project's canonical
+comparison pairing** — rawr/SMP versus CRoaring/default-libc, as the parity board uses. *(Not "the
+allocator it would actually be deployed with": rawr takes a caller-supplied allocator, so it has no
+inherent one.)*
 
 Say so in the report header. A reader must not mistake it for a same-allocator measurement.
 
@@ -90,22 +109,47 @@ Say so in the report header. A reader must not mistake it for a same-allocator m
 
 ## 4. Protocol
 
-- **Fresh process per (implementation, dataset)** — never both implementations in one process.
-- **≥5 process runs**, report **median and full range**. *(The scratch run used 3; that is why its numbers
-  are marked preliminary.)*
+**Fresh process per `(implementation, dataset, operation)`** — *not* per implementation/dataset. Running
+several operations in one process lets earlier ones condition SMP allocator state, which is the exact
+artifact spec 35 measured (1.155x where canonical read 1.727x). One operation per process, always.
+
+**Per-process timing, pinned:**
+
+- **1 warmup cycle, then 7 timed cycles**; take the **true median** of the 7.
+- **≥5 processes** per cell; report the **median of process medians** and the **full range**.
 - `ReleaseFast`, native CPU, host recorded in the header.
-- Report **µs per operation** plus the **rawr ÷ CRoaring ratio**.
 
-## 5. Correctness gate
+**Denominators differ per operation and must be reported explicitly** — a per-op total is not comparable
+across rows without them:
 
-**Both implementations must agree**, checked outside timing, and the run **fails** if they do not:
+| operation | operations per cycle |
+| --- | --- |
+| successive AND / OR / ANDNOT / XOR | **199** (adjacent pairs over 200 bitmaps) |
+| toArray, serialize+deserialize | **200** |
+| total union | **1** |
 
-- total-union cardinality;
-- total value count from `toArray`;
-- total serialized bytes.
+Report **both** total cycle time and time ÷ denominator.
 
-All three matched exactly in the scratch run across all three datasets. This is what makes the timing
-comparison like-for-like rather than a comparison of two different computations.
+**Setup boundaries, pinned:**
+
+- **Outside** timing: corpus load and parse, bitmap construction, caller output buffers, the pointer array
+  passed to `orMany` / `or_many`.
+- **Inside** timing: result allocation and teardown for every operation that produces one — allocator
+  behaviour is part of what is being compared.
+
+## 5. Correctness gate — per operation, not aggregate
+
+*(An earlier draft compared only total-union cardinality, total value count, and total serialized bytes.
+Those **do not validate pairwise OR or ANDNOT at all** — 199 results per row went unchecked.)*
+
+**Emit a deterministic semantic digest for every operation**, computed **outside** timing, covering for
+each result: its **boundary** (which pair produced it), its **cardinality**, and its **ordered values**.
+Compare digests between implementations. A mismatch **fails the run**.
+
+**Serialized bytes are reported, not required to match.** Equivalent sets have multiple valid portable
+encodings, and rawr and CRoaring may legitimately choose different container representations — the same
+constraint established in spec 46-00. Instead, **each implementation deserializes its own output and
+semantically validates it**, and the byte counts are reported side by side as data.
 
 ## 6. Out of scope
 
@@ -120,13 +164,23 @@ comparison like-for-like rather than a comparison of two different computations.
 - `scripts/fetch-realdata.sh` downloads, **verifies pinned SHA-256s**, is idempotent, and defaults to the
   small three; larger sets opt-in by name.
 - **No dataset file is committed**; `misc/realdata/` confirmed gitignored.
-- Provenance recorded in `docs/`, including the absent license.
+- Provenance recorded in `docs/`: pinned commit, and that the repository states no dataset license at
+  that revision.
+- **Fetch verifies before extraction**, via temp file + atomic rename.
+- **Corpus ordering pinned per §2.2** — bytewise entry sort, exactly 200 entries, ascending-`u32`
+  validation, ordered fingerprint reported.
 - `bench-realdata` builds via the existing CRoaring wiring; not in `.paths`.
 - All §3 operations implemented identically on both sides.
-- **§5 correctness gate enforced and passing**, with a failure actually failing the run.
+- **§5 per-operation semantic digests** computed outside timing and compared; a mismatch **fails the
+  run**. Serialized bytes reported, not required equal; each side self-validates its own output.
+- **§4 isolation honoured**: one process per (implementation, dataset, operation); warmup/cycle/median
+  policy and per-operation denominators reported.
 - Protocol per §4; **allocator pairing stated in the report header**.
-- Results reproduce the scratch run's direction: rawr ahead on AND/XOR, behind on dense pairwise
-  OR/ANDNOT, near parity on n-way union.
+- **Measurements are valid per §4 and §5.** **No required direction of result.** *(An earlier draft
+  demanded the scratch run's direction be reproduced — that would make the acceptance criterion a
+  pre-committed conclusion, and a correct measurement is free to overturn a preliminary one.)* **Record
+  any disagreement with the scratch table explicitly**, including the possibility that per-operation
+  isolation removes the OR/ANDNOT gap.
 - No board row moves; existing suites and checks green.
 
 ## 8. Estimate
