@@ -28,7 +28,9 @@ Confirm from the emitted artifacts, not from the harness source:
 - **source cardinality totals identical**; **container histograms identical within each implementation**
   across repetitions;
 - **semantic digests match** rawr ↔ CRoaring, and each implementation agrees with itself;
-- **one process per cell** — the run manifest shows no cell sharing a process;
+- **no process reports more than one cell** — verified from the run manifest. *(Phrased this way
+  deliberately: "one process per cell" reads as a cap and contradicts the ≥5-processes-per-cell
+  requirement.)*
 - allocator pairing, host, and denominators present in the header.
 
 ### 2.1 Cross-host, not just within-host

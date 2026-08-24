@@ -63,7 +63,11 @@ Emitted in the report header. `50-01`'s controller enforces it.
 - Loader per §3 — bytewise ordering, 200-entry check, ascending-`u32` validation.
 - Fingerprint per §4, stable across two separate processes on the same host.
 - **Negative controls — each must seed the defect the guard actually catches.** A guard never seen to
-  fail is not known to work, and a control that exercises the wrong guard proves nothing:
+  fail is not known to work, and a control that exercises the wrong guard proves nothing.
+
+  **Run every control against a disposable copy of the archive and extraction — never against the
+  accepted cached corpus.** Mutating the cache would leave a corrupted corpus behind for later runs, and
+  a measurement harness must not damage its own inputs to test itself.
 
   | seeded defect | guard that must fire |
   | --- | --- |
