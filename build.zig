@@ -52,6 +52,7 @@ pub fn build(b: *std.Build) void {
     addCheck32Step(b);
     addCheckDocsStep(b);
     addCheckPackageStep(b);
+    addRealdataCorpusSteps(b, target);
     addCrossWidthFixtureSteps(b, lib_mod, target);
 
     // Benchmark executable (always ReleaseFast, including the library)
@@ -961,6 +962,36 @@ pub fn build(b: *std.Build) void {
         "git", "archive", "--format=tar.gz", "--prefix=rawr/", "HEAD", "-o", "rawr.tar.gz",
     });
     tarball_step.dependOn(&tarball_cmd.step);
+}
+
+fn addRealdataCorpusSteps(b: *std.Build, target: std.Build.ResolvedTarget) void {
+    const corpus_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/realdata_corpus.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const run_corpus_tests = b.addRunArtifact(corpus_tests);
+    const test_step = b.step(
+        "check-realdata-loader",
+        "Test the deterministic external real-data corpus loader",
+    );
+    test_step.dependOn(&run_corpus_tests.step);
+
+    const checker = b.addExecutable(.{
+        .name = "realdata_corpus_check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/check_realdata_corpus.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const checker_step = b.step(
+        "realdata-corpus-check",
+        "Build the external real-data corpus checker",
+    );
+    checker_step.dependOn(&b.addInstallArtifact(checker, .{}).step);
 }
 
 fn addCheck32Step(b: *std.Build) void {
