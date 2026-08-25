@@ -104,6 +104,60 @@ partial report rather than a failure.
 - No board row moves; existing suites and checks green.
 - **No comparison result reported** — that is `50-02`.
 
+## Verification record — implemented, reviewed, ACCEPTED
+
+Added `src/bench_realdata.zig`, `scripts/run-realdata-bench.sh`,
+`scripts/check-realdata-protocol.sh`, `scripts/validate-realdata-results.awk`.
+
+**Checked here, not taken on report:**
+
+| item | result |
+| --- | --- |
+| manifest shape | 63 lines = **21 ROW + 42 TUPLE** ✓ |
+| controller count guard | `run-realdata-bench.sh:49` rejects anything but 21 rows / 42 tuples; `expected_processes = tuple_count * runs` ✓ |
+| construction pinned | header prints `rawr=fromSorted, CRoaring=create+add_many, runOptimize=off` ✓ |
+| ordering: timing then validation | `measureRawr` → `validateRawr` → `metadata()`; histogram computed after timing ✓ |
+| `toArray` exception | output buffer allocated before the timed region; other ops allocate their validation buffer after ✓ |
+| source cardinality | read from constructed bitmaps via `sources.metadata()`, compared against `corpus.total_values` ✓ |
+| package | `check-package: OK (33 allowlisted files)`, `bench_realdata` not in `.paths` ✓ |
+
+**All six seeded controller violations fire the intended guard** (`check-realdata-protocol.sh`).
+`expect_failure` asserts the *expected* error name, so a run that failed for the wrong reason would not
+pass:
+
+```
+caught cross-digest: DigestCrossImplementationMismatch
+caught repeat-digest: DigestRepeatMismatch
+caught fingerprint:  CorpusFingerprintMismatch
+caught cardinality:  SourceCardinalityMismatch
+caught histogram:    HistogramRepeatMismatch
+caught process-count: ProcessCountMismatch
+```
+
+### The construction confound is resolved, and in rawr's favour
+
+`50-02` §3 flagged unequal construction paths as a **live confound**. The histograms say they are not:
+
+| dataset | arrays | bitsets | runs | both sides agree |
+| --- | ---: | ---: | ---: | --- |
+| uscensus2000 | 2221 | 0 | 0 | **yes** |
+| census1881 | 1459 | 5 | 0 | **yes** |
+| wikileaks-noquotes | 1892 | 0 | 0 | **yes** |
+
+`fromSorted` and `create + add_many` produce **identical container representations** on all three corpora,
+and both sides produce the same semantic digest. So the OR/ANDNOT comparison starts from the same state,
+and **one of the three scratch-run confounds is now measured away** rather than argued away. `50-02` should
+record this instead of repeating the warning.
+
+### Accepted limitation
+
+The six controls are all **controller-level**. The **timing-boundary properties** — validation after
+timing, `toArray` buffer preallocated, no metadata pass before the warmup/timed protocol — are properties
+of code order with no runtime guard that could catch a regression. They were verified by reading. Worth
+knowing that a future edit could reorder them silently.
+
+**No comparison result recorded**, per scope.
+
 ## Estimate
 
 **M** — worker/controller split, cross-process enforcement, and the digest protocol.
