@@ -95,6 +95,55 @@ different representations, that shapes what any follow-up would even be about.
 - Existing suites and checks green.
 - Outcome recorded in the spec, including "artifact" if that is what it is.
 
+## Outcome — clean run complete, preliminary claims largely overturned
+
+Full tables in `docs/realdata-benchmarks.md`. 42 tuples x 5 processes = **210 process results per host**,
+both hosts, cross-host audit green via the new `scripts/audit-realdata-hosts.sh` (with its own seeded
+mismatch control).
+
+**The scratch table did not survive contact with the clean protocol.** Of the three preliminary claims,
+one held, one became host-conditioned, one was overturned:
+
+| claim | verdict |
+| --- | --- |
+| rawr ahead on AND and XOR | **split.** XOR held everywhere. **AND reverses on every dataset**: faster on M4 (0.545x / 0.741x / 0.701x), slower on Zen 4 (1.849x / 1.130x / 1.148x) |
+| rawr behind on dense pairwise OR/ANDNOT | **host-conditioned.** Only `wikileaks-noquotes` loses on both hosts. `census1881` reverses to **0.549x / 0.595x** on Zen 4 |
+| n-way union at parity | **overturned.** M4 spans 1.036x-1.300x; Zen 4 spans 0.528x-1.109x |
+
+### The one lead that survives both hosts
+
+`wikileaks-noquotes` pairwise OR and ANDNOT:
+
+| | M4 | Zen 4 |
+| --- | ---: | ---: |
+| OR | 2.586x | 2.682x |
+| ANDNOT | 2.005x | 4.073x |
+
+That is the finding worth a follow-up spec. **Density does not explain it** — `census1881` holds more
+values and reverses on Zen 4, so whatever drives the `wikileaks` gap is a property of that corpus's
+container mix or value distribution rather than size.
+
+### Two rows the summary under-weighted
+
+**`census1881` serialize + deserialize is slow on both hosts: 1.640x M4, 2.824x Zen 4.** The scratch run
+put it at 0.98x, so it looked like a non-issue and was not mentioned as a lead. It is now the second
+consistent cross-host loss, and it lands on the operation the workload survey called ">50% of wall time"
+for archive-and-transport users. **This deserves its own line in whatever follows, not a footnote.**
+
+**`toArray` is a Zen 4 problem specifically:** 2.546x and 2.237x on the two larger corpora against 0.918x
+and 0.837x on M4. Batch extraction was already flagged as a High-weight capability gap in the workload
+survey (no resumable batch iterator). Zen 4 now attaches a number to it.
+
+### What this validates about the method
+
+Three scratch confounds were named before the clean run. Construction was measured away in `50-01`
+(identical histograms). Corpus ordering was pinned. Per-operation process isolation was the remaining
+correction, and it moved enough ratios that **most of the original table was wrong** — `census1881` OR
+went 1.85x -> 0.549x on Zen 4, a full reversal.
+
+Chasing the scratch result directly would have sent work after `census1881` OR/ANDNOT, which is faster
+than CRoaring on half the hosts tested.
+
 ## Estimate
 
 **S/M** — the harness exists; this is running it, auditing it, and writing it up honestly.
