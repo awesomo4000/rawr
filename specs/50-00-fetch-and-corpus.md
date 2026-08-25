@@ -82,6 +82,47 @@ Emitted in the report header. `50-01`'s controller enforces it.
 - No board row moves; existing suites and checks green.
 - **No timing produced.**
 
+## Verification record — implemented, reviewed, ACCEPTED (`0056165`)
+
+Added `scripts/fetch-realdata.sh`, `src/realdata_corpus.zig`, `src/check_realdata_corpus.zig`,
+`docs/realdata-benchmarks.md`, build steps `check-realdata-loader` and `realdata-corpus-check`.
+546 lines, no production-library change.
+
+**Every guard exercised here against seeded defects, on disposable copies:**
+
+| control | result |
+| --- | --- |
+| corrupt an archive byte | **`archive SHA-256 mismatch`**, exit 1 — the **archive** guard, not the corpus fingerprint ✓ |
+| remove a corpus entry | **`error.UnexpectedEntryCount`** ✓ |
+| non-ascending values | **`error.ValuesNotStrictlyAscending`** ✓ |
+| duplicate value | **`error.ValuesNotStrictlyAscending`** ✓ — strict ascent subsumes uniqueness |
+| reverse the bytewise sort | fingerprint changes on all three datasets; `OrderMutationNotDetected` if it ever does not ✓ |
+| unknown dataset name | rejected with usage, exit 2 — **not fetched** ✓ |
+| fingerprint across two fresh processes | **identical** ✓ |
+| `misc/realdata` | gitignored; **`git ls-files misc/` empty** ✓ |
+
+The sort control is built into the loader as a `.reverse_bytewise` order option rather than bolted on —
+so the guard's own failure mode is permanently testable, which is what the spec asked for and what an
+external one-off check cannot provide.
+
+**Independent cross-validation:** the loader's value counts — **5,985 / 1,003,861 / 275,355** — match
+exactly the Python parse performed before any of this code existed. Two independent readers of the same
+archives agree.
+
+**Corpus fingerprints (M4):**
+
+| dataset | entries | values | fingerprint |
+| --- | ---: | ---: | --- |
+| uscensus2000 | 200 | 5,985 | `0x3dda62df585f1b25` |
+| census1881 | 200 | 1,003,861 | `0x03d40da10e217e89` |
+| wikileaks-noquotes | 200 | 275,355 | `0x0140d2d90eaca255` |
+
+Provenance in `docs/realdata-benchmarks.md` states the pinned commit and phrases the licensing as the
+state of that revision — *"not a broader claim about the legal status of the underlying data"* — which is
+the distinction the spec asked for.
+
+**No timing produced**, per scope.
+
 ## Estimate
 
 **S** — a shell script, a loader, and a hash.
