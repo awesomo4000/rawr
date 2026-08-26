@@ -212,8 +212,8 @@ belongs to the owner.
 
 ## 8. Estimate
 
-**M** — Stage 1 is a focused microbenchmark reusing the spec 50 harness, now with four arms and pair
-accounting. Stage 2 depends on whether the run scan or a scalar improvement suffices.
+**M** — Stage 1 is a focused microbenchmark reusing the spec 50 harness: two measurement layers (six arms
+total), pair accounting, and per-operation attribution. Stage 2 depends on whether the run scan or a scalar improvement suffices.
 
 ## 9. Chunking
 
