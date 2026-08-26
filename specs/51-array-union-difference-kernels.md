@@ -70,19 +70,42 @@ per-arch-cost argument never comes into play.
 
 **Do not start with SIMD, or with any kernel.** Establish where the time goes.
 
-### 3.1 Cells
+### 3.1 Two measurement layers, so subtraction is valid
 
-Replay the **actual container pairs** that pairwise OR and ANDNOT visit on `wikileaks-noquotes`, and time
-these separately:
+*(An earlier draft listed four arms that mixed allocation levels: "merge kernel only" sounded
+allocation-free while "merge + post-processing" allocates, and the CRoaring arm did not say. Nothing
+could be cleanly subtracted from anything.)*
 
-1. **rawr merge kernel only** — the scalar merge loop, no post-processing;
-2. **rawr merge + post-processing** — including `arrayToArrayOrRun` and any run conversion (union only);
-3. **CRoaring production-selected path** — whatever the build actually dispatches to on that host;
-4. **CRoaring scalar path explicitly** (`union_uint16` / `difference_uint16`), so M4 and Zen 4 are
-   comparable on the same algorithm.
+**Layer A — kernel replay, every output buffer preallocated.** No allocation inside any timed region.
 
-**On M4:** arms 1, 2, 4 (production and scalar coincide).
-**On Zen 4:** arms 1, 2, 3, 4 as separate arms, so AVX2's contribution is isolated rather than assumed.
+| arm | what it runs |
+| --- | --- |
+| A1 | rawr scalar merge |
+| A2 | CRoaring **scalar** (`union_uint16` / `difference_uint16`) |
+| A3 | CRoaring **production-selected** path for this build and host |
+
+**Layer B — matched-container replay, production allocation and teardown included.**
+
+| arm | what it runs |
+| --- | --- |
+| B1 | rawr as it ships today |
+| B2 | CRoaring as it ships today |
+| B3 | rawr **without normalization** — merge and allocate, skip `arrayToArrayOrRun` |
+
+**Each question is then one subtraction:**
+
+| question | answer |
+| --- | --- |
+| rawr scalar vs CRoaring scalar | **A1 − A2** |
+| CRoaring AVX2 uplift (Zen 4) | **A2 − A3** |
+| run-scan cost (union only) | **B1 − B3** |
+| matched-container allocation and assembly | **B1 − A1** |
+
+**On M4, A2 and A3 must coincide** (§1.1). If they do not, the build is not doing what the source says
+and the run is invalid.
+
+**On Zen 4, report that AVX2 was selected at runtime** via `croaring_hardware_support()`, not inferred
+from architecture or build flags.
 
 ### 3.2 Account for pairs that never reach the merge
 
@@ -91,10 +114,13 @@ Count and report, per operation:
 - **matched array-array pairs** that run the merge;
 - **union pairs taking the `max_card > 4096` bitset path** (`container_ops.zig:512`) — these never execute
   the merge at all;
-- **unmatched-container clones** at the top level.
+- **unmatched containers, reported by behaviour rather than as one number**, because the two operations
+  differ:
+  - **OR clones unmatched containers from both sides**;
+  - **ANDNOT clones unmatched left containers and skips unmatched right containers entirely.**
 
 A kernel change cannot help work that does not run the kernel, and the proportions decide whether the
-whole exercise is worth starting.
+exercise is worth starting.
 
 ### 3.3 Call boundary
 
@@ -113,13 +139,17 @@ kernel_delta   = rawr_kernel_time    - croaring_kernel_time
 endtoend_delta = rawr_endtoend_time  - croaring_endtoend_time
 ```
 
-**Pre-registered requirement: the measured arms must explain at least 70% of `endtoend_delta`**, with
+**Pre-registered requirement: the measured layers must explain at least 70% of `endtoend_delta`**, with
 non-overlapping ranges across the ≥5 processes.
 
-- If arms 1-4 explain **<70%**, the gap is mostly outside the array-array path. **Stop.** The lever is
-  top-level cloning, allocation, or result sizing, and that is a different spec.
-- If arm 2 minus arm 1 accounts for a large share on union, **the run scan is the lever, not a kernel** —
-  and the fix is cheaper than SIMD.
+**Evaluated independently per operation and per host.** §1.3 established OR and ANDNOT may be separate
+phenomena, so a single combined verdict would hide exactly the distinction this stage exists to draw. OR
+may pass on both hosts while ANDNOT fails, or either may pass on one host only.
+
+- Explaining **<70%** for an operation means its gap lives outside the array-array path. **Stop for that
+  operation.** The lever is top-level cloning, allocation, or result sizing, and that is a different spec.
+- If **B1 − B3** accounts for a large share on union, **the run scan is the lever, not a kernel**, and the
+  fix costs no per-arch code.
 
 ### 3.5 Reporting
 
@@ -159,9 +189,13 @@ belongs to the owner.
 
 ## 6. Gates
 
-- **Stage 1:** kernel-level ratio reproduces the end-to-end ratio, or **stop**.
-- **Stage 2:** `wikileaks-noquotes` OR and ANDNOT improve materially on **both** hosts, with
-  non-overlapping ranges, and neither control corpus regresses beyond 5%.
+- **Stage 1:** the §3.1 layers explain **≥70% of `endtoend_delta`** in absolute terms, with
+  non-overlapping ranges — **evaluated independently per operation and per host**. An operation below 70%
+  stops there.
+- **Stage 2, also per operation:** the operation that passed Stage 1 improves materially on the hosts
+  where it passed, with non-overlapping ranges, and neither control corpus regresses beyond 5%.
+  **OR and ANDNOT are adopted or rejected separately** — a working run-scan removal for OR is adoptable
+  with ANDNOT still unexplained, and the reverse holds too.
 - **No parity-board row regresses** beyond the spec-28 layout tolerance.
 - Correctness unchanged: semantic digests still match CRoaring across all 42 cells.
 - **Any production kernel additionally needs direct randomized and edge-case differential tests** —
