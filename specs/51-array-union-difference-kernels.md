@@ -98,11 +98,21 @@ could be cleanly subtracted from anything.)*
 | --- | --- |
 | rawr scalar vs CRoaring scalar | **A1 − A2** |
 | CRoaring AVX2 uplift (Zen 4) | **A2 − A3** |
-| run-scan cost (union only) | **B1 − B3** |
-| matched-container allocation and assembly | **B1 − A1** |
+| **normalization cost** (union only) | **B1 − B3** |
+| matched-container allocation and assembly | **B3 − A1** |
 
-**On M4, A2 and A3 must coincide** (§1.1). If they do not, the build is not doing what the source says
-and the run is invalid.
+*(An earlier draft gave allocation as `B1 − A1`. Wrong: that also contains normalization, so it answers
+neither question. B3 is merge plus production allocation **without** normalization, which is exactly the
+allocation layer.)*
+
+**`B1 − B3` is normalization cost, not pure run-scan cost.** It includes any run-container conversion and
+its allocation. **Report the conversion count**; only when it is zero does this subtraction isolate the
+scan itself.
+
+**On M4, A2 and A3 must agree algorithmically** (§1.1): **A3 must report which scalar path it selected**.
+Timing need not match — A3 goes through the `fast_union_uint16` wrapper, which adds dispatch and may
+reorder operands by size, so differing ranges do **not** invalidate the run. Selecting a *vectorized* path
+on M4 would.
 
 **On Zen 4, report that AVX2 was selected at runtime** via `croaring_hardware_support()`, not inferred
 from architecture or build flags.
@@ -135,19 +145,23 @@ no tolerance stated. Equal ratios are not an attribution test.)*
 Replay **every eligible pair exactly once** and compare **absolute deltas**:
 
 ```
-kernel_delta   = rawr_kernel_time    - croaring_kernel_time
-endtoend_delta = rawr_endtoend_time  - croaring_endtoend_time
+endtoend_delta  = rawr_endtoend_time - croaring_endtoend_time
+matched_delta   = B1 - B2
+explained_share = matched_delta / endtoend_delta
 ```
 
-**Pre-registered requirement: the measured layers must explain at least 70% of `endtoend_delta`**, with
-non-overlapping ranges across the ≥5 processes.
+**`matched_delta` is what the matched-container path accounts for; A1/A2/A3 and B3 then apportion it**
+into kernel, AVX2, normalization, and allocation per the §3.1 table.
+
+**Pre-registered requirement: `explained_share` ≥ 0.70**, with non-overlapping ranges across the ≥5
+processes.
 
 **Evaluated independently per operation and per host.** §1.3 established OR and ANDNOT may be separate
 phenomena, so a single combined verdict would hide exactly the distinction this stage exists to draw. OR
 may pass on both hosts while ANDNOT fails, or either may pass on one host only.
 
-- Explaining **<70%** for an operation means its gap lives outside the array-array path. **Stop for that
-  operation.** The lever is top-level cloning, allocation, or result sizing, and that is a different spec.
+- An `explained_share` **< 0.70** for an operation means its gap lives outside the matched-container
+  path. **Stop for that operation.** The lever is top-level cloning, allocation, or result sizing, and that is a different spec.
 - If **B1 − B3** accounts for a large share on union, **the run scan is the lever, not a kernel**, and the
   fix costs no per-arch code.
 
@@ -189,13 +203,14 @@ belongs to the owner.
 
 ## 6. Gates
 
-- **Stage 1:** the §3.1 layers explain **≥70% of `endtoend_delta`** in absolute terms, with
-  non-overlapping ranges — **evaluated independently per operation and per host**. An operation below 70%
-  stops there.
+- **Stage 1:** `explained_share = (B1 − B2) / endtoend_delta` is **≥ 0.70**, with non-overlapping ranges,
+  **evaluated independently per operation and per host**. An operation below 0.70 stops there.
 - **Stage 2, also per operation:** the operation that passed Stage 1 improves materially on the hosts
   where it passed, with non-overlapping ranges, and neither control corpus regresses beyond 5%.
   **OR and ANDNOT are adopted or rejected separately** — a working run-scan removal for OR is adoptable
   with ANDNOT still unexplained, and the reverse holds too.
+- **If an operation passes attribution on only one host, the other host is a no-regression control** for
+  Stage 2: the change must not make it worse, even though it is not expected to help there.
 - **No parity-board row regresses** beyond the spec-28 layout tolerance.
 - Correctness unchanged: semantic digests still match CRoaring across all 42 cells.
 - **Any production kernel additionally needs direct randomized and edge-case differential tests** —
