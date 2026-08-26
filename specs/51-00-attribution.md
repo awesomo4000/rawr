@@ -54,8 +54,19 @@ B1 - B2 =   (B1 - B3)     normalization
           - (B2 - A3)     CRoaring allocation/assembly
 ```
 
-**Report the residual.** It must be zero up to measurement noise; a non-zero residual means an arm is not
-measuring what its name says.
+**The identity is arithmetic, not evidence.** The five terms telescope for *any* values, so a residual
+check would always pass and validates nothing. *(An earlier draft required it as a gate.)*
+
+**Arm meaning is validated directly instead:**
+
+| check | catches |
+| --- | --- |
+| **identical pair and input-element counts** across every arm | an arm replaying a different workload |
+| **semantic result digests match** across arms and against CRoaring | an arm computing a different answer |
+| **zero allocations inside any Layer A timed region** | A-layer arms secretly allocating, which would make `B3 - A1` wrong |
+| **normalization counter is zero in B3** | B3 still running `arrayToArrayOrRun`, which would collapse `B1 - B3` to noise |
+
+Each is a property an arm can actually violate.
 
 **`B1 - B3` is normalization, not scan cost.** It includes run conversion and that conversion's
 allocation. **Report the run-conversion count**; only a count of zero makes it scan cost.
@@ -66,9 +77,30 @@ allocation. **Report the run-conversion count**; only a count of zero makes it s
   running 1 warmup and 7 timed cycles.
 - **`explained_share` is computed from those aggregate medians**, never as a median or mean of per-process
   shares.
-- **Ranges validate rather than compute.** Report the full range for every arm. The `explained_share`
-  verdict holds only if recomputing it at the range endpoints keeps it on the same side of 0.70. If the
-  endpoints straddle the threshold, the result is **inconclusive** and the cell is rerun.
+- **Ranges validate by interval arithmetic, pinned exactly.** With `E1`/`E2` the rawr and CRoaring
+  end-to-end companion cells (§3.2):
+
+  ```
+  N = [B1_min - B2_max,  B1_max - B2_min]     matched_delta interval
+  D = [E1_min - E2_max,  E1_max - E2_min]     endtoend_delta interval
+  S = [N_min / D_max,    N_max / D_min]       explained_share interval
+  ```
+
+  **Require `D_min > 0`** — a denominator interval spanning zero makes the share meaningless, and that
+  case is reported as such rather than divided through.
+
+  - **Pass** if `S_min >= 0.70`
+  - **Fail** if `S_max < 0.70`
+  - **Otherwise inconclusive: rerun the cell.**
+
+### 3.2 The end-to-end denominator is measured here, not imported
+
+`endtoend_delta` comes from **rawr and CRoaring end-to-end companion cells run in this chunk**, under the
+**same binary, corpus, and process protocol** as the six arms.
+
+**Do not import the spec 50-02 numbers.** They came from a different binary, and spec 28 established that
+code changes move untouched rows. A denominator from one build with a numerator from another is not a
+share of anything.
 
 ## 4. Pair accounting
 
@@ -99,8 +131,8 @@ could help at all.
 
 ## 7. Gate
 
-**`explained_share` ≥ 0.70, evaluated independently per operation and per host**, validated by ranges per
-§3.1.
+**`S_min >= 0.70` per the §3.1 interval rule, evaluated independently per operation and per host.**
+`S_max < 0.70` fails; anything between is inconclusive and reruns.
 
 - Below 0.70 for an operation on a host: its gap lives outside the matched-container path. **Stop for that
   operation**; the lever is top-level cloning, allocation, or result sizing, and that is a different spec.
@@ -110,9 +142,13 @@ could help at all.
 ## Acceptance
 
 - Six arms per §2, batched behind one call boundary.
-- Apportionment per §3 with the **residual reported** and the **run-conversion count reported**.
-- `explained_share` from aggregate medians, range-validated per §3.1; straddling endpoints reported as
-  inconclusive.
+- Apportionment per §3, with the **run-conversion count reported**.
+- **Arm-meaning checks all pass** (§3): identical pair and input counts, matching semantic digests, zero
+  timed allocations in Layer A, zero normalization counter in B3.
+- `explained_share` from aggregate medians; **interval rule applied exactly as §3.1**, with `D_min > 0`
+  confirmed and inconclusive cells rerun.
+- **End-to-end companion cells measured in this chunk** under the same binary, corpus, and protocol; no
+  spec 50-02 numbers imported.
 - Pair accounting per §4, unmatched reported by behaviour.
 - §5 host requirements met and stated in the artifacts.
 - §6 reporting complete.

@@ -171,8 +171,8 @@ explained_share = matched_delta / endtoend_delta
 **`matched_delta` is what the matched-container path accounts for; A1/A2/A3 and B3 then apportion it**
 into kernel, AVX2, normalization, and allocation per the §3.1 table.
 
-**Pre-registered requirement: `explained_share` ≥ 0.70**, with non-overlapping ranges across the ≥5
-processes.
+**Pre-registered requirement: `explained_share` ≥ 0.70**, decided by the interval rule in `51-00` §3.1
+(`S_min >= 0.70` passes, `S_max < 0.70` fails, between is inconclusive), not by informal range overlap.
 
 **Evaluated independently per operation and per host.** §1.3 established OR and ANDNOT may be separate
 phenomena, so a single combined verdict would hide exactly the distinction this stage exists to draw. OR
@@ -222,8 +222,9 @@ belongs to the owner.
 
 ## 6. Gates
 
-- **Stage 1:** `explained_share = (B1 − B2) / endtoend_delta` is **≥ 0.70**, with non-overlapping ranges,
-  **evaluated independently per operation and per host**. An operation below 0.70 stops there.
+- **Stage 1:** `explained_share = (B1 − B2) / endtoend_delta` clears **`S_min >= 0.70`** under the
+  `51-00` §3.1 interval rule, **evaluated independently per operation and per host**. An operation that
+  fails stops there.
 - **Stage 2, also per operation:** the operation that passed Stage 1 improves materially on the hosts
   where it passed, with non-overlapping ranges, and neither control corpus regresses beyond 5%.
   **OR and ANDNOT are adopted or rejected separately** — a working run-scan removal for OR is adoptable
