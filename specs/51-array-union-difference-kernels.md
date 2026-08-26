@@ -99,7 +99,25 @@ could be cleanly subtracted from anything.)*
 | rawr scalar vs CRoaring scalar | **A1 − A2** |
 | CRoaring AVX2 uplift (Zen 4) | **A2 − A3** |
 | **normalization cost** (union only) | **B1 − B3** |
-| matched-container allocation and assembly | **B3 − A1** |
+| **rawr** allocation and assembly | **B3 − A1** |
+| **CRoaring** allocation and assembly | **B2 − A3** |
+
+**These five terms fully apportion `matched_delta`. The identity is exact:**
+
+```
+B1 - B2 =   (B1 - B3)     normalization
+          + (B3 - A1)     rawr allocation/assembly
+          + (A1 - A2)     scalar-kernel difference
+          + (A2 - A3)     CRoaring production/AVX2 uplift
+          - (B2 - A3)     CRoaring allocation/assembly
+```
+
+*(Verified algebraically: the first four collapse to `B1 - A3`, and subtracting `B2 - A3` gives
+`B1 - B2`.)* **Report the residual**, which must be zero up to measurement noise. A non-zero residual
+means an arm is measuring something other than what its name says.
+
+*(An earlier draft omitted `B2 - A3`, so the terms did not close and CRoaring's own allocation cost was
+silently attributed elsewhere.)*
 
 *(An earlier draft gave allocation as `B1 − A1`. Wrong: that also contains normalization, so it answers
 neither question. B3 is merge plus production allocation **without** normalization, which is exactly the
@@ -162,8 +180,9 @@ may pass on both hosts while ANDNOT fails, or either may pass on one host only.
 
 - An `explained_share` **< 0.70** for an operation means its gap lives outside the matched-container
   path. **Stop for that operation.** The lever is top-level cloning, allocation, or result sizing, and that is a different spec.
-- If **B1 − B3** accounts for a large share on union, **the run scan is the lever, not a kernel**, and the
-  fix costs no per-arch code.
+- If **B1 − B3** accounts for a large share on union, **normalization is the lever, not a kernel**. Call
+  it *scan* cost only when the reported run-conversion count is zero; otherwise it is scan plus
+  conversion plus that conversion's allocation.
 
 ### 3.5 Reporting
 
@@ -176,8 +195,8 @@ vectorized kernel could help at all.
 **Only after Stage 1 attributes the gap, and the fix follows the attribution.** The order below is
 cheapest-first, and stops as soon as a gate is met.
 
-- **If the run scan is the lever, remove or defer it first.** That is not a kernel change at all and
-  costs no per-arch code.
+- **If normalization is the lever, address it first** — deferring or removing the eager
+  `arrayToArrayOrRun`. That is not a kernel change and costs no per-arch code.
 - Otherwise implement **scalar-improved** union and difference (galloping when sizes are skewed, matching
   what `intersectWriteGallop` already does for AND). **A scalar win needs no new per-arch code and should
   be tried before SIMD.**
@@ -232,5 +251,6 @@ total), pair accounting, and per-operation attribution. Stage 2 depends on wheth
 
 ## 9. Chunking
 
-Not chunked. Stage 1 and Stage 2 are the natural split, and **Stage 2 should not be written until Stage 1
-reports**, since its content depends on what the profile shows.
+- **[51-00](51-00-attribution.md)** — Stage 1 attribution. Diagnosis only.
+- **Stage 2 is deliberately unwritten.** Its content depends on which term dominates, and that may differ
+  between OR and ANDNOT and between hosts. Writing it now would be guessing.
