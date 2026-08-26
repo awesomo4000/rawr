@@ -1,80 +1,144 @@
 <!-- SPDX-License-Identifier: MPL-2.0 -->
 
-# Spec 51: Array union and difference kernels
+# Spec 51: Diagnose the array union and difference gap
 
 **Target.** The one real-data gap that reproduced on both hosts (spec 50-02): `wikileaks-noquotes`
 pairwise OR at **2.586x** (M4) / **2.682x** (Zen 4), ANDNOT at **2.005x** / **4.073x**.
 
 **Diagnosis first. No production change until a prototype earns it.**
 
-## 1. A specific hypothesis, from reading the source
+## 1. What the source actually shows
 
-**rawr vectorizes intersection only.** `src/array_simd.zig` exports exactly four kernels:
+*(An earlier draft of this spec claimed "CRoaring vectorizes all three" and proposed missing SIMD as the
+cause. **That is wrong on M4**, and M4 is where the gap was found.)*
 
-```
-intersectWriteX86   intersectCardX86   intersectWriteNeon   intersectCardNeon
-```
+### 1.1 CRoaring's vectorized union and difference are x86-only
 
-`src/array_kernels.zig` adds scalar intersect variants and a `gallopSearch` selector. There is **no union
-kernel and no difference kernel anywhere**. `arrayUnionArray` (`container_ops.zig:509`) is a scalar
-branchless merge; `arrayDifferenceArray` (`:996`) is its counterpart.
+`fast_union_uint16` and the ANDNOT dispatch are gated on **`CROARING_IS_X64`**, which `roaring.h:143`
+defines only under `__x86_64__` or `_M_X64`. **On M4 (aarch64) CRoaring runs scalar `union_uint16` and
+`difference_uint16`.**
 
-**CRoaring vectorizes all three**: `intersect_vector16`, `union_vector16`, `difference_vector16`
-(`vendor/roaring.c`).
+M4 still shows OR **2.586x** and ANDNOT **2.005x**. **So missing SIMD cannot explain the M4 gap**, and the
+hypothesis splits by host:
 
-**And the corpus that shows the gap is entirely array containers.** From 50-01's histograms:
+| host | what rawr is losing to |
+| --- | --- |
+| **M4** | CRoaring's **scalar** union/difference. So: algorithm, codegen, or surrounding work |
+| **Zen 4** | the same scalar difference, **possibly compounded** by CRoaring's AVX2 path |
 
-| dataset | array | bitset | run | median card | OR gap (M4 / Zen 4) |
-| --- | ---: | ---: | ---: | ---: | --- |
-| `wikileaks-noquotes` | **1,892** | 0 | 0 | **280** | **2.586x / 2.682x** |
-| `census1881` | 1,459 | 5 | 0 | 4 | 1.496x / **0.549x** |
-| `uscensus2000` | 2,221 | 0 | 0 | 2 | 0.583x / 0.843x |
+### 1.2 rawr's union does work CRoaring's does not
 
-The pattern fits: rawr wins AND where it has a tuned kernel, loses OR and ANDNOT where it does not, and
-the effect disappears on corpora whose arrays are too small for kernel choice to matter.
+`arrayUnionArray` (`container_ops.zig:559`) ends with `arrayToArrayOrRun`, which calls
+`countRunsInArray` — **a full linear scan of the merged result** — and may then allocate and convert to a
+run container. CRoaring's array union returns an array directly.
 
-**This is a hypothesis with a mechanism, not a proven cause.** It must be measured before anything is
-built.
+**That is a per-union extra pass entirely outside the merge kernel**, and it scales with result size,
+which fits the corpus pattern: `wikileaks` has median cardinality 280, `uscensus2000` has 2.
 
-## 2. Why this is not the parked kernel work
+### 1.3 But the scan does not cover ANDNOT
 
-Two prior kernel efforts should not be read as precedent against this one:
+`arrayDifferenceArray` (`:996`) returns `.{ .array = result }` **directly, with no run scan**. Only
+array-union among the array-array operations carries `arrayToArrayOrRun`.
+
+**ANDNOT shows 2.005x / 4.073x anyway.** So there are at least two things to explain, and OR and ANDNOT
+must not be treated as one phenomenon.
+
+### 1.4 Candidate causes, none established
+
+- rawr's eager **run scan and possible run conversion** (union only);
+- **scalar merge algorithm or codegen** differences against CRoaring's scalar path (both operations);
+- **CRoaring AVX2** on Zen 4 only;
+- **top-level work**: unmatched-container cloning, allocation, result sizing.
+
+Stage 1 exists to tell these apart. The corpus histograms from 50-01 (`wikileaks`: 1,892 arrays, 0
+bitsets, 0 runs; median card 280) say the answer lives in the array-array path, not in bitset or run
+handling.
+
+## 2. Relation to the parked kernel work
+
+Two prior kernel efforts are adjacent but not precedent either way:
 
 - **Spec 34 (NO-GO)** unrolled an *existing* kernel for `select`. The row closed later through Run-header
-  locality instead. That says loop shape did not help, not that a missing kernel is fine.
-- **Spec 15 (parked)** asks whether *wider* SIMD beats the existing 128-bit intersect. Also about an
-  existing kernel.
+  locality instead.
+- **Spec 15 (parked)** asks whether *wider* SIMD beats the existing 128-bit intersect.
 
-**This spec is about a kernel that does not exist at all**, where the current path is scalar and the
-reference is vectorized. Different proposition, and the measured gap is 2-4x rather than a few percent.
+Both concern an existing kernel. **This spec starts from a measured 2-4x gap with no established cause**,
+and §1 shows the cause may not be a kernel at all. If Stage 1 points at the run scan, spec 15's
+per-arch-cost argument never comes into play.
 
-## 3. Stage 1: confirm the mechanism before writing a kernel
+## 3. Stage 1: attribute the gap before building anything
 
-**Do not start with SIMD.** Establish first that the array union and difference *kernels* account for the
-gap, rather than container dispatch, allocation, or result sizing.
+**Do not start with SIMD, or with any kernel.** Establish where the time goes.
 
-Extend the existing real-data harness (spec 50) with a **kernel-level microbenchmark** over the actual
-`wikileaks-noquotes` container pairs:
+### 3.1 Cells
 
-- extract the array pairs that pairwise OR and ANDNOT actually visit;
-- time **rawr's scalar merge** against **CRoaring's `union_uint16` / `union_vector16` and
-  `difference_vector16`** on identical inputs;
-- report ns per output element and the input-size distribution.
+Replay the **actual container pairs** that pairwise OR and ANDNOT visit on `wikileaks-noquotes`, and time
+these separately:
 
-**Gate:** the kernel-level ratio must reproduce the end-to-end ratio to within a stated tolerance. If
-rawr's scalar merge is close to CRoaring's vectorized union at these sizes, **the kernel is not the cause
-and this spec stops** — the gap is elsewhere and building SIMD would be chasing the wrong thing.
+1. **rawr merge kernel only** — the scalar merge loop, no post-processing;
+2. **rawr merge + post-processing** — including `arrayToArrayOrRun` and any run conversion (union only);
+3. **CRoaring production-selected path** — whatever the build actually dispatches to on that host;
+4. **CRoaring scalar path explicitly** (`union_uint16` / `difference_uint16`), so M4 and Zen 4 are
+   comparable on the same algorithm.
 
-Record the **input-size distribution**, because it decides whether a vectorized kernel can help at all: a
-SIMD union has a fixed setup cost and loses on short inputs.
+**On M4:** arms 1, 2, 4 (production and scalar coincide).
+**On Zen 4:** arms 1, 2, 3, 4 as separate arms, so AVX2's contribution is isolated rather than assumed.
+
+### 3.2 Account for pairs that never reach the merge
+
+Count and report, per operation:
+
+- **matched array-array pairs** that run the merge;
+- **union pairs taking the `max_card > 4096` bitset path** (`container_ops.zig:512`) — these never execute
+  the merge at all;
+- **unmatched-container clones** at the top level.
+
+A kernel change cannot help work that does not run the kernel, and the proportions decide whether the
+whole exercise is worth starting.
+
+### 3.3 Call boundary
+
+**Batch all pairs behind a single call boundary on both sides.** A Zig call per pair against a linked-C
+call per pair would reintroduce a dispatch artifact rather than measure the operation.
+
+### 3.4 Gate — absolute deltas, pre-registered
+
+*(An earlier draft asked for kernel and end-to-end **ratios** to agree "within a stated tolerance", with
+no tolerance stated. Equal ratios are not an attribution test.)*
+
+Replay **every eligible pair exactly once** and compare **absolute deltas**:
+
+```
+kernel_delta   = rawr_kernel_time    - croaring_kernel_time
+endtoend_delta = rawr_endtoend_time  - croaring_endtoend_time
+```
+
+**Pre-registered requirement: the measured arms must explain at least 70% of `endtoend_delta`**, with
+non-overlapping ranges across the ≥5 processes.
+
+- If arms 1-4 explain **<70%**, the gap is mostly outside the array-array path. **Stop.** The lever is
+  top-level cloning, allocation, or result sizing, and that is a different spec.
+- If arm 2 minus arm 1 accounts for a large share on union, **the run scan is the lever, not a kernel** —
+  and the fix is cheaper than SIMD.
+
+### 3.5 Reporting
+
+Report **ns per pair** and **ns per input element**, not only per output element: an empty ANDNOT result
+makes per-output undefined. Report the **input-size distribution**, since it decides whether any
+vectorized kernel could help at all.
 
 ## 4. Stage 2: prototype, gated
 
-Only if Stage 1 confirms the kernel is the cause.
+**Only after Stage 1 attributes the gap, and the fix follows the attribution.** The order below is
+cheapest-first, and stops as soon as a gate is met.
 
-- Implement **scalar-improved** union and difference first if the profile suggests it (galloping when
-  sizes are skewed, matching what `intersectWriteGallop` already does for AND). **A scalar win needs no
-  new per-arch code and should be tried before SIMD.**
+- **If the run scan is the lever, remove or defer it first.** That is not a kernel change at all and
+  costs no per-arch code.
+- Otherwise implement **scalar-improved** union and difference (galloping when sizes are skewed, matching
+  what `intersectWriteGallop` already does for AND). **A scalar win needs no new per-arch code and should
+  be tried before SIMD.**
+- **Baseline and candidate must be arms in the same binary**, per spec 28: comparing across builds would
+  charge layout movement to the change.
 - Then, and only if scalar is insufficient, a vectorized `unionWrite` / `differenceWrite` pair.
 
 **Cost to weigh explicitly:** a SIMD union plus difference means **four new per-arch kernels** (x86 and
@@ -100,6 +164,9 @@ belongs to the owner.
   non-overlapping ranges, and neither control corpus regresses beyond 5%.
 - **No parity-board row regresses** beyond the spec-28 layout tolerance.
 - Correctness unchanged: semantic digests still match CRoaring across all 42 cells.
+- **Any production kernel additionally needs direct randomized and edge-case differential tests** —
+  empty inputs, single element, full 4096, disjoint, identical, adjacent-value runs. The 42 digests cover
+  three corpora and would not exercise those.
 
 ## 7. Out of scope
 
@@ -111,8 +178,8 @@ belongs to the owner.
 
 ## 8. Estimate
 
-**M** — Stage 1 is a focused microbenchmark reusing the spec 50 harness. Stage 2 depends on whether
-scalar improvements suffice.
+**M** — Stage 1 is a focused microbenchmark reusing the spec 50 harness, now with four arms and pair
+accounting. Stage 2 depends on whether the run scan or a scalar improvement suffices.
 
 ## 9. Chunking
 
