@@ -17,7 +17,14 @@ because its content depends on what the attribution shows.
 
 ## 2. Arms
 
-**Layer A, kernel replay, every output buffer preallocated**, no allocation in any timed region:
+**Layer A, kernel replay, every output buffer preallocated**, no allocation in any timed region.
+
+**Every Layer A output buffer must be distinct from both input buffers.** `array_container_andnot`
+(`roaring.c:6874`) selects `difference_vector16` only when
+`(croaring_hardware_support() & ROARING_SUPPORTS_AVX2) && (out != array_1) && (out != array_2)`. Its own
+comment notes that `out` *may* alias `array_1`, so aliasing is legal and easy to do by accident — and an
+aliased harness would take the scalar path on Zen 4 while reporting AVX2 as supported. A3 would then equal
+A2 and the uplift term would read as zero for the wrong reason.
 
 | arm | runs |
 | --- | --- |
@@ -129,8 +136,17 @@ A kernel change cannot help work that never runs the kernel.
 not match, since A3 goes through the `fast_union_uint16` wrapper with dispatch and operand reordering.
 **A vectorized selection on M4 invalidates the run.**
 
-**Zen 4:** report that AVX2 was selected at runtime via `croaring_hardware_support()`, not inferred from
-architecture or build flags.
+**Zen 4:** hardware support is necessary but **not sufficient**.
+
+- **A3 reports the branch it actually selected, per operation** — vectorized or scalar — not the
+  capability bits.
+- **ANDNOT requires both AVX2 support and non-aliasing outputs** (`roaring.c:6874`). Union has no
+  aliasing condition; the two operations must be reported separately rather than assumed to match.
+
+**Branch-selection guard:** the run **fails** if a reported path disagrees with the conditions that
+should produce it — a vectorized branch reported on M4, a vectorized ANDNOT reported with aliased
+buffers, or a scalar branch reported on Zen 4 with AVX2 support and distinct buffers. Reporting the
+branch without checking it against its preconditions would let a mislabeled arm through.
 
 ## 6. Reporting
 
@@ -159,7 +175,9 @@ could help at all.
 - **End-to-end companion cells measured in this chunk** under the same binary, corpus, and protocol; no
   spec 50-02 numbers imported.
 - Pair accounting per §4, unmatched reported by behaviour.
-- §5 host requirements met and stated in the artifacts.
+- §5 host requirements met and stated in the artifacts, including **A3's selected branch per operation**
+  and the **branch-selection guard passing**.
+- **Every Layer A output buffer distinct from both inputs**, verified rather than assumed.
 - §6 reporting complete.
 - **Verdict per operation per host**, with the dominant term named where the gate passes.
 - **No production change. No kernel written. Stage 2 remains unwritten.**
