@@ -294,6 +294,11 @@ arm on this corpus, so there is no evidence to justify writing one.
 
 ## 10. Chunking
 
-- **[51-00](51-00-attribution.md)** — Stage 1 attribution. Diagnosis only.
-- **Stage 2 is deliberately unwritten.** Its content depends on which term dominates, and that may differ
-  between OR and ANDNOT and between hosts. Writing it now would be guessing.
+- **[51-00](51-00-attribution.md)** — Stage 1 attribution. Diagnosis only. **Accepted.**
+- **[51-01](51-01-scalar-merge-candidates.md)** — scalar merge candidates measured as Layer A arms. Still
+  no production change. Covers both operations, since the scalar term is material in all four cells.
+- **`51-02` productize is unwritten**, and stays that way until `51-01` reports which candidate wins and
+  whether the C3 arm shows a residual. A residual means the diagnosis is incomplete and productizing
+  would be premature.
+- **Normalization is a separate later chunk**, gated on the wider board and serialized size per §9, not
+  on this corpus.
