@@ -252,6 +252,32 @@ pub fn build(b: *std.Build) void {
     );
     bench_parity_worker_step.dependOn(&b.addInstallArtifact(bench_parity_worker_exe, .{}).step);
 
+    // Fresh-process real-data comparison worker used by run-realdata-bench.sh.
+    const bench_realdata_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_realdata.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_realdata_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_realdata_mod, target);
+    addTranslatedCImport(b, bench_realdata_mod, .{
+        .header = "tools/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_realdata_exe = b.addExecutable(.{
+        .name = "bench_realdata",
+        .root_module = bench_realdata_mod,
+    });
+    const bench_realdata_step = b.step(
+        "bench-realdata",
+        "Build the pinned real-data comparison worker",
+    );
+    bench_realdata_step.dependOn(&b.addInstallArtifact(bench_realdata_exe, .{}).step);
+
     // Spec 48 fixture, lifecycle, and allocation-accounting setup checker.
     const bench_tiny_setup_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_tiny_setup.zig"),

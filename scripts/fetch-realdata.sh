@@ -66,12 +66,12 @@ hash_file() {
     fi
 }
 
-for command in curl unzip find mktemp mv; do
-    if ! command -v "$command" >/dev/null 2>&1; then
-        printf 'required command not found: %s\n' "$command" >&2
-        exit 1
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        printf 'required command not found: %s\n' "$1" >&2
+        return 1
     fi
-done
+}
 
 datasets=("$@")
 if (( ${#datasets[@]} == 0 )); then
@@ -99,6 +99,9 @@ for dataset in "${datasets[@]}"; do
         fi
         printf 'verified cached archive: %s\n' "$archive_path"
     else
+        require_command curl
+        require_command mktemp
+        require_command mv
         current_temp_file="$(mktemp "$data_dir/.${archive}.download.XXXXXX")"
         printf 'downloading %s at %s\n' "$archive" "$upstream_commit"
         curl --fail --location --retry 3 --output "$current_temp_file" \
@@ -119,6 +122,10 @@ for dataset in "${datasets[@]}"; do
         continue
     fi
 
+    require_command unzip
+    require_command find
+    require_command mktemp
+    require_command mv
     current_temp_dir="$(mktemp -d "$data_dir/.${dataset}.extract.XXXXXX")"
     unzip -q "$archive_path" -d "$current_temp_dir"
     actual_entries="$(find "$current_temp_dir" -type f | wc -l | tr -d '[:space:]')"

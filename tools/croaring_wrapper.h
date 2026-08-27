@@ -36,6 +36,23 @@ typedef struct roaring64_statistics_s {
     uint64_t cardinality;
 } roaring64_statistics_t;
 
+typedef struct roaring_statistics_s {
+    uint32_t n_containers;
+    uint32_t n_array_containers;
+    uint32_t n_run_containers;
+    uint32_t n_bitset_containers;
+    uint32_t n_values_array_containers;
+    uint32_t n_values_run_containers;
+    uint32_t n_values_bitset_containers;
+    uint32_t n_bytes_array_containers;
+    uint32_t n_bytes_run_containers;
+    uint32_t n_bytes_bitset_containers;
+    uint32_t max_value;
+    uint32_t min_value;
+    uint64_t sum_value;
+    uint64_t cardinality;
+} roaring_statistics_t;
+
 // Allocator hooks used by repository-only accounting harnesses.
 typedef void *(*roaring_malloc_p)(size_t);
 typedef void *(*roaring_realloc_p)(void *, size_t);
@@ -70,6 +87,7 @@ void roaring_bitmap_add_range(roaring_bitmap_t *r, uint64_t min, uint64_t max);
 void roaring_bitmap_remove_many(roaring_bitmap_t *r, size_t n_args, const uint32_t *vals);
 bool roaring_bitmap_contains(const roaring_bitmap_t *r, uint32_t x);
 uint64_t roaring_bitmap_get_cardinality(const roaring_bitmap_t *r);
+void roaring_bitmap_statistics(const roaring_bitmap_t *r, roaring_statistics_t *stat);
 bool roaring_bitmap_is_empty(const roaring_bitmap_t *r);
 uint32_t roaring_bitmap_minimum(const roaring_bitmap_t *r);
 uint32_t roaring_bitmap_maximum(const roaring_bitmap_t *r);
