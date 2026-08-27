@@ -86,8 +86,17 @@ allocation. **Report the run-conversion count**; only a count of zero makes it s
   S = [N_min / D_max,    N_max / D_min]       explained_share interval
   ```
 
-  **Require `D_min > 0`** — a denominator interval spanning zero makes the share meaningless, and that
-  case is reported as such rather than divided through.
+  **Check the sign of both intervals before dividing.** The quotient form above is only valid for a
+  non-negative numerator and a strictly positive denominator:
+
+  | condition | outcome |
+  | --- | --- |
+  | `D_min <= 0` | **report as undefined**, do not divide — a denominator spanning zero makes the share meaningless |
+  | `N_max <= 0` | **attribution fails** — the matched-container path does not account for the gap at all |
+  | `N_min < 0 < N_max` | **inconclusive, rerun** — the sign of the numerator is not established |
+  | `N_min >= 0` and `D_min > 0` | compute `S` and apply the threshold below |
+
+  Then:
 
   - **Pass** if `S_min >= 0.70`
   - **Fail** if `S_max < 0.70`
@@ -145,8 +154,8 @@ could help at all.
 - Apportionment per §3, with the **run-conversion count reported**.
 - **Arm-meaning checks all pass** (§3): identical pair and input counts, matching semantic digests, zero
   timed allocations in Layer A, zero normalization counter in B3.
-- `explained_share` from aggregate medians; **interval rule applied exactly as §3.1**, with `D_min > 0`
-  confirmed and inconclusive cells rerun.
+- `explained_share` from aggregate medians; **interval rule applied exactly as §3.1**, including the
+  **sign checks on `N` and `D` before dividing**, with inconclusive cells rerun.
 - **End-to-end companion cells measured in this chunk** under the same binary, corpus, and protocol; no
   spec 50-02 numbers imported.
 - Pair accounting per §4, unmatched reported by behaviour.

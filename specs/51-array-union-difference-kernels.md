@@ -113,8 +113,12 @@ B1 - B2 =   (B1 - B3)     normalization
 ```
 
 *(Verified algebraically: the first four collapse to `B1 - A3`, and subtracting `B2 - A3` gives
-`B1 - B2`.)* **Report the residual**, which must be zero up to measurement noise. A non-zero residual
-means an arm is measuring something other than what its name says.
+`B1 - B2`.)*
+
+**The identity is arithmetic, not evidence.** It holds for any values, so a residual check would pass
+unconditionally and could not detect a mislabeled arm. `51-00` §3 validates arm meaning directly instead:
+identical pair and input counts, matching semantic digests, zero timed allocations in Layer A, and a zero
+normalization counter in B3.
 
 *(An earlier draft omitted `B2 - A3`, so the terms did not close and CRoaring's own allocation cost was
 silently attributed elsewhere.)*
