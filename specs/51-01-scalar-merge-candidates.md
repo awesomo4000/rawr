@@ -147,16 +147,29 @@ whether the advance compiled branchless (`csel`/`cset` on aarch64, `cmov` on x86
 
 **Pin how the disassembly reaches the code that was actually timed.** The loops are `inline`, so a
 standalone symbol for any of them may simply not exist in the binary, and reading a symbol that was not
-the one measured proves nothing. **Give each arm a distinct non-inlined batch symbol** — the rig already
-dispatches through `@call(.never_inline, ...)` — and inspect those exact implementations.
+the one measured proves nothing.
+
+**`@call(.never_inline, ...)` is not sufficient on its own.** The rig dispatches every rawr arm through a
+single shared `runRawrMatched`, so a never-inline call there yields **one** symbol covering all arms, not
+one per arm. `51-01` must add **explicit per-arm wrappers or comptime-specialized non-inlined batch
+functions**, so each arm has its own inspectable symbol, and inspect those exact implementations.
 
 **Distinguish data-dependent branches from loop-control branches.** Every one of these loops has a
 back-edge and a bounds test; those are not what C2 is about. The determination concerns the branch on
 `a_val` versus `b_val`.
 
-**LLVM may if-convert C2 back to branchless.** If it does, C2 and A1 differ in source and not in machine
-code, the arm measures nothing it was meant to, and any timing difference between them is layout noise of
-the kind spec 28 documented. **Check this before interpreting C2's result, not after.**
+**LLVM may if-convert C2 back to branchless, and that does not make it A1.** An earlier draft said it did;
+that was too strong. C2 changes two things at once — the branch structure *and* the hoisted `val_1`/`val_2`
+state with its single reload — and if-conversion removes only the first. Read the result as:
+
+- **No data-dependent branch survives** → the branch-predictability hypothesis **was not tested** by this
+  run. Say so; do not report C2's timing as evidence for or against it.
+- **C2 may still be testing hoisting and load behaviour**, which is a real and separate mechanism.
+- **Treat a C2-versus-A1 difference as layout noise only if the disassembly shows equivalent inner-loop
+  instructions** — not merely because both are branchless. Spec 28's layout finding applies to
+  instruction-identical code, which is a stronger condition than same branch structure.
+
+**Check this before interpreting C2's result, not after.**
 
 This section exists because §1 is a source reading, and the campaign has been wrong about source readings
 before — Stage 1's original hypothesis died because a symbol was found without checking reachability.
@@ -199,10 +212,25 @@ denominator D = [A1_min - A2_max,  A1_max - A2_min]
 interval S    = [N_min / D_max,  N_max / D_min]
 ```
 
-**Sign checks before dividing**, as in `51-00`: require `D_min > 0` and `N_min >= 0`. `D_min <= 0` means
-the A1–A2 gap is not established in this run and the cell reports **no gap to recover** rather than a
-ratio. `N_min < 0` means the candidate's range overlaps A1's and the cell is **inconclusive** — this
-subsumes the non-overlap requirement an earlier draft stated separately.
+**Sign cases are resolved before dividing**, and a definite failure is not the same as an unresolved one.
+An earlier draft collapsed both into "inconclusive", which would have let a candidate that measurably does
+nothing buy itself a rerun.
+
+Denominator first, since without a gap there is nothing to recover:
+
+| case | verdict |
+| --- | --- |
+| `D_max <= 0` | **No gap to recover.** A1 is not slower than A2 in this run. Report as such; do not divide, and do not report a ratio. |
+| `D_min <= 0 < D_max` | **Inconclusive** — the gap itself is not established. Rerun. |
+| `D_min > 0` | Proceed to the numerator. |
+
+Then the numerator:
+
+| case | verdict |
+| --- | --- |
+| `N_max <= 0` | **NO-GO.** The candidate provides no improvement. This is a resolved answer, not a rerun. |
+| `N_min < 0 < N_max` | **Inconclusive** — ranges overlap. Rerun. |
+| `N_min >= 0` | Divide and apply the threshold below. |
 
 - **GO** if `S_min >= 0.50` on the target corpus on **both hosts**.
 - **NO-GO** if `S_max < 0.50`.
@@ -212,9 +240,16 @@ subsumes the non-overlap requirement an earlier draft stated separately.
 **Control-corpus regression is a non-overlapping slowdown** — `Cx_min > A1_max` — not "beyond noise",
 which is not a criterion anyone can apply. Overlapping ranges on a control are **not** a regression.
 
-**The C3-versus-A2 comparison is reported as its own line**, with its own interval and a verdict of
-*explains the term* or *residual remains*. A residual scopes what `51-02` may claim; per §2 it does not
-block `51-02`.
+### C3 completeness — same interval, threshold at 1.0
+
+**The C3-versus-A2 comparison is reported as its own line with its own interval.** It uses the same
+recovery fraction, since `recovery = 1.0` is exactly the statement that C3 reached A2:
+
+- `S_min >= 1.0` → **explains the term.**
+- `S_max < 1.0` → **residual remains**, reported with its measured size.
+- Otherwise → **inconclusive**, same rerun policy.
+
+A residual scopes what `51-02` may claim; per §2 it does not block `51-02`.
 
 ## Acceptance
 
@@ -227,14 +262,16 @@ block `51-02`.
 - Dataset selectable; all three corpora run; **matched pair count reported per dataset**.
 - Byte-identical output and return count versus `a1` on every pair of every dataset.
 - **Unit tests per §4, including the empty-input cases the corpus cannot reach.**
-- Disassembly recorded for `a1` and all three candidates on **both hosts** via **distinct non-inlined
-  batch symbols**, distinguishing data-dependent from loop-control branches, and **stating whether C2
-  survived if-conversion** — including whether the existing aarch64 comment holds on x86_64.
+- Disassembly recorded for `a1` and all three candidates on **both hosts** via **per-arm wrappers or
+  comptime-specialized non-inlined batch functions** — one symbol per arm, not the shared
+  `runRawrMatched` — distinguishing data-dependent from loop-control branches, and **stating whether C2's
+  data-dependent branch survived**, including whether the existing aarch64 comment holds on x86_64. If it
+  did not survive, say the predictability hypothesis was untested rather than reporting C2's timing
+  against it.
 - §6 protocol met: one build, one controller campaign per host, fresh worker process per tuple, 30 tuples.
-- §7 rule applied exactly — interval form, sign checks before dividing, inconclusive rerun, and control
-  regression judged by non-overlap.
-- **C3-versus-A2 stated explicitly** with its interval and an *explains the term* / *residual remains*
-  verdict.
+- §7 rule applied exactly — **both sign tables**, with `N_max <= 0` and `D_max <= 0` reported as resolved
+  verdicts rather than reruns; inconclusive rerun policy; control regression judged by non-overlap.
+- **C3-versus-A2 stated explicitly** with its interval and a verdict at the **1.0** threshold.
 - **No production change. No SIMD. No per-architecture code. `51-02` remains unwritten.**
 - Existing suites and checks green; no board row moves.
 
