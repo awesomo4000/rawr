@@ -136,8 +136,11 @@ Timing need not match — A3 goes through the `fast_union_uint16` wrapper, which
 reorder operands by size, so differing ranges do **not** invalidate the run. Selecting a *vectorized* path
 on M4 would.
 
-**On Zen 4, report that AVX2 was selected at runtime** via `croaring_hardware_support()`, not inferred
-from architecture or build flags.
+**On Zen 4, `croaring_hardware_support()` is necessary but not sufficient.** A3 must report **the branch
+it actually selected, per operation**. `array_container_andnot` (`roaring.c:6874`) takes
+`difference_vector16` only when AVX2 support **and** `(out != array_1) && (out != array_2)` both hold, so
+an aliased output buffer yields the scalar path while support still reports true. Union carries no such
+condition. See `51-00` §2 and §5 for the buffer requirement and the branch-selection guard.
 
 ### 3.2 Account for pairs that never reach the merge
 
