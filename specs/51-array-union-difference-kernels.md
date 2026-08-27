@@ -297,8 +297,9 @@ arm on this corpus, so there is no evidence to justify writing one.
 - **[51-00](51-00-attribution.md)** — Stage 1 attribution. Diagnosis only. **Accepted.**
 - **[51-01](51-01-scalar-merge-candidates.md)** — scalar merge candidates measured as Layer A arms. Still
   no production change. Covers both operations, since the scalar term is material in all four cells.
-- **`51-02` productize is unwritten**, and stays that way until `51-01` reports which candidate wins and
-  whether the C3 arm shows a residual. A residual means the diagnosis is incomplete and productizing
-  would be premature.
+- **`51-02` productize is unwritten**, and stays that way until `51-01` reports which candidate wins. A
+  C3 residual does **not** block it — a candidate meeting the `51-01` §7 gate is worth shipping whether or
+  not the remainder is understood. What a residual blocks is the **explanation**: `51-02` may adopt the
+  winner but may not justify it with an incomplete mechanism story.
 - **Normalization is a separate later chunk**, gated on the wider board and serialized size per §9, not
   on this corpus.
