@@ -278,6 +278,34 @@ pub fn build(b: *std.Build) void {
     );
     bench_realdata_step.dependOn(&b.addInstallArtifact(bench_realdata_exe, .{}).step);
 
+    // Fresh-process array OR/ANDNOT attribution worker used by
+    // run-array-attribution.sh. Kept separate from the canonical 21-row manifest.
+    const bench_array_attr_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_array_attribution.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_array_attr_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_array_attr_mod, target);
+    addTranslatedCImport(b, bench_array_attr_mod, .{
+        .header = "tools/croaring_array_attribution.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{"tools/croaring_array_attribution.c"},
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_array_attr_exe = b.addExecutable(.{
+        .name = "bench_array_attribution",
+        .root_module = bench_array_attr_mod,
+    });
+    const bench_array_attr_step = b.step(
+        "bench-array-attribution",
+        "Build the real-data array OR/ANDNOT attribution worker",
+    );
+    bench_array_attr_step.dependOn(&b.addInstallArtifact(bench_array_attr_exe, .{}).step);
+
     // Spec 48 fixture, lifecycle, and allocation-accounting setup checker.
     const bench_tiny_setup_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_tiny_setup.zig"),

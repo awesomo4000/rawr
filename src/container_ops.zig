@@ -528,35 +528,41 @@ fn arrayUnionArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayCo
     const result = try ArrayContainer.init(allocator, @intCast(@min(max_card, ArrayContainer.MAX_CARDINALITY)));
     errdefer result.deinit(allocator);
 
+    result.cardinality = @intCast(benchmarkArrayUnionWrite(
+        a.values[0..a.cardinality],
+        b.values[0..b.cardinality],
+        result.values,
+    ));
+    return arrayToArrayOrRun(allocator, result);
+}
+
+/// Internal benchmark hook for the exact scalar write loop used by array union.
+pub inline fn benchmarkArrayUnionWrite(a: []const u16, b: []const u16, output: []u16) usize {
     var i: usize = 0;
     var j: usize = 0;
     var k: usize = 0;
-    const sa = a.values[0..a.cardinality];
-    const sb = b.values[0..b.cardinality];
 
     // Branchless merge: always write the smaller value, advance contributing pointer(s).
-    // On aarch64, LLVM emits csel for the output and cset for advances — no branches.
-    while (i < sa.len and j < sb.len) {
-        const a_val = sa[i];
-        const b_val = sb[j];
+    // On aarch64, LLVM emits csel for the output and cset for advances.
+    while (i < a.len and j < b.len) {
+        const a_val = a[i];
+        const b_val = b[j];
 
-        result.values[k] = if (a_val <= b_val) a_val else b_val;
+        output[k] = if (a_val <= b_val) a_val else b_val;
         k += 1;
 
         i += @intFromBool(a_val <= b_val);
         j += @intFromBool(b_val <= a_val);
     }
-    // Drain remaining elements
-    while (i < sa.len) : (i += 1) {
-        result.values[k] = sa[i];
+    while (i < a.len) : (i += 1) {
+        output[k] = a[i];
         k += 1;
     }
-    while (j < sb.len) : (j += 1) {
-        result.values[k] = sb[j];
+    while (j < b.len) : (j += 1) {
+        output[k] = b[j];
         k += 1;
     }
-    result.cardinality = @intCast(k);
-    return arrayToArrayOrRun(allocator, result);
+    return k;
 }
 
 /// Non-lazy union; the returned bitset always has a valid cardinality.
@@ -997,34 +1003,38 @@ fn arrayDifferenceArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *Ar
     const result = try ArrayContainer.init(allocator, a.cardinality);
     errdefer result.deinit(allocator);
 
+    result.cardinality = @intCast(benchmarkArrayDifferenceWrite(
+        a.values[0..a.cardinality],
+        b.values[0..b.cardinality],
+        result.values,
+    ));
+    return .{ .array = result };
+}
+
+/// Internal benchmark hook for the exact scalar write loop used by array difference.
+pub inline fn benchmarkArrayDifferenceWrite(a: []const u16, b: []const u16, output: []u16) usize {
     var i: usize = 0;
     var j: usize = 0;
     var k: usize = 0;
-    const sa = a.values[0..a.cardinality];
-    const sb = b.values[0..b.cardinality];
 
-    // Branchless merge: keep element from A only when A < B (not in B).
-    while (i < sa.len and j < sb.len) {
-        const a_val = sa[i];
-        const b_val = sb[j];
+    // Branchless merge: keep an element from A only when A < B.
+    while (i < a.len and j < b.len) {
+        const a_val = a[i];
+        const b_val = b[j];
 
-        // Write a_val only when strictly less than b_val (not in B).
         if (a_val < b_val) {
-            result.values[k] = a_val;
+            output[k] = a_val;
             k += 1;
         }
 
-        // Advance pointers branchlessly.
         i += @intFromBool(a_val <= b_val);
         j += @intFromBool(b_val <= a_val);
     }
-    // Drain remaining from A (all not in B since B is exhausted).
-    while (i < sa.len) : (i += 1) {
-        result.values[k] = sa[i];
+    while (i < a.len) : (i += 1) {
+        output[k] = a[i];
         k += 1;
     }
-    result.cardinality = @intCast(k);
-    return .{ .array = result };
+    return k;
 }
 
 fn arrayDifferenceBitset(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *BitsetContainer) !Container {
