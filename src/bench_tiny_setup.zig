@@ -61,6 +61,8 @@ const expected_mixed_full_hash: u64 = 0x8f4d88269788fc3a;
 const Command = enum {
     hashes,
     check,
+    accounting,
+    mixed_accounting,
     mutation_interleaved,
     mutation_sequential,
     mutation_structural,
@@ -79,6 +81,8 @@ pub fn main(init: std.process.Init) !void {
     switch (command) {
         .hashes => try printHashes(),
         .check => try runChecks(),
+        .accounting => try printAccounting(),
+        .mixed_accounting => try printMixedAccounting(),
         .mutation_interleaved => try verifyMutation(.interleaved),
         .mutation_sequential => try verifyMutation(.sequential),
         .mutation_structural => try verifyStructuralMutations(),
@@ -139,6 +143,13 @@ fn verifyPinnedHashesAndFixtures() !void {
     if (mixed.median < 1 or mixed.median > 2) return error.MixedMedianOutOfRange;
     if (mixed.p99 < 1000 or mixed.p99 > 20_000) return error.MixedP99OutOfRange;
 
+    var cardinality_only = try fixtures.generateMixedCardinalityCorpus(allocator);
+    defer cardinality_only.deinit();
+    try validateMixedCardinalityCorpus(&cardinality_only);
+    if (!std.mem.eql(u32, mixed.cardinalities, cardinality_only.cardinalities)) {
+        return error.MixedCardinalityGeneratorMismatch;
+    }
+
     const sample_indices = [_]usize{ 0, 1, mixed.cardinalities.len / 2, mixed.cardinalities.len - 1 };
     for (sample_indices) |index| {
         const values = try allocator.alloc(u32, mixed.cardinalities[index]);
@@ -147,6 +158,15 @@ fn verifyPinnedHashesAndFixtures() !void {
         try validateCrossImplementation(values);
     }
     std.debug.print("quantiles: median={d} p99={d}\n", .{ mixed.median, mixed.p99 });
+}
+
+pub fn validateMixedCardinalityCorpus(corpus: *const fixtures.MixedCardinalityCorpus) !void {
+    if (expected_mixed_cardinality_hash == 0) return error.UnpinnedMixedHash;
+    if (corpus.cardinality_hash != expected_mixed_cardinality_hash) {
+        return error.MixedCardinalityHashMismatch;
+    }
+    if (corpus.median < 1 or corpus.median > 2) return error.MixedMedianOutOfRange;
+    if (corpus.p99 < 1000 or corpus.p99 > 20_000) return error.MixedP99OutOfRange;
 }
 
 fn verifyMutation(pattern: fixtures.SharingPattern) !void {
@@ -565,7 +585,7 @@ fn verifyAccountingAndLifecycle() !void {
     }
 }
 
-fn validateCrossImplementation(values: []const u32) !void {
+pub fn validateCrossImplementation(values: []const u32) !void {
     var bitmap = try RoaringBitmap.init(allocator);
     defer bitmap.deinit();
     for (values) |value| _ = try bitmap.add(value);
@@ -604,4 +624,263 @@ fn validateCrossImplementation(values: []const u32) !void {
     const rawr_values = try rawr_from_c.toArrayAlloc(allocator);
     defer allocator.free(rawr_values);
     if (!std.mem.eql(u32, values, rawr_values)) return error.CrossValueMismatch;
+}
+
+const AccountingKind = enum {
+    rawr_smp,
+    rawr_libc,
+    croaring_libc,
+    reference_smp,
+    reference_libc,
+
+    fn implementation(self: AccountingKind) []const u8 {
+        return switch (self) {
+            .rawr_smp, .rawr_libc => "rawr",
+            .croaring_libc => "croaring",
+            .reference_smp, .reference_libc => "reference",
+        };
+    }
+
+    fn allocatorName(self: AccountingKind) []const u8 {
+        return switch (self) {
+            .rawr_smp, .reference_smp => "smp",
+            .rawr_libc, .croaring_libc, .reference_libc => "libc",
+        };
+    }
+};
+
+const accounting_kinds = [_]AccountingKind{
+    .rawr_smp,
+    .rawr_libc,
+    .croaring_libc,
+    .reference_smp,
+    .reference_libc,
+};
+
+const AccountingAggregate = struct {
+    count: u64 = 0,
+    alloc_calls: u64 = 0,
+    free_calls: u64 = 0,
+    resize_calls: u64 = 0,
+    requested_bytes: u64 = 0,
+    create_live: u64 = 0,
+    build_live: u64 = 0,
+    serialize_live: u64 = 0,
+    deserialize_live: u64 = 0,
+    peak_sum: u64 = 0,
+    peak_max: u64 = 0,
+    serialized_sum: u64 = 0,
+    histogram: [max_histogram_entries]HistogramEntry = @splat(.{}),
+    histogram_len: usize = 0,
+
+    fn add(self: *AccountingAggregate, report: Checkpoints) !void {
+        if (report.teardown.live_bytes != 0) return error.LifecycleLeak;
+        self.count += 1;
+        self.alloc_calls +|= report.teardown.alloc_calls;
+        self.free_calls +|= report.teardown.free_calls;
+        self.resize_calls +|= report.teardown.resize_calls;
+        self.requested_bytes +|= report.teardown.requested_bytes;
+        self.create_live +|= report.create.live_bytes;
+        self.build_live +|= report.build.live_bytes;
+        self.serialize_live +|= report.serialize.live_bytes;
+        self.deserialize_live +|= report.deserialize.live_bytes;
+        self.peak_sum +|= report.teardown.peak_live_bytes;
+        self.peak_max = @max(self.peak_max, report.teardown.peak_live_bytes);
+        self.serialized_sum +|= @intCast(report.serialized_bytes);
+        for (report.teardown.histogram[0..report.teardown.histogram_len]) |entry| {
+            try self.addHistogram(entry);
+        }
+    }
+
+    fn addHistogram(self: *AccountingAggregate, entry: HistogramEntry) !void {
+        for (self.histogram[0..self.histogram_len]) |*existing| {
+            if (existing.size == entry.size) {
+                existing.count +|= entry.count;
+                return;
+            }
+        }
+        if (self.histogram_len == self.histogram.len) return error.AccountingHistogramExhausted;
+        self.histogram[self.histogram_len] = entry;
+        self.histogram_len += 1;
+    }
+
+    fn mean(self: AccountingAggregate, value: u64) f64 {
+        return @as(f64, @floatFromInt(value)) / @as(f64, @floatFromInt(self.count));
+    }
+};
+
+fn printAccounting() !void {
+    for (fixtures.shapes) |shape| {
+        for (fixtures.sweep_cardinalities) |cardinality| {
+            var pool = try fixtures.generateSweepPool(allocator, shape, cardinality);
+            defer pool.deinit();
+
+            for (accounting_kinds) |kind| {
+                var aggregate = AccountingAggregate{};
+                for (0..pool.fixture_count) |fixture_index| {
+                    const values = pool.fixture(fixture_index);
+                    const report = switch (kind) {
+                        .rawr_smp => try runRawrLifecycle(std.heap.smp_allocator, values),
+                        .rawr_libc => try runRawrLifecycle(std.heap.c_allocator, values),
+                        .croaring_libc => try runCRoaringLifecycle(values),
+                        .reference_smp => try runPlainLifecycle(std.heap.smp_allocator, values),
+                        .reference_libc => try runPlainLifecycle(std.heap.c_allocator, values),
+                    };
+                    try aggregate.add(report);
+                }
+                printAccountingRow(shape, cardinality, kind, &aggregate);
+            }
+        }
+    }
+}
+
+fn printAccountingRow(
+    shape: fixtures.Shape,
+    cardinality: u32,
+    kind: AccountingKind,
+    aggregate: *AccountingAggregate,
+) void {
+    std.mem.sort(HistogramEntry, aggregate.histogram[0..aggregate.histogram_len], {}, struct {
+        fn lessThan(_: void, a: HistogramEntry, b: HistogramEntry) bool {
+            return a.size < b.size;
+        }
+    }.lessThan);
+
+    std.debug.print(
+        "ACCOUNT\t{s}\t{d}\t{s}\t{s}\t{d}\t{d:.6}\t{d:.6}\t{d:.6}\t{d:.6}\t{d:.6}\t{d:.6}\t{d:.6}\t{d:.6}\t{d:.6}\t{d}\t{d:.6}\t",
+        .{
+            shape.name(),
+            cardinality,
+            kind.implementation(),
+            kind.allocatorName(),
+            aggregate.count,
+            aggregate.mean(aggregate.alloc_calls),
+            aggregate.mean(aggregate.free_calls),
+            aggregate.mean(aggregate.resize_calls),
+            aggregate.mean(aggregate.requested_bytes),
+            aggregate.mean(aggregate.create_live),
+            aggregate.mean(aggregate.build_live),
+            aggregate.mean(aggregate.serialize_live),
+            aggregate.mean(aggregate.deserialize_live),
+            aggregate.mean(aggregate.peak_sum),
+            aggregate.peak_max,
+            aggregate.mean(aggregate.serialized_sum),
+        },
+    );
+    for (aggregate.histogram[0..aggregate.histogram_len], 0..) |entry, index| {
+        if (index != 0) std.debug.print(",", .{});
+        std.debug.print("{d}:{d}", .{ entry.size, entry.count });
+    }
+    std.debug.print("\n", .{});
+}
+
+const MixedAccountingAggregate = struct {
+    count: u64 = 0,
+    alloc_calls: u64 = 0,
+    free_calls: u64 = 0,
+    resize_calls: u64 = 0,
+    requested_bytes: u64 = 0,
+    create_live: u64 = 0,
+    build_live: u64 = 0,
+    serialize_live: u64 = 0,
+    deserialize_live: u64 = 0,
+    peak_sum: u64 = 0,
+    peak_max: u64 = 0,
+    serialized_bytes: u64 = 0,
+
+    fn add(self: *MixedAccountingAggregate, report: Checkpoints) !void {
+        if (report.teardown.live_bytes != 0) return error.LifecycleLeak;
+        self.count += 1;
+        self.alloc_calls +|= report.teardown.alloc_calls;
+        self.free_calls +|= report.teardown.free_calls;
+        self.resize_calls +|= report.teardown.resize_calls;
+        self.requested_bytes +|= report.teardown.requested_bytes;
+        self.create_live +|= report.create.live_bytes;
+        self.build_live +|= report.build.live_bytes;
+        self.serialize_live +|= report.serialize.live_bytes;
+        self.deserialize_live +|= report.deserialize.live_bytes;
+        self.peak_sum +|= report.teardown.peak_live_bytes;
+        self.peak_max = @max(self.peak_max, report.teardown.peak_live_bytes);
+        self.serialized_bytes +|= @intCast(report.serialized_bytes);
+    }
+};
+
+fn printMixedAccounting() !void {
+    var corpus = try fixtures.generateMixedCardinalityCorpus(allocator);
+    defer corpus.deinit();
+    try validateMixedCardinalityCorpus(&corpus);
+
+    var max_cardinality: u32 = 0;
+    for (corpus.cardinalities) |cardinality| max_cardinality = @max(max_cardinality, cardinality);
+    const scratch = try allocator.alloc(u32, max_cardinality);
+    defer allocator.free(scratch);
+
+    var smp_total = MixedAccountingAggregate{};
+    var libc_total = MixedAccountingAggregate{};
+    var smp_bands: [fixtures.mixed_bands.len]MixedAccountingAggregate = @splat(.{});
+    var libc_bands: [fixtures.mixed_bands.len]MixedAccountingAggregate = @splat(.{});
+
+    for (corpus.cardinalities, 0..) |cardinality, corpus_index| {
+        const values = scratch[0..cardinality];
+        try fixtures.fillSpread(values, fixtures.mixedValueSeed(corpus_index, cardinality));
+        try fixtures.validateFixture(.spread, values, cardinality);
+        const band_index = mixedBandIndex(cardinality);
+
+        const smp_report = try runRawrLifecycle(std.heap.smp_allocator, values);
+        try smp_total.add(smp_report);
+        try smp_bands[band_index].add(smp_report);
+
+        const libc_report = try runRawrLifecycle(std.heap.c_allocator, values);
+        try libc_total.add(libc_report);
+        try libc_bands[band_index].add(libc_report);
+    }
+
+    std.debug.print("MIXED_META\t{d}\t{d}\t{d}\t0x{x:0>16}\n", .{
+        corpus.cardinalities.len,
+        corpus.median,
+        corpus.p99,
+        corpus.cardinality_hash,
+    });
+    printMixedAccountingRow("total", "smp", smp_total);
+    printMixedAccountingRow("total", "libc", libc_total);
+    for (fixtures.mixed_bands, 0..) |band, band_index| {
+        printMixedAccountingRow(band.name(), "smp", smp_bands[band_index]);
+        printMixedAccountingRow(band.name(), "libc", libc_bands[band_index]);
+    }
+}
+
+fn mixedBandIndex(cardinality: u32) usize {
+    for (fixtures.mixed_bands, 0..) |band, index| {
+        if (band.contains(cardinality)) return index;
+    }
+    unreachable;
+}
+
+fn printMixedAccountingRow(
+    name: []const u8,
+    allocator_name: []const u8,
+    aggregate: MixedAccountingAggregate,
+) void {
+    std.debug.print(
+        "MIXED_ACCOUNT\t{s}\t{s}" ++
+            "\t{d}\t{d}\t{d}\t{d}" ++
+            "\t{d}\t{d}\t{d}\t{d}" ++
+            "\t{d}\t{d}\t{d}\t{d}\n",
+        .{
+            name,
+            allocator_name,
+            aggregate.count,
+            aggregate.alloc_calls,
+            aggregate.free_calls,
+            aggregate.resize_calls,
+            aggregate.requested_bytes,
+            aggregate.create_live,
+            aggregate.build_live,
+            aggregate.serialize_live,
+            aggregate.deserialize_live,
+            aggregate.peak_sum,
+            aggregate.peak_max,
+            aggregate.serialized_bytes,
+        },
+    );
 }

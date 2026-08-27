@@ -286,6 +286,56 @@ pub fn build(b: *std.Build) void {
     );
     check_tiny_setup_step.dependOn(&run_tiny_setup.step);
 
+    const bench_tiny_worker_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_tiny_worker.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_tiny_worker_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_tiny_worker_mod, target);
+    addTranslatedCImport(b, bench_tiny_worker_mod, .{
+        .header = "tools/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_tiny_worker_exe = b.addExecutable(.{
+        .name = "bench_tiny_worker",
+        .root_module = bench_tiny_worker_mod,
+    });
+    const bench_tiny_worker_step = b.step(
+        "bench-tiny-worker",
+        "Build the spec 48 tiny-bitmap timing worker",
+    );
+    bench_tiny_worker_step.dependOn(&b.addInstallArtifact(bench_tiny_worker_exe, .{}).step);
+
+    const bench_tiny_mixed_worker_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_tiny_mixed_worker.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_tiny_mixed_worker_mod.addImport("rawr", bench_lib_mod);
+    addBenchmarkPlatformShim(b, bench_tiny_mixed_worker_mod, target);
+    addTranslatedCImport(b, bench_tiny_mixed_worker_mod, .{
+        .header = "tools/croaring_wrapper.h",
+        .include_dir = "vendor/",
+        .c_source = "vendor/roaring.c",
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_tiny_mixed_worker_exe = b.addExecutable(.{
+        .name = "bench_tiny_mixed_worker",
+        .root_module = bench_tiny_mixed_worker_mod,
+    });
+    const bench_tiny_mixed_worker_step = b.step(
+        "bench-tiny-mixed-worker",
+        "Build the spec 48 mixed-corpus timing worker",
+    );
+    bench_tiny_mixed_worker_step.dependOn(&b.addInstallArtifact(bench_tiny_mixed_worker_exe, .{}).step);
+
     // Fresh-process lazy-OR page-residency diagnosis worker.
     const bench_lazy_residency_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_lazy_or_residency.zig"),

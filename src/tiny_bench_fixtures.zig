@@ -15,6 +15,50 @@ pub const mixed_count: usize = 100_000;
 pub const mixed_cap: u32 = 100_000;
 pub const mixed_zipf_s: f64 = 1.48;
 
+pub const MixedBand = enum(u8) {
+    zero,
+    one_two,
+    three_six,
+    seven_twelve,
+    thirteen_thirty_two,
+    thirty_three_128,
+    one_twenty_nine_plus,
+
+    pub fn name(self: MixedBand) []const u8 {
+        return switch (self) {
+            .zero => "0",
+            .one_two => "1-2",
+            .three_six => "3-6",
+            .seven_twelve => "7-12",
+            .thirteen_thirty_two => "13-32",
+            .thirty_three_128 => "33-128",
+            .one_twenty_nine_plus => "129+",
+        };
+    }
+
+    pub fn contains(self: MixedBand, cardinality: u32) bool {
+        return switch (self) {
+            .zero => cardinality == 0,
+            .one_two => cardinality >= 1 and cardinality <= 2,
+            .three_six => cardinality >= 3 and cardinality <= 6,
+            .seven_twelve => cardinality >= 7 and cardinality <= 12,
+            .thirteen_thirty_two => cardinality >= 13 and cardinality <= 32,
+            .thirty_three_128 => cardinality >= 33 and cardinality <= 128,
+            .one_twenty_nine_plus => cardinality >= 129,
+        };
+    }
+};
+
+pub const mixed_bands = [_]MixedBand{
+    .zero,
+    .one_two,
+    .three_six,
+    .seven_twelve,
+    .thirteen_thirty_two,
+    .thirty_three_128,
+    .one_twenty_nine_plus,
+};
+
 pub const Shape = enum(u8) {
     localized = 0,
     spread = 1,
@@ -248,6 +292,27 @@ pub const MixedCorpus = struct {
     }
 };
 
+pub const MixedCardinalityCorpus = struct {
+    allocator: std.mem.Allocator,
+    cardinalities: []u32,
+    cardinality_hash: u64,
+    median: u32,
+    p99: u32,
+
+    pub fn deinit(self: *MixedCardinalityCorpus) void {
+        self.allocator.free(self.cardinalities);
+        self.* = undefined;
+    }
+
+    pub fn bandCount(self: *const MixedCardinalityCorpus, band: MixedBand) usize {
+        var count: usize = 0;
+        for (self.cardinalities) |cardinality| {
+            if (band.contains(cardinality)) count += 1;
+        }
+        return count;
+    }
+};
+
 pub const SharingPattern = enum {
     correct,
     interleaved,
@@ -302,11 +367,54 @@ pub fn generateMixedCorpus(
     return finishMixedCorpus(allocator, cardinalities, full_hasher.finish());
 }
 
+pub fn generateMixedCardinalityCorpus(allocator: std.mem.Allocator) !MixedCardinalityCorpus {
+    const cumulative = try zipfCumulative(allocator);
+    defer allocator.free(cumulative);
+
+    const cardinalities = try allocator.alloc(u32, mixed_count);
+    errdefer allocator.free(cardinalities);
+
+    var zipf_prng = std.Random.DefaultPrng.init(mixed_seed);
+    const random = zipf_prng.random();
+    for (cardinalities) |*cardinality| cardinality.* = sampleZipf(cumulative, random);
+
+    const summary = try summarizeMixedCardinalities(allocator, cardinalities);
+    return .{
+        .allocator = allocator,
+        .cardinalities = cardinalities,
+        .cardinality_hash = summary.hash,
+        .median = summary.median,
+        .p99 = summary.p99,
+    };
+}
+
 fn finishMixedCorpus(
     allocator: std.mem.Allocator,
     cardinalities: []u32,
     full_hash: u64,
 ) !MixedCorpus {
+    const summary = try summarizeMixedCardinalities(allocator, cardinalities);
+
+    return .{
+        .allocator = allocator,
+        .cardinalities = cardinalities,
+        .cardinality_hash = summary.hash,
+        .full_hash = full_hash,
+        .median = summary.median,
+        .p99 = summary.p99,
+    };
+}
+
+const MixedCardinalitySummary = struct {
+    hash: u64,
+    median: u32,
+    p99: u32,
+};
+
+fn summarizeMixedCardinalities(
+    allocator: std.mem.Allocator,
+    cardinalities: []const u32,
+) !MixedCardinalitySummary {
     var cardinality_hasher = StableHasher.init();
     cardinality_hasher.addU64(cardinalities.len);
     cardinality_hasher.addU32Slice(cardinalities);
@@ -314,16 +422,10 @@ fn finishMixedCorpus(
     const sorted = try allocator.dupe(u32, cardinalities);
     defer allocator.free(sorted);
     std.mem.sort(u32, sorted, {}, std.sort.asc(u32));
-    const median = sorted[(sorted.len - 1) / 2];
-    const p99 = sorted[((sorted.len * 99) + 99) / 100 - 1];
-
     return .{
-        .allocator = allocator,
-        .cardinalities = cardinalities,
-        .cardinality_hash = cardinality_hasher.finish(),
-        .full_hash = full_hash,
-        .median = median,
-        .p99 = p99,
+        .hash = cardinality_hasher.finish(),
+        .median = sorted[(sorted.len - 1) / 2],
+        .p99 = sorted[((sorted.len * 99) + 99) / 100 - 1],
     };
 }
 
