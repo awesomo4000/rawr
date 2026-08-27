@@ -257,7 +257,42 @@ belongs to the owner.
 **M** — Stage 1 is a focused microbenchmark reusing the spec 50 harness: two measurement layers (six arms
 total), pair accounting, and per-operation attribution. Stage 2 depends on whether the run scan or a scalar improvement suffices.
 
-## 9. Chunking
+## 9. Stage 1 outcome (08/27/2026)
+
+**Both operations pass attribution on both hosts.** Matched arrays explain OR at 1.048 point share on M4
+and 1.078 on Zen 4, and ANDNOT at 0.981 and 1.027. All four interval lower bounds exceed 0.70. See
+[`51-00`](51-00-attribution.md) for the complete arms, ranges, and artifacts.
+
+The result does not support one shared lever:
+
+- **OR:** eager normalization/conversion and the scalar merge are both material. Normalization is the
+  largest Zen 4 term; scalar merge is the largest M4 term. Of 930 array-array unions, 864 convert to runs,
+  so the normalization term is not a pure scan.
+- **ANDNOT:** scalar merge is the dominant term on both hosts. CRoaring's AVX2 path adds a separate Zen 4
+  advantage; M4 has the same scalar-only conclusion without it.
+
+Stage 2 therefore needs operation-specific candidates.
+
+### Revising the cheapest-first order — scalar goes first
+
+This toplevel pre-registered "if normalization is the lever, address it first." That ordering was written
+before the terms were known, and the measured terms argue against it:
+
+- The **scalar merge is the only term present and material in all four cells** (0.226–0.322 ms each). It is
+  the sole dominant term for ANDNOT on both hosts, where normalization is zero. **Scalar work is required
+  regardless of what happens to normalization**, so doing it first cannot be wasted.
+- **Normalization carries a representation trade that the scalar merge does not.** 864 of 930 union
+  results genuinely convert to runs — they are not spurious conversions. Deferring or removing the eager
+  conversion leaves array containers that are larger when serialized and worse-suited to whatever operation
+  consumes them next. **That cost lands outside the OR row**, so a normalization candidate must be gated on
+  the wider board and on serialized size, not on this corpus's OR timing alone.
+
+**Order for Stage 2:** scalar algorithm and codegen diagnosis first, covering both operations at once;
+normalization second, as a separately gated candidate with its own downstream measurements. SIMD stays
+last and applies only to ANDNOT — the Zen 4 union result shows a vectorized union losing to its own scalar
+arm on this corpus, so there is no evidence to justify writing one.
+
+## 10. Chunking
 
 - **[51-00](51-00-attribution.md)** — Stage 1 attribution. Diagnosis only.
 - **Stage 2 is deliberately unwritten.** Its content depends on which term dominates, and that may differ

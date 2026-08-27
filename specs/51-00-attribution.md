@@ -183,6 +183,85 @@ could help at all.
 - **No production change. No kernel written. Stage 2 remains unwritten.**
 - Existing suites and checks green; no board row moves.
 
+## Outcome (08/27/2026)
+
+**GO for Stage 2 on both operations and both hosts.** The matched array-array path accounts for at least
+70% of the end-to-end gap in every cell under the pre-registered interval rule:
+
+| host | operation | end-to-end delta | matched delta | point share | share interval | verdict |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| M4 | OR | 0.477 ms | 0.500 ms | 1.048 | [0.738, 1.471] | PASS |
+| M4 | ANDNOT | 0.270 ms | 0.265 ms | 0.981 | [0.792, 1.187] | PASS |
+| Zen 4 | OR | 0.480 ms | 0.517 ms | 1.078 | [0.788, 1.322] | PASS |
+| Zen 4 | ANDNOT | 0.377 ms | 0.387 ms | 1.027 | [0.857, 1.110] | PASS |
+
+A point share above 1.0 is not an overclaim: it means work outside the matched path partially offsets the
+matched-path disadvantage. The interval, not the point estimate, decides the gate. The first M4 ANDNOT
+run was inconclusive and was rerun as required; the table is the decisive rerun.
+
+The terms identify two different Stage 2 targets:
+
+| host | operation | normalization | rawr alloc/assembly | scalar | CR production/AVX2 | CR alloc/assembly |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| M4 | OR | +0.224 ms | +0.012 ms | **+0.300 ms** | +0.011 ms | +0.047 ms |
+| M4 | ANDNOT | -0.005 ms | -0.015 ms | **+0.322 ms** | -0.007 ms | +0.030 ms |
+| Zen 4 | OR | **+0.376 ms** | +0.012 ms | +0.226 ms | -0.080 ms | +0.017 ms |
+| Zen 4 | ANDNOT | +0.018 ms | +0.017 ms | **+0.263 ms** | **+0.109 ms** | +0.019 ms |
+
+- **OR:** normalization is material on both hosts and dominant on Zen 4; the scalar merge is dominant on
+  M4 and still material on Zen 4. All 930 pairs use the array merge and 864 results convert to runs, so
+  `B1 - B3` is scan plus conversion and conversion allocation, not a pure scan. Zen 4 selected AVX2, but
+  its production wrapper was slower than the direct scalar arm for this corpus; AVX2 is not the OR lever.
+- **ANDNOT:** normalization is zero within noise and the scalar merge dominates on both hosts. Zen 4's
+  selected AVX2 path adds a separate 0.109 ms advantage for CRoaring. Stage 2 should start with the scalar
+  algorithm/codegen difference, then consider per-architecture SIMD only if scalar work is insufficient.
+
+Every operation replays 930 matched array pairs and 245,589 input elements, with no bitset-path or
+matched-other pairs. Input sizes are `[min=2, p50=128, p90=683, p99=1320, max=2603]`; unmatched counts are
+961 left and 944 right. The M4 A3 arms selected scalar; the Zen 4 A3 arms selected AVX2 with distinct
+outputs. Branch guards passed.
+
+The cross-host audit matched all semantic digests, the corpus fingerprint, pair accounting, counters,
+output guards, and size quantiles across 16 tuples and 80 processes per host. Debug, ReleaseSafe, and
+ReleaseFast tests passed, `check-package` remained at 33 allowlisted files, the spec 50 protocol controls
+passed, and the full 42-row canonical M4 parity board completed. No public API, default behavior, or
+kernel changed; the production scalar loops were only extracted into internal inline hooks so Layer A
+executes the exact shipped loops.
+
+Artifacts:
+
+- M4: `misc/array-attribution-20260827-100146-summary.txt`
+- Zen 4: `misc/array-attribution-20260827-153342-summary.txt`, copied to the aarch64 host with a
+  `-zen4-` suffix for audit
+
+## Verification record — implemented, reviewed, ACCEPTED
+
+**Re-derived independently, not taken on report.** The five-term apportionment closes to the stated
+matched delta in all four cells (0.500, 0.265, 0.517, 0.387/0.388 with rounding), and all four interval
+lower bounds clear 0.70 with margin (0.738, 0.792, 0.788, 0.857).
+
+**Two results act as controls even though they were not designed as controls:**
+
+- **ANDNOT normalization is zero within noise on both hosts** (-0.005 and +0.018). That matches the source
+  reading that the array difference path returns its array directly and never calls the run-normalization
+  helper, while the union path does. A material term there would have meant either the source reading or
+  the arm wiring was wrong. Neither was.
+- **A3 branch selection split by host** — scalar on aarch64, AVX2 on x86_64. This is the reading that
+  corrected the original Stage 1 hypothesis, and the guard confirms it in the running binary rather than
+  by grepping for a symbol whose reachability was never checked.
+
+**The cross-cell pattern is not visible in any single row.** The scalar merge is the only term that is
+present and material in **all four** cells (0.226–0.322 ms; 1.111 ms summed). Normalization is
+**OR-only** (0.600 ms summed). The AVX2 advantage is **Zen 4 ANDNOT only** (0.109 ms). One scalar change
+can therefore move every cell; the other two levers each move a subset.
+
+**Zen 4 OR is the sharpest single finding.** CRoaring's own vectorized union was *slower* than its scalar
+arm on this corpus (-0.080 ms), so rawr trails there while the reference runs its worse path. That rules
+out a vectorized union as the OR lever without anyone having to write one first.
+
+The first M4 ANDNOT cell came back inconclusive and was rerun, as §3.1 requires. The rule fired on real
+data rather than sitting unexercised.
+
 ## Estimate
 
 **M** — six arms, exact apportionment, and pair accounting, reusing the spec 50 harness and corpus.
