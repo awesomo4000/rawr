@@ -16,8 +16,8 @@ Two loops, both `pub inline` and both called from exactly one production site:
 
 | loop | production caller | output buffer |
 | --- | --- | --- |
-| `benchmarkArrayUnionWrite` (`container_ops.zig:540`) | `arrayUnionArray` (`:509`) | freshly allocated by `ArrayContainer.init` |
-| `benchmarkArrayDifferenceWrite` (`:1015`) | `arrayDifferenceArray` (`:1002`) | freshly allocated |
+| `arrayUnionWrite` (renamed from `benchmarkArrayUnionWrite`) | `arrayUnionArray` | freshly allocated by `ArrayContainer.init` |
+| `arrayDifferenceWrite` (renamed from `benchmarkArrayDifferenceWrite`) | `arrayDifferenceArray` | freshly allocated |
 
 Replace each body with the C3 form validated in `51-01`. No signature change, no new public API, no
 per-architecture code, no SIMD.
@@ -237,6 +237,155 @@ branching at all.
   ratios quoted as context, **no difference of ratios computed**.
 - §5.3 correctness tests pass; all four suites plus `check-32`, `check-docs`, `check-package` green.
 - Pointer added to `done/optimization-branchless-merge.md`; claim worded per §6.
+
+## Outcome (08/28/2026)
+
+**GO. The branchy hoisted body with bulk tails is now the production implementation for the two
+out-of-place array merges.** `ArrayContainer.unionInPlace` remains branchless and unchanged. Its output
+aliases its input, and `51-01` did not measure that path.
+
+The non-aliasing guard uses an explicit Debug/ReleaseSafe panic instead of `std.debug.assert`. Zig lowers
+`std.debug.assert` to an unlabelled `unreachable`, while the child-process control needs to distinguish
+the intended failure from an unrelated crash. The guard still compiles out in ReleaseFast. The
+ReleaseSafe harness observed the named failure in ten operation/case combinations and accepted four
+adjacent/separate controls.
+
+### Same-binary kernel reduction
+
+The retained `h1` arm measured the production reduction without cross-run subtraction:
+
+| host | operation | predicted | measured `h1 - a1` | result |
+| --- | --- | ---: | ---: | --- |
+| M4 | OR | ~0.269 ms | **0.263 ms [0.254, 0.278]** | matches |
+| M4 | ANDNOT | ~0.320 ms | **0.300 ms [0.294, 0.317]** | matches |
+| Zen 4 | OR | ~0.207 ms | **0.185 ms [0.180, 0.205]** | close, 0.022 ms below |
+| Zen 4 | ANDNOT | ~0.277 ms | **0.285 ms [0.283, 0.307]** | matches |
+
+`census1881` also improved on both hosts: OR by 0.125 / 0.106 ms and ANDNOT by 0.149 / 0.148 ms for
+M4 / Zen 4. The 21-pair `uscensus2000` cells remained below useful timing resolution. The cross-host
+semantic audit passed for all 24 tuples and 120 processes per host. Removing one process row produced
+`ProcessCountMismatch`, so the updated expected-row guard remains live.
+
+### Current real-data rows
+
+These are current positions only. The table does not subtract them from historical spec 50 runs.
+
+| host | dataset | operation | rawr ms [min,max] | CRoaring ms [min,max] | ratio |
+| --- | --- | --- | ---: | ---: | ---: |
+| M4 | uscensus2000 | OR | 0.079 [0.071, 0.083] | 0.139 [0.123, 0.156] | **0.568x** |
+| M4 | uscensus2000 | ANDNOT | 0.040 [0.037, 0.043] | 0.091 [0.086, 0.095] | **0.440x** |
+| M4 | census1881 | OR | 0.269 [0.258, 0.273] | 0.245 [0.232, 0.254] | **1.098x** |
+| M4 | census1881 | ANDNOT | 0.157 [0.153, 0.166] | 0.170 [0.158, 0.179] | **0.924x** |
+| M4 | wikileaks-noquotes | OR | 0.444 [0.423, 0.544] | 0.247 [0.246, 0.296] | **1.798x** |
+| M4 | wikileaks-noquotes | ANDNOT | 0.170 [0.167, 0.180] | 0.211 [0.211, 0.220] | **0.806x** |
+| Zen 4 | uscensus2000 | OR | 0.113 [0.107, 0.178] | 0.135 [0.132, 0.140] | **0.831x** |
+| Zen 4 | uscensus2000 | ANDNOT | 0.127 [0.107, 0.160] | 0.064 [0.063, 0.067] | **1.992x** |
+| Zen 4 | census1881 | OR | 0.275 [0.264, 0.397] | 0.827 [0.818, 0.839] | **0.333x** |
+| Zen 4 | census1881 | ANDNOT | 0.147 [0.142, 0.153] | 0.567 [0.547, 0.577] | **0.259x** |
+| Zen 4 | wikileaks-noquotes | OR | 0.612 [0.600, 0.624] | 0.307 [0.303, 0.314] | **1.998x** |
+| Zen 4 | wikileaks-noquotes | ANDNOT | 0.224 [0.220, 0.237] | 0.129 [0.109, 0.138] | **1.738x** |
+
+Zen 4 `uscensus2000` ANDNOT remains an open low-resolution row. It has only 21 matched pairs, and rawr's
+0.127 ms median spans [0.107, 0.160] against CRoaring's 0.064 [0.063, 0.067] ms. The same-binary
+attribution cell is below useful timing resolution, while the current-position table cannot establish a
+cross-run change. No kernel conclusion is drawn from its 1.992x ratio.
+
+### Canonical board and code generation
+
+The directly affected canonical rows are flat or faster against their pre-change baselines:
+
+| host | row | pre-change rawr [min,max] | candidate rawr [min,max] |
+| --- | --- | ---: | ---: |
+| M4 | sparse AND | 0.614 [0.596, 0.620] ms | 0.589 [0.586, 0.592] ms |
+| M4 | sparse AND arena control | 0.571 [0.560, 0.603] ms | 0.556 [0.542, 0.562] ms |
+| M4 | dense AND | 145.264 [143.066, 145.996] ns/op | 138.916 [136.963, 139.771] ns/op |
+| M4 | sparse OR | 1.798 [1.784, 1.811] ms | **1.567 [1.553, 1.571] ms** |
+| M4 | dense OR | 234.009 [228.882, 234.375] ns/op | 223.877 [223.145, 224.243] ns/op |
+| Zen 4 | sparse AND | 0.914 [0.902, 0.926] ms | 0.906 [0.903, 0.933] ms |
+| Zen 4 | dense AND | 230.187 [224.602, 236.866] ns/op | 227.841 [226.145, 237.153] ns/op |
+| Zen 4 | sparse OR | 2.864 [2.852, 2.911] ms | **2.765 [2.724, 2.836] ms** |
+| Zen 4 | dense OR | 369.975 [364.512, 384.470] ns/op | 369.872 [366.781, 387.476] ns/op |
+
+The paired M4 comparison used an exact `b3ab49f` source export followed immediately by the candidate and
+found no rawr row beyond the 5% gate. The earlier sparse-AND arena comparison used a prior-day baseline
+and incorrectly reported a 6.2% regression with separated ranges. The paired comparison is 0.571
+[0.560, 0.603] against 0.556 [0.542, 0.562] ms, a 2.6% improvement with overlapping ranges.
+
+The strict Zen 4 all-row comparison was not clean: `rankMany` moved from 0.995x to 1.152x and skewed
+`andCardinality` from 0.977x to 1.163x. Both functions have instruction-identical production bodies
+after address normalization between the clean `b3ab49f` baseline and candidate; their addresses moved
+with the changed binary. This is the whole-binary layout effect already recorded by spec 28, not an
+array union/difference code path. It is reported here rather than represented as a clean literal 5%
+board pass.
+
+The inlined production bodies retain data-dependent value-comparison branches on both hosts. The result
+may therefore be described as a **branchy hoisted body with bulk tails**. It does not isolate branch
+predictability from the simultaneous load-hoisting change.
+
+### Verification and artifacts
+
+All four test suites, `validate`, `validate64`, `difftest`, `difftest64`, `check-32`, `check-docs`, and
+`check-package` pass on both hosts. `check-package` remains at 33 files.
+
+- M4 attribution: `misc/array-attribution-20260828-102552-summary.txt`
+- Zen 4 attribution: `misc/array-attribution-20260828-110854-summary.txt`
+- M4 real data: `misc/realdata-bench-20260828-104337-summary.txt`
+- Zen 4 real data: `misc/realdata-bench-20260828-110925-summary.txt`
+- M4 clean-HEAD board: `misc/parity-20260828-143059-summary.txt`
+- M4 candidate board: `misc/parity-20260828-145453-summary.txt`
+- Zen 4 candidate board: `misc/parity-20260828-111004-summary.txt`
+- Zen 4 clean-HEAD board: `misc/parity-20260828-134456-summary.txt`
+- Production disassembly: `misc/array-attribution-20260828-m4-production-disassembly.txt` and
+  `misc/array-attribution-20260828-zen4-production-disassembly.txt`
+
+## Verification record — implemented, reviewed, ACCEPTED
+
+Checked in the tree rather than from the report: both loops renamed and carrying the C3 body,
+`assertDisjointOutput` at the loop head, comments rewritten off the branchless claim, `unionInPlace`
+untouched with its deliberate-and-unmeasured note, the follow-up pointer added to
+`done/optimization-branchless-merge.md`, 24 tuples with `ProcessCountMismatch` firing live, and both
+inlined bodies retaining their data-dependent branches so §3's first row governs the wording.
+
+**The pre-registered prediction that mattered came in.** §5.2 said M4 ANDNOT should reach or pass parity
+because its scalar term (0.322 ms) exceeded the entire matched delta (0.265 ms). It landed at **0.806x,
+rawr faster**, from 2.005x. That is `51-00`'s apportionment predicting an end-to-end outcome before the
+change existed — the strongest evidence the model is right, and worth more than the four same-binary
+reductions that came in at 98%, 94%, 89% and 103% of prediction.
+
+**The M4 board scare was a measurement artifact, and it arrived through the one door this spec left
+open.** §5.2 banned cross-run subtraction for the improvement figure and for the real-data rows, and said
+nothing about the board comparison. The first M4 board result came from a prior-day baseline and reported
+sparse-AND arena at +6.2% with separated ranges, which looks exactly like a real regression. The paired
+exact-`b3ab49f` run put it at 0.571 → 0.556 ms with overlapping ranges — a small improvement.
+
+**Rule for future chunks: a before/after board claim requires a paired exact-HEAD run in the same
+session.** Separated ranges are not evidence of a code effect when the two sides come from different
+runs, and this campaign has now been bitten by that in the real-data rows (spec 39), the focused harness
+(spec 35) and the board.
+
+**The alias-guard substitution improved on what this spec asked for.** `std.debug.assert` lowers to an
+unlabelled `unreachable`, so the child-process control would have accepted *any* crash as a pass — a
+segfault would have satisfied the negative test. The explicit named panic is what makes it discriminating.
+
+### Where the campaign stands after this chunk
+
+Removing the scalar term leaves residuals that line up with `51-00`'s other terms in all four cells:
+
+| host | operation | current delta | `51-00` non-scalar terms | remaining lever |
+| --- | --- | ---: | ---: | --- |
+| M4 | OR | 0.197 ms | 0.200 ms | **normalization** (+0.224) |
+| M4 | ANDNOT | −0.041 ms | −0.057 ms | none; rawr ahead |
+| Zen 4 | OR | 0.305 ms | 0.291 ms | **normalization** (+0.376) |
+| Zen 4 | ANDNOT | 0.095 ms | 0.125 ms | **CRoaring AVX2** (+0.109) |
+
+**This is a consistency observation across runs, not a measurement.** The current deltas and `51-00`'s
+terms come from different runs, so no difference is computed and nothing here is a ratio claim. Read only
+as: the post-change positions are where the model said they would be.
+
+Two consequences for what comes next. **Normalization is confirmed as the OR lever** on both hosts, which
+is the chunk §9 already reserved. And **Zen 4 ANDNOT's residual is essentially the AVX2 term**, so the
+only lever left there is per-architecture SIMD — spec 15's territory, and the first point in this campaign
+where that argument actually applies.
 
 ## Estimate
 
