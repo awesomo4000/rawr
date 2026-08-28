@@ -301,7 +301,8 @@ arm on this corpus, so there is no evidence to justify writing one.
 - **[51-02](51-02-productize-branchy-merge.md)** — ship C3 in the two out-of-place loops. C3 is selected
   from Zen 4's clean timing separation plus smaller code on both hosts; the M4 ranges overlap, so C3 is
   *not worse* there rather than better. Carries the constraints `51-01` fixed — canonical board as the
-  corpus-specificity gate, claim a branchy hoisted body rather than branch predictability, reconcile
+  corpus-specificity gate, word the claim from the inlined-codegen outcome in `51-02` §3 and never as
+  branch predictability, reconcile
   `done/optimization-branchless-merge.md`, and a C3 residual blocks the explanation rather than the
   change — plus one found while drafting it: **`ArrayContainer.unionInPlace` holds a third copy of this
   merge that aliases within a single buffer**, so it is explicitly out of scope and `@memcpy` must never

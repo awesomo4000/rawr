@@ -24,7 +24,8 @@ per-architecture code, no SIMD.
 
 **Rename both** to `arrayUnionWrite` and `arrayDifferenceWrite`. The `benchmark` prefix was correct when
 these were extraction hooks; it is misleading once they are the shipped merge and the only
-implementation. Keep the internal export so the rig still reaches them.
+**out-of-place** implementation — `unionInPlace` keeps its own branchless merge by design (§2). Keep the
+internal export so the rig still reaches them.
 
 **Every test added by this chunk calls these production helpers**, never a copy preserved in the
 benchmark tree. A test that exercises a duplicate proves nothing about what ships.
@@ -158,8 +159,13 @@ sat next to a CRoaring reference moving −7.8% in the same pair of runs, which 
 was banned.
 
 The retained `h1` arm makes this unnecessary. **`h1 - a1` within a single run is the actual kernel
-reduction**, measured on one binary with one layout, and it is what gets compared against `51-01`'s
-predicted recovery:
+reduction**, measured on one binary with one layout.
+
+**The predictions below are `wikileaks-noquotes` only.** Both the `51-00` scalar terms and the `51-01`
+recovery figures were measured on the target corpus, so comparing `h1 - a1` against them is valid for
+that dataset and for no other. **Report `h1 - a1` on `census1881` and `uscensus2000` as controls** — no
+predicted value, no miss to account for. Their job is to show the change is not a loss elsewhere, and
+`uscensus2000`'s 21 matched pairs constrain little even for that.
 
 | host | operation | scalar term (`51-00`) | `51-01` recovery | predicted `h1 - a1` |
 | --- | --- | ---: | ---: | ---: |
@@ -217,8 +223,9 @@ branching at all.
 - **Arm set redefined per §4**: `a1` re-pointed at production, `h1_rawr_branchless_legacy` added as frozen
   source, `c1`/`c2`/`c3` retired, 24 tuples, **expected-row manifest updated and its mutation control
   re-exercised in the same commit**.
-- **`h1 - a1` reported per operation per host from a single run**, against §5.2's predictions, with any
-  large miss accounted for.
+- **`h1 - a1` reported per operation per host from a single run**, compared against §5.2's predictions
+  **on `wikileaks-noquotes` only**, with any large miss accounted for; the other two datasets reported as
+  controls with no predicted value.
 - Canonical board, both hosts, no row regressing beyond the 5% gate; moved rows reported with ranges.
 - Spec 50 harness re-run, three corpora, both hosts, **reporting new ratios with ranges only** — old
   ratios quoted as context, **no difference of ratios computed**.
