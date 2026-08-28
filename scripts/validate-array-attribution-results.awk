@@ -27,7 +27,7 @@ function fail(message) {
     if ((dataset != "uscensus2000" && dataset != "census1881" && dataset != "wikileaks-noquotes") ||
         (operation != "pair-or" && operation != "pair-andnot") ||
         (arm != "a1-rawr-scalar" && arm != "a2-croaring-scalar" &&
-         arm != "c1-bulk-tail" && arm != "c2-branchy" && arm != "c3-branchy-bulk-tail") ||
+         arm != "a3-croaring-production" && arm != "h1-rawr-branchless-legacy") ||
         median !~ /^[0-9]+$/ || digest !~ /^0x[0-9a-f]+$/ ||
         fingerprint !~ /^0x[0-9a-f]+$/) {
         fail("InvalidResultValue")

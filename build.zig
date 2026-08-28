@@ -310,7 +310,7 @@ pub fn build(b: *std.Build) void {
     const run_array_candidate_tests = b.addRunArtifact(array_candidate_tests);
     const array_candidate_test_step = b.step(
         "check-array-merge-candidates",
-        "Test the spec 51-01 scalar merge candidates",
+        "Test the frozen branchless array merge baseline",
     );
     array_candidate_test_step.dependOn(&run_array_candidate_tests.step);
     const bench_array_attr_step = b.step(
@@ -319,6 +319,29 @@ pub fn build(b: *std.Build) void {
     );
     bench_array_attr_step.dependOn(&run_array_candidate_tests.step);
     bench_array_attr_step.dependOn(&b.addInstallArtifact(bench_array_attr_exe, .{}).step);
+
+    // ReleaseSafe child used by check-array-merge-alias.sh to falsify the
+    // production merge helpers' non-aliasing assertion in separate processes.
+    const alias_check_rawr_mod = b.createModule(.{
+        .root_source_file = b.path("src/roaring.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+    });
+    const alias_check_mod = b.createModule(.{
+        .root_source_file = b.path("src/check_array_merge_alias.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+    });
+    alias_check_mod.addImport("rawr", alias_check_rawr_mod);
+    const alias_check_exe = b.addExecutable(.{
+        .name = "check_array_merge_alias",
+        .root_module = alias_check_mod,
+    });
+    const alias_check_step = b.step(
+        "check-array-merge-alias",
+        "Build the ReleaseSafe array merge alias checker",
+    );
+    alias_check_step.dependOn(&b.addInstallArtifact(alias_check_exe, .{}).step);
 
     // Spec 48 fixture, lifecycle, and allocation-accounting setup checker.
     const bench_tiny_setup_mod = b.createModule(.{

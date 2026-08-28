@@ -306,6 +306,14 @@ arm on this corpus, so there is no evidence to justify writing one.
   `done/optimization-branchless-merge.md`, and a C3 residual blocks the explanation rather than the
   change — plus one found while drafting it: **`ArrayContainer.unionInPlace` holds a third copy of this
   merge that aliases within a single buffer**, so it is explicitly out of scope and `@memcpy` must never
-  reach it.
+  reach it. **Accepted 08/28/2026.** Same-binary `h1 - a1` reductions matched the pre-registered
+  predictions on both hosts; the current `wikileaks-noquotes` rows are M4 OR 1.798x / ANDNOT 0.806x and
+  Zen 4 OR 1.998x / ANDNOT 1.738x. Both inlined production bodies retain the data-dependent branches.
+  Zen 4 `uscensus2000` ANDNOT remains an open low-resolution row at 1.992x; its 21 matched pairs do not
+  provide enough same-binary timing signal to attribute that result to this kernel.
+  Directly affected canonical rows are flat or faster. A fresh exact-HEAD M4 board had no rawr row
+  beyond the 5% gate. The strict Zen 4 all-row comparison showed instruction-identical,
+  address-shifted layout movement in two unrelated rows, recorded in the chunk under the standing
+  spec-28 caveat rather than represented as a clean literal 5% pass.
 - **Normalization is a separate later chunk**, gated on the wider board and serialized size per §9, not
   on this corpus.

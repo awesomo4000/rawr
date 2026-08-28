@@ -2,6 +2,11 @@
 
 # Optimization: Branchless Merge Walk for Array Containers
 
+> **Follow-up (08/28/2026):** [Spec 51-02](../51-02-productize-branchy-merge.md) replaces the
+> out-of-place union and difference loops with the real-data-tested C3 source form. The in-place union
+> remains branchless because its output aliases its input and that path was not part of the later
+> measurement. The two results cover different workloads and call paths.
+
 **Applies to:** `src/container_ops.zig`
 **Functions:** `arrayUnionArray`, `arrayIntersectArray`, `arrayDifferenceArray`
 **Depends on:** Nothing. Standalone change.

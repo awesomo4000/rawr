@@ -53,9 +53,7 @@ const Arm = enum {
     b1_rawr_production,
     b2_croaring_production,
     b3_rawr_no_normalize,
-    c1_bulk_tail,
-    c2_branchy,
-    c3_branchy_bulk_tail,
+    h1_rawr_branchless_legacy,
 
     fn id(self: Arm) []const u8 {
         return switch (self) {
@@ -67,9 +65,7 @@ const Arm = enum {
             .b1_rawr_production => "b1-rawr-production",
             .b2_croaring_production => "b2-croaring-production",
             .b3_rawr_no_normalize => "b3-rawr-no-normalize",
-            .c1_bulk_tail => "c1-bulk-tail",
-            .c2_branchy => "c2-branchy",
-            .c3_branchy_bulk_tail => "c3-branchy-bulk-tail",
+            .h1_rawr_branchless_legacy => "h1-rawr-branchless-legacy",
         };
     }
 
@@ -87,12 +83,11 @@ const Arm = enum {
 };
 
 const operations = [_]Operation{ .pair_or, .pair_andnot };
-const candidate_arms = [_]Arm{
+const layer_a_arms = [_]Arm{
     .a1_rawr_scalar,
     .a2_croaring_scalar,
-    .c1_bulk_tail,
-    .c2_branchy,
-    .c3_branchy_bulk_tail,
+    .a3_croaring_production,
+    .h1_rawr_branchless_legacy,
 };
 
 const RequestedCell = struct {
@@ -488,7 +483,7 @@ fn printManifest() void {
     for (corpus_mod.supported_datasets) |dataset| {
         for (operations) |operation| {
             bench_time.print("ROW\t{s}\t{s}\n", .{ dataset.name(), operation.id() });
-            for (candidate_arms) |arm| {
+            for (layer_a_arms) |arm| {
                 bench_time.print("TUPLE\t{s}\t{s}\t{s}\n", .{ dataset.name(), operation.id(), arm.id() });
             }
         }
@@ -550,8 +545,7 @@ fn runRequested(requested: RequestedCell, corpus: *const corpus_mod.Corpus) !voi
     if (actual.digest != expected.digest) return error.MatchedDigestMismatch;
     if (actual.outputs_distinct == false) return error.LayerAOutputAliasesInput;
     if (requested.arm == .a1_rawr_scalar or requested.arm == .a2_croaring_scalar or
-        requested.arm == .a3_croaring_production or requested.arm == .c1_bulk_tail or
-        requested.arm == .c2_branchy or requested.arm == .c3_branchy_bulk_tail)
+        requested.arm == .a3_croaring_production or requested.arm == .h1_rawr_branchless_legacy)
     {
         if (actual.allocation_calls != 0) return error.LayerAAllocated;
     }
@@ -630,31 +624,21 @@ fn measureMatched(operation: Operation, arm: Arm, pairs: *const PairSet) !u64 {
 fn runMatched(operation: Operation, arm: Arm, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
     return switch (arm) {
         .a1_rawr_scalar => @call(.never_inline, runA1Batch, .{ operation, pairs, digest_outputs }),
-        .c1_bulk_tail => @call(.never_inline, runC1Batch, .{ operation, pairs, digest_outputs }),
-        .c2_branchy => @call(.never_inline, runC2Batch, .{ operation, pairs, digest_outputs }),
-        .c3_branchy_bulk_tail => @call(.never_inline, runC3Batch, .{ operation, pairs, digest_outputs }),
+        .h1_rawr_branchless_legacy => @call(.never_inline, runH1Batch, .{ operation, pairs, digest_outputs }),
         .b1_rawr_production, .b3_rawr_no_normalize => @call(.never_inline, runRawrMatched, .{ operation, arm, pairs, digest_outputs }),
         .a2_croaring_scalar, .a3_croaring_production, .b2_croaring_production => @call(.never_inline, runCRoaringMatched, .{ operation, arm, pairs, digest_outputs }),
         else => unreachable,
     };
 }
 
-const RawrLayerAArm = enum { baseline, bulk_tail, branchy, branchy_bulk_tail };
+const RawrLayerAArm = enum { production, legacy };
 
 fn runA1Batch(operation: Operation, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
-    return runRawrLayerABatch(.baseline, operation, pairs, digest_outputs);
+    return runRawrLayerABatch(.production, operation, pairs, digest_outputs);
 }
 
-fn runC1Batch(operation: Operation, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
-    return runRawrLayerABatch(.bulk_tail, operation, pairs, digest_outputs);
-}
-
-fn runC2Batch(operation: Operation, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
-    return runRawrLayerABatch(.branchy, operation, pairs, digest_outputs);
-}
-
-fn runC3Batch(operation: Operation, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
-    return runRawrLayerABatch(.branchy_bulk_tail, operation, pairs, digest_outputs);
+fn runH1Batch(operation: Operation, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
+    return runRawrLayerABatch(.legacy, operation, pairs, digest_outputs);
 }
 
 inline fn runRawrLayerABatch(
@@ -689,21 +673,15 @@ inline fn mergeLayerA(
 ) usize {
     const a = pair.left.values[0..pair.left.cardinality];
     const b = pair.right.values[0..pair.right.cardinality];
-    if (arm == .baseline) {
+    if (arm == .production) {
         return switch (operation) {
-            .pair_or => rawr.container_ops.benchmarkArrayUnionWrite(a, b, output),
-            .pair_andnot => rawr.container_ops.benchmarkArrayDifferenceWrite(a, b, output),
+            .pair_or => rawr.container_ops.arrayUnionWrite(a, b, output),
+            .pair_andnot => rawr.container_ops.arrayDifferenceWrite(a, b, output),
         };
     }
-    const variant: candidates.Variant = switch (arm) {
-        .bulk_tail => .bulk_tail,
-        .branchy => .branchy,
-        .branchy_bulk_tail => .branchy_bulk_tail,
-        .baseline => unreachable,
-    };
     return switch (operation) {
-        .pair_or => candidates.unionWrite(variant, a, b, output),
-        .pair_andnot => candidates.differenceWrite(variant, a, b, output),
+        .pair_or => candidates.legacyUnionWrite(a, b, output),
+        .pair_andnot => candidates.legacyDifferenceWrite(a, b, output),
     };
 }
 
@@ -810,12 +788,12 @@ fn mergeAllocatingWithoutNormalization(operation: Operation, pair: Pair) !Contai
 
 fn mergeInto(operation: Operation, pair: Pair, output: []u16) usize {
     return switch (operation) {
-        .pair_or => rawr.container_ops.benchmarkArrayUnionWrite(
+        .pair_or => rawr.container_ops.arrayUnionWrite(
             pair.left.values[0..pair.left.cardinality],
             pair.right.values[0..pair.right.cardinality],
             output,
         ),
-        .pair_andnot => rawr.container_ops.benchmarkArrayDifferenceWrite(
+        .pair_andnot => rawr.container_ops.arrayDifferenceWrite(
             pair.left.values[0..pair.left.cardinality],
             pair.right.values[0..pair.right.cardinality],
             output,

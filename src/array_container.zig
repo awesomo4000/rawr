@@ -247,7 +247,8 @@ pub const ArrayContainer = struct {
         const self_end: usize = max_card;
         const other_end: usize = other.cardinality;
 
-        // Branchless merge: always write the smaller value, advance contributing pointer(s).
+        // Keep this branchless merge separate from container_ops.arrayUnionWrite: this
+        // in-place path aliases its output and was not measured by spec 51-02.
         // On aarch64, LLVM emits csel for the output and cset for advances — no branches.
         while (si < self_end and oi < other_end) {
             const sv = self.values[si];
