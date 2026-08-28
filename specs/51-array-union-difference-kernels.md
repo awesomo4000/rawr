@@ -298,16 +298,13 @@ arm on this corpus, so there is no evidence to justify writing one.
 - **[51-01](51-01-scalar-merge-candidates.md)** — scalar merge candidates measured as Layer A arms.
   **Accepted. GO for the branchy hoisted body** (C2/C3) on both operations and both hosts; the bulk-tail
   candidate C1 is NO-GO because LLVM already emits bulk copies for the existing element-wise drains.
-- **`51-02` productize is unwritten.** `51-01` fixed four of its constraints:
-  - The M4 C2-versus-C3 ranges overlap for both operations, while Zen 4 separates cleanly in C3's favour.
-    C3 is selected from that Zen 4 result plus smaller code on both hosts, not from the recovery ratios;
-    its `@memcpy` non-aliasing precondition must carry into production.
-  - **The canonical board is the corpus-specificity gate.** `uscensus2000` contributed 21 matched pairs
-    and constrains almost nothing.
-  - The justification may claim a **branchy/hoisted body**, not branch predictability specifically — the
-    measurement does not separate the two.
-  - Adopting either arm reverses `done/optimization-branchless-merge.md` for these loops on real data, so
-    that record needs a pointer to the new one.
-  - A C3 residual does **not** block productizing. What it blocks is the **explanation**.
+- **[51-02](51-02-productize-branchy-merge.md)** — ship C3 in the two out-of-place loops. C3 is selected
+  from Zen 4's clean timing separation plus smaller code on both hosts; the M4 ranges overlap, so C3 is
+  *not worse* there rather than better. Carries the constraints `51-01` fixed — canonical board as the
+  corpus-specificity gate, claim a branchy hoisted body rather than branch predictability, reconcile
+  `done/optimization-branchless-merge.md`, and a C3 residual blocks the explanation rather than the
+  change — plus one found while drafting it: **`ArrayContainer.unionInPlace` holds a third copy of this
+  merge that aliases within a single buffer**, so it is explicitly out of scope and `@memcpy` must never
+  reach it.
 - **Normalization is a separate later chunk**, gated on the wider board and serialized size per §9, not
   on this corpus.
