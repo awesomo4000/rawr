@@ -7,6 +7,7 @@ const builtin = @import("builtin");
 const rawr = @import("rawr");
 const c = @import("c");
 const bench_time = @import("bench_time.zig");
+const candidates = @import("bench_array_merge_candidates.zig");
 const corpus_mod = @import("realdata_corpus.zig");
 
 const RoaringBitmap = rawr.RoaringBitmap;
@@ -15,7 +16,6 @@ const Container = rawr.Container;
 const warmup_runs = 1;
 const timed_runs = 7;
 const default_root = "misc/realdata";
-const dataset = corpus_mod.Dataset.wikileaks_noquotes;
 
 const Operation = enum {
     pair_or,
@@ -53,6 +53,9 @@ const Arm = enum {
     b1_rawr_production,
     b2_croaring_production,
     b3_rawr_no_normalize,
+    c1_bulk_tail,
+    c2_branchy,
+    c3_branchy_bulk_tail,
 
     fn id(self: Arm) []const u8 {
         return switch (self) {
@@ -64,6 +67,9 @@ const Arm = enum {
             .b1_rawr_production => "b1-rawr-production",
             .b2_croaring_production => "b2-croaring-production",
             .b3_rawr_no_normalize => "b3-rawr-no-normalize",
+            .c1_bulk_tail => "c1-bulk-tail",
+            .c2_branchy => "c2-branchy",
+            .c3_branchy_bulk_tail => "c3-branchy-bulk-tail",
         };
     }
 
@@ -81,18 +87,16 @@ const Arm = enum {
 };
 
 const operations = [_]Operation{ .pair_or, .pair_andnot };
-const arms = [_]Arm{
-    .e1_rawr_endtoend,
-    .e2_croaring_endtoend,
+const candidate_arms = [_]Arm{
     .a1_rawr_scalar,
     .a2_croaring_scalar,
-    .a3_croaring_production,
-    .b1_rawr_production,
-    .b2_croaring_production,
-    .b3_rawr_no_normalize,
+    .c1_bulk_tail,
+    .c2_branchy,
+    .c3_branchy_bulk_tail,
 };
 
 const RequestedCell = struct {
+    dataset: corpus_mod.Dataset,
     operation: Operation,
     arm: Arm,
     root: []const u8,
@@ -120,12 +124,32 @@ const SizeDistribution = struct {
     max: u32 = 0,
 };
 
+const MergeDiagnostics = struct {
+    output_elements: u64 = 0,
+    tail_elements: u64 = 0,
+    tail_pairs: u64 = 0,
+    tail_lengths: SizeDistribution = .{},
+    left_decisions: u64 = 0,
+    right_decisions: u64 = 0,
+    equal_decisions: u64 = 0,
+    streak_count: u64 = 0,
+    streak_lengths: SizeDistribution = .{},
+};
+
+const Decision = enum { left, right, equal };
+
+const PairDiagnostic = struct {
+    output_elements: u32,
+    tail_elements: u32,
+};
+
 const PairSet = struct {
     allocator: std.mem.Allocator,
     pairs: []Pair,
     c_pairs: []c.rawr_cr_array_pair_t,
     accounting: PairAccounting,
     sizes: SizeDistribution,
+    diagnostics: MergeDiagnostics,
 
     fn init(allocator: std.mem.Allocator, sources: *const RawrSources, operation: Operation) !PairSet {
         var list: std.ArrayList(Pair) = .empty;
@@ -197,6 +221,7 @@ const PairSet = struct {
             size.* = @as(u32, pair.left.cardinality) + pair.right.cardinality;
         }
         std.mem.sort(u32, pair_sizes, {}, std.sort.asc(u32));
+        const diagnostics = try computeMergeDiagnostics(allocator, operation, pairs);
 
         return .{
             .allocator = allocator,
@@ -204,6 +229,7 @@ const PairSet = struct {
             .c_pairs = c_pairs,
             .accounting = accounting,
             .sizes = sizeDistribution(pair_sizes),
+            .diagnostics = diagnostics,
         };
     }
 
@@ -213,6 +239,121 @@ const PairSet = struct {
         self.* = undefined;
     }
 };
+
+const DecisionTracker = struct {
+    diagnostics: *MergeDiagnostics,
+    streaks: *std.ArrayList(u32),
+    allocator: std.mem.Allocator,
+    previous: ?Decision = null,
+    current_length: u32 = 0,
+
+    fn add(self: *DecisionTracker, decision: Decision) !void {
+        switch (decision) {
+            .left => self.diagnostics.left_decisions += 1,
+            .right => self.diagnostics.right_decisions += 1,
+            .equal => self.diagnostics.equal_decisions += 1,
+        }
+        if (self.previous == decision) {
+            self.current_length += 1;
+            return;
+        }
+        try self.finishStreak();
+        self.previous = decision;
+        self.current_length = 1;
+    }
+
+    fn finish(self: *DecisionTracker) !void {
+        try self.finishStreak();
+        self.previous = null;
+    }
+
+    fn finishStreak(self: *DecisionTracker) !void {
+        if (self.current_length == 0) return;
+        try self.streaks.append(self.allocator, self.current_length);
+        self.current_length = 0;
+    }
+};
+
+fn computeMergeDiagnostics(
+    allocator: std.mem.Allocator,
+    operation: Operation,
+    pairs: []const Pair,
+) !MergeDiagnostics {
+    const tail_lengths = try allocator.alloc(u32, pairs.len);
+    defer allocator.free(tail_lengths);
+    var streaks: std.ArrayList(u32) = .empty;
+    defer streaks.deinit(allocator);
+    var diagnostics = MergeDiagnostics{};
+
+    for (pairs, tail_lengths) |pair, *tail_length| {
+        const pair_diagnostic = try diagnosePair(operation, pair, &diagnostics, &streaks, allocator);
+        diagnostics.output_elements += pair_diagnostic.output_elements;
+        diagnostics.tail_elements += pair_diagnostic.tail_elements;
+        diagnostics.tail_pairs += @intFromBool(pair_diagnostic.tail_elements != 0);
+        tail_length.* = pair_diagnostic.tail_elements;
+    }
+
+    std.mem.sort(u32, tail_lengths, {}, std.sort.asc(u32));
+    std.mem.sort(u32, streaks.items, {}, std.sort.asc(u32));
+    diagnostics.tail_lengths = sizeDistribution(tail_lengths);
+    diagnostics.streak_count = streaks.items.len;
+    diagnostics.streak_lengths = sizeDistribution(streaks.items);
+    return diagnostics;
+}
+
+fn diagnosePair(
+    operation: Operation,
+    pair: Pair,
+    diagnostics: *MergeDiagnostics,
+    streaks: *std.ArrayList(u32),
+    allocator: std.mem.Allocator,
+) !PairDiagnostic {
+    const a = pair.left.values[0..pair.left.cardinality];
+    const b = pair.right.values[0..pair.right.cardinality];
+    var i: usize = 0;
+    var j: usize = 0;
+    var output_elements: u32 = 0;
+    var tracker = DecisionTracker{
+        .diagnostics = diagnostics,
+        .streaks = streaks,
+        .allocator = allocator,
+    };
+
+    while (i < a.len and j < b.len) {
+        const decision: Decision = if (a[i] < b[j])
+            .left
+        else if (b[j] < a[i])
+            .right
+        else
+            .equal;
+        try tracker.add(decision);
+        switch (decision) {
+            .left => {
+                i += 1;
+                output_elements += 1;
+            },
+            .right => {
+                j += 1;
+                output_elements += @intFromBool(operation == .pair_or);
+            },
+            .equal => {
+                i += 1;
+                j += 1;
+                output_elements += @intFromBool(operation == .pair_or);
+            },
+        }
+    }
+    try tracker.finish();
+
+    const tail_elements: u32 = switch (operation) {
+        .pair_or => @intCast((a.len - i) + (b.len - j)),
+        .pair_andnot => @intCast(a.len - i),
+    };
+    return .{
+        .output_elements = output_elements + tail_elements,
+        .tail_elements = tail_elements,
+    };
+}
 
 const RawrSources = struct {
     bitmaps: []RoaringBitmap,
@@ -290,6 +431,7 @@ pub fn main(init: std.process.Init) !void {
 
     var list = false;
     var header = false;
+    var dataset: ?corpus_mod.Dataset = null;
     var operation: ?Operation = null;
     var arm: ?Arm = null;
     var root: []const u8 = default_root;
@@ -298,6 +440,8 @@ pub fn main(init: std.process.Init) !void {
             list = true;
         } else if (std.mem.eql(u8, arg, "--header")) {
             header = true;
+        } else if (std.mem.startsWith(u8, arg, "--dataset=")) {
+            dataset = corpus_mod.Dataset.parse(arg[10..]) orelse return error.UnknownDataset;
         } else if (std.mem.startsWith(u8, arg, "--operation=")) {
             operation = Operation.parse(arg[12..]) orelse return error.UnknownOperation;
         } else if (std.mem.startsWith(u8, arg, "--arm=")) {
@@ -310,14 +454,14 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (list) {
-        if (header or operation != null or arm != null or !std.mem.eql(u8, root, default_root)) {
+        if (header or dataset != null or operation != null or arm != null or !std.mem.eql(u8, root, default_root)) {
             return error.ConflictingArguments;
         }
         printManifest();
         return;
     }
     if (header) {
-        if (operation != null or arm != null or !std.mem.eql(u8, root, default_root)) {
+        if (dataset != null or operation != null or arm != null or !std.mem.eql(u8, root, default_root)) {
             return error.ConflictingArguments;
         }
         printHeader();
@@ -325,6 +469,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const requested = RequestedCell{
+        .dataset = dataset orelse return error.MissingDataset,
         .operation = operation orelse return error.MissingOperation,
         .arm = arm orelse return error.MissingArm,
         .root = root,
@@ -333,23 +478,27 @@ pub fn main(init: std.process.Init) !void {
         std.heap.page_allocator,
         init.io,
         requested.root,
-        dataset,
+        requested.dataset,
     );
     defer corpus.deinit();
     try runRequested(requested, &corpus);
 }
 
 fn printManifest() void {
-    for (operations) |operation| {
-        bench_time.print("ROW\t{s}\n", .{operation.id()});
-        for (arms) |arm| bench_time.print("TUPLE\t{s}\t{s}\n", .{ operation.id(), arm.id() });
+    for (corpus_mod.supported_datasets) |dataset| {
+        for (operations) |operation| {
+            bench_time.print("ROW\t{s}\t{s}\n", .{ dataset.name(), operation.id() });
+            for (candidate_arms) |arm| {
+                bench_time.print("TUPLE\t{s}\t{s}\t{s}\n", .{ dataset.name(), operation.id(), arm.id() });
+            }
+        }
     }
 }
 
 fn printHeader() void {
     bench_time.printBenchEnvironment();
     bench_time.print("# requested-cpu: native\n", .{});
-    bench_time.print("# dataset: {s}\n", .{dataset.name()});
+    bench_time.print("# datasets: uscensus2000 census1881 wikileaks-noquotes\n", .{});
     bench_time.print("# protocol: {d} warmup cycle, {d} timed cycles, process median\n", .{
         warmup_runs,
         timed_runs,
@@ -396,12 +545,13 @@ fn runRequested(requested: RequestedCell, corpus: *const corpus_mod.Corpus) !voi
     defer pairs.deinit();
 
     const median = try measureMatched(requested.operation, requested.arm, &pairs);
-    const expected = try runRawrMatched(requested.operation, .a1_rawr_scalar, &pairs, true);
+    const expected = try runMatched(requested.operation, .a1_rawr_scalar, &pairs, true);
     const actual = try runMatched(requested.operation, requested.arm, &pairs, true);
     if (actual.digest != expected.digest) return error.MatchedDigestMismatch;
     if (actual.outputs_distinct == false) return error.LayerAOutputAliasesInput;
     if (requested.arm == .a1_rawr_scalar or requested.arm == .a2_croaring_scalar or
-        requested.arm == .a3_croaring_production)
+        requested.arm == .a3_croaring_production or requested.arm == .c1_bulk_tail or
+        requested.arm == .c2_branchy or requested.arm == .c3_branchy_bulk_tail)
     {
         if (actual.allocation_calls != 0) return error.LayerAAllocated;
     }
@@ -479,9 +629,81 @@ fn measureMatched(operation: Operation, arm: Arm, pairs: *const PairSet) !u64 {
 
 fn runMatched(operation: Operation, arm: Arm, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
     return switch (arm) {
-        .a1_rawr_scalar, .b1_rawr_production, .b3_rawr_no_normalize => @call(.never_inline, runRawrMatched, .{ operation, arm, pairs, digest_outputs }),
+        .a1_rawr_scalar => @call(.never_inline, runA1Batch, .{ operation, pairs, digest_outputs }),
+        .c1_bulk_tail => @call(.never_inline, runC1Batch, .{ operation, pairs, digest_outputs }),
+        .c2_branchy => @call(.never_inline, runC2Batch, .{ operation, pairs, digest_outputs }),
+        .c3_branchy_bulk_tail => @call(.never_inline, runC3Batch, .{ operation, pairs, digest_outputs }),
+        .b1_rawr_production, .b3_rawr_no_normalize => @call(.never_inline, runRawrMatched, .{ operation, arm, pairs, digest_outputs }),
         .a2_croaring_scalar, .a3_croaring_production, .b2_croaring_production => @call(.never_inline, runCRoaringMatched, .{ operation, arm, pairs, digest_outputs }),
         else => unreachable,
+    };
+}
+
+const RawrLayerAArm = enum { baseline, bulk_tail, branchy, branchy_bulk_tail };
+
+fn runA1Batch(operation: Operation, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
+    return runRawrLayerABatch(.baseline, operation, pairs, digest_outputs);
+}
+
+fn runC1Batch(operation: Operation, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
+    return runRawrLayerABatch(.bulk_tail, operation, pairs, digest_outputs);
+}
+
+fn runC2Batch(operation: Operation, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
+    return runRawrLayerABatch(.branchy, operation, pairs, digest_outputs);
+}
+
+fn runC3Batch(operation: Operation, pairs: *const PairSet, digest_outputs: bool) !ArmResult {
+    return runRawrLayerABatch(.branchy_bulk_tail, operation, pairs, digest_outputs);
+}
+
+inline fn runRawrLayerABatch(
+    comptime arm: RawrLayerAArm,
+    operation: Operation,
+    pairs: *const PairSet,
+    digest_outputs: bool,
+) !ArmResult {
+    var measured = ArmResult{ .branch = .rawr_scalar };
+    var output: [ArrayContainer.MAX_CARDINALITY]u16 = undefined;
+    var hasher = PairHasher.init();
+    for (pairs.pairs, 0..) |pair, pair_index| {
+        if (@intFromPtr(&output) == @intFromPtr(pair.left.values.ptr) or
+            @intFromPtr(&output) == @intFromPtr(pair.right.values.ptr))
+        {
+            measured.outputs_distinct = false;
+            return error.LayerAOutputAliasesInput;
+        }
+        const count = mergeLayerA(arm, operation, pair, &output);
+        measured.checksum +%= count;
+        if (digest_outputs) hashPair(&hasher, pair_index, output[0..count]);
+    }
+    measured.digest = if (digest_outputs) hasher.finish() else 0;
+    return measured;
+}
+
+inline fn mergeLayerA(
+    comptime arm: RawrLayerAArm,
+    operation: Operation,
+    pair: Pair,
+    output: []u16,
+) usize {
+    const a = pair.left.values[0..pair.left.cardinality];
+    const b = pair.right.values[0..pair.right.cardinality];
+    if (arm == .baseline) {
+        return switch (operation) {
+            .pair_or => rawr.container_ops.benchmarkArrayUnionWrite(a, b, output),
+            .pair_andnot => rawr.container_ops.benchmarkArrayDifferenceWrite(a, b, output),
+        };
+    }
+    const variant: candidates.Variant = switch (arm) {
+        .bulk_tail => .bulk_tail,
+        .branchy => .branchy,
+        .branchy_bulk_tail => .branchy_bulk_tail,
+        .baseline => unreachable,
+    };
+    return switch (operation) {
+        .pair_or => candidates.unionWrite(variant, a, b, output),
+        .pair_andnot => candidates.differenceWrite(variant, a, b, output),
     };
 }
 
@@ -690,9 +912,13 @@ fn printResult(
     pairs: *const PairSet,
     result: ArmResult,
 ) void {
+    const diagnostics = pairs.diagnostics;
     bench_time.print(
-        "RESULT\t{s}\t{s}\t{d}\t0x{x:0>16}\t0x{x:0>16}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{s}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n",
+        "RESULT\t{s}\t{s}\t{s}\t{d}\t0x{x:0>16}\t0x{x:0>16}" ++
+            "\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{s}\t{d}\t{d}" ++
+            "\t{d}\t{d}\t{d}\t{d}\t{d}",
         .{
+            requested.dataset.name(),
             requested.operation.id(),
             requested.arm.id(),
             median_ns,
@@ -715,6 +941,29 @@ fn printResult(
             pairs.sizes.p90,
             pairs.sizes.p99,
             pairs.sizes.max,
+        },
+    );
+    bench_time.print(
+        "\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}" ++
+            "\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n",
+        .{
+            diagnostics.output_elements,
+            diagnostics.tail_elements,
+            diagnostics.tail_pairs,
+            diagnostics.tail_lengths.min,
+            diagnostics.tail_lengths.p50,
+            diagnostics.tail_lengths.p90,
+            diagnostics.tail_lengths.p99,
+            diagnostics.tail_lengths.max,
+            diagnostics.left_decisions,
+            diagnostics.right_decisions,
+            diagnostics.equal_decisions,
+            diagnostics.streak_count,
+            diagnostics.streak_lengths.min,
+            diagnostics.streak_lengths.p50,
+            diagnostics.streak_lengths.p90,
+            diagnostics.streak_lengths.p99,
+            diagnostics.streak_lengths.max,
         },
     );
 }

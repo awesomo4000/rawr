@@ -27,7 +27,7 @@ for file in "$first" "$second"; do
         printf 'process artifact not readable: %s\n' "$file" >&2
         exit 1
     fi
-    awk -v expected_runs=5 -v expected_tuples=16 -v expected_processes=80 \
+    awk -v expected_runs=5 -v expected_tuples=30 -v expected_processes=150 \
         -f scripts/validate-array-attribution-results.awk "$file" >/dev/null
 done
 
@@ -38,12 +38,14 @@ normalize() {
         {
             # Timing and A3 dispatch are host-specific. Every other field is
             # semantic output, workload accounting, or an arm-meaning guard.
-            print $1, $2, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, \
-                $16, $17, $18, $19, $20, $21, $22
+            printf "%s\t%s\t%s", $1, $2, $3
+            for (field = 5; field <= 15; field++) printf "\t%s", $field
+            for (field = 17; field <= 40; field++) printf "\t%s", $field
+            printf "\n"
         }
     ' "$input" | sort -u >"$output"
-    if [[ "$(wc -l <"$output" | tr -d '[:space:]')" != 16 ]]; then
-        printf 'expected 16 normalized tuples from %s\n' "$input" >&2
+    if [[ "$(wc -l <"$output" | tr -d '[:space:]')" != 30 ]]; then
+        printf 'expected 30 normalized tuples from %s\n' "$input" >&2
         exit 1
     fi
 }
@@ -56,4 +58,4 @@ if ! cmp -s "$tmp_dir/first.tsv" "$tmp_dir/second.tsv"; then
     exit 1
 fi
 
-printf 'array-attribution cross-host audit: OK (16 tuples, 80 processes per host)\n'
+printf 'array-attribution cross-host audit: OK (30 tuples, 150 processes per host)\n'

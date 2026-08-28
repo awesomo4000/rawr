@@ -16,82 +16,72 @@ function fail(message) {
 }
 
 {
-    if (NF != 22) fail("InvalidResultFieldCount")
-    operation = $1
-    arm = $2
-    median = $3
-    digest = $4
-    fingerprint = $5
-    pairs = $6
-    inputs = $7
-    bitset = $8
-    other = $9
-    unmatched_left = $10
-    unmatched_right = $11
-    conversions = $12
-    allocations = $13
-    normalizations = $14
-    branch = $15
-    distinct = $16
-    storage = $17
+    if (NF != 40) fail("InvalidResultFieldCount")
+    dataset = $1
+    operation = $2
+    arm = $3
+    median = $4
+    digest = $5
+    fingerprint = $6
 
-    if ((operation != "pair-or" && operation != "pair-andnot") ||
-        arm == "" || median !~ /^[0-9]+$/ ||
-        digest !~ /^0x[0-9a-f]+$/ || fingerprint !~ /^0x[0-9a-f]+$/) {
+    if ((dataset != "uscensus2000" && dataset != "census1881" && dataset != "wikileaks-noquotes") ||
+        (operation != "pair-or" && operation != "pair-andnot") ||
+        (arm != "a1-rawr-scalar" && arm != "a2-croaring-scalar" &&
+         arm != "c1-bulk-tail" && arm != "c2-branchy" && arm != "c3-branchy-bulk-tail") ||
+        median !~ /^[0-9]+$/ || digest !~ /^0x[0-9a-f]+$/ ||
+        fingerprint !~ /^0x[0-9a-f]+$/) {
         fail("InvalidResultValue")
     }
-    for (field = 6; field <= 14; field++) {
+    for (field = 7; field <= 15; field++) {
         if ($field !~ /^[0-9]+$/) fail("InvalidNumericMetadata")
     }
-    if (distinct !~ /^[01]$/ || storage !~ /^[01]$/) fail("InvalidBooleanMetadata")
-    for (field = 18; field <= 22; field++) {
-        if ($field !~ /^[0-9]+$/) fail("InvalidSizeDistribution")
+    if ($16 == "") fail("MissingBranchMetadata")
+    if ($17 !~ /^[01]$/ || $18 !~ /^[01]$/) fail("InvalidBooleanMetadata")
+    for (field = 19; field <= 40; field++) {
+        if ($field !~ /^[0-9]+$/) fail("InvalidDiagnosticMetadata")
     }
 
-    tuple = operation SUBSEP arm
+    tuple = dataset SUBSEP operation SUBSEP arm
     process_count++
     if (!(tuple in tuple_seen)) {
         tuple_seen[tuple] = 1
         tuple_count++
         tuple_digest[tuple] = digest
-        tuple_static[tuple] = fingerprint SUBSEP pairs SUBSEP inputs SUBSEP bitset SUBSEP other \
-            SUBSEP unmatched_left SUBSEP unmatched_right SUBSEP conversions SUBSEP allocations \
-            SUBSEP normalizations SUBSEP branch SUBSEP distinct SUBSEP storage SUBSEP $18 SUBSEP $19 \
-            SUBSEP $20 SUBSEP $21 SUBSEP $22
+        tuple_static[tuple] = staticFields()
     } else {
         if (tuple_digest[tuple] != digest) fail("DigestRepeatMismatch")
-        current_static = fingerprint SUBSEP pairs SUBSEP inputs SUBSEP bitset SUBSEP other \
-            SUBSEP unmatched_left SUBSEP unmatched_right SUBSEP conversions SUBSEP allocations \
-            SUBSEP normalizations SUBSEP branch SUBSEP distinct SUBSEP storage SUBSEP $18 SUBSEP $19 \
-            SUBSEP $20 SUBSEP $21 SUBSEP $22
-        if (tuple_static[tuple] != current_static) fail("MetadataRepeatMismatch")
+        if (tuple_static[tuple] != staticFields()) fail("MetadataRepeatMismatch")
     }
     tuple_processes[tuple]++
 
-    common = fingerprint SUBSEP pairs SUBSEP inputs SUBSEP bitset SUBSEP other SUBSEP unmatched_left \
-        SUBSEP unmatched_right SUBSEP $18 SUBSEP $19 SUBSEP $20 SUBSEP $21 SUBSEP $22
-    if (!(operation in operation_seen)) {
-        operation_seen[operation] = 1
-        operation_common[operation] = common
-    } else if (operation_common[operation] != common) {
-        fail("ArmInputCountMismatch")
+    common_key = dataset SUBSEP operation
+    common = fingerprint
+    for (field = 7; field <= 12; field++) common = common SUBSEP $field
+    for (field = 19; field <= 40; field++) common = common SUBSEP $field
+    if (!(common_key in common_seen)) {
+        common_seen[common_key] = 1
+        common_static[common_key] = common
+    } else if (common_static[common_key] != common) {
+        fail("ArmInputOrDiagnosticMismatch")
     }
 
-    digest_group = arm ~ /^e[12]-/ ? "endtoend" : "matched"
-    digest_key = operation SUBSEP digest_group
-    if (!(digest_key in group_seen)) {
-        group_seen[digest_key] = 1
+    digest_key = dataset SUBSEP operation
+    if (!(digest_key in digest_seen)) {
+        digest_seen[digest_key] = 1
         group_digest[digest_key] = digest
     } else if (group_digest[digest_key] != digest) {
         fail("DigestCrossArmMismatch")
     }
 
-    if (arm ~ /^a[123]-/) {
-        if (allocations != 0) fail("LayerAAllocated")
-        if (distinct != 1) fail("LayerAOutputAliasesInput")
-        if (storage != 1) fail("LayerAOutputStorageChanged")
-    }
-    if (arm == "b3-rawr-no-normalize" && normalizations != 0) fail("B3Normalized")
+    if ($14 != 0) fail("LayerAAllocated")
+    if ($17 != 1) fail("LayerAOutputAliasesInput")
+    if ($18 != 1) fail("LayerAOutputStorageChanged")
+}
+
+function staticFields(    value, field) {
+    value = $5
+    for (field = 6; field <= 40; field++) value = value SUBSEP $field
+    return value
 }
 
 END {

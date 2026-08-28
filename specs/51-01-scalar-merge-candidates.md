@@ -366,12 +366,17 @@ controls:
 | OR | [0.150, 0.159] | [0.133, 0.143] | yes |
 | ANDNOT | [0.149, 0.223] | [0.114, 0.135] | yes |
 
-**What is not shown is the same comparison on M4.** The M4 recovery points are 0.895 versus 0.891 and
-0.993 versus 0.993 — indistinguishable, but that is inferred from a ratio rather than measured directly.
-**`51-02` must state the M4 C2-versus-C3 timing ranges before committing to C3**, because C3 carries the
-`@memcpy` non-aliasing precondition into production and C2 does not. Code size favours C3 on both hosts
-(792 and 928 bytes against C2's 872 and 1,024, and against A1's 896), so this is probably a formality —
-but "probably" is the thing these rules exist to replace.
+The direct M4 ranges overlap, so that host shows no measurable distinction between C2 and C3:
+
+| M4 | C2 | C3 | separated? |
+| --- | --- | --- | --- |
+| OR | 0.127 [0.125, 0.134] | 0.126 [0.123, 0.140] | no |
+| ANDNOT | 0.107 [0.103, 0.117] | 0.107 [0.102, 0.109] | no |
+
+C3 is therefore selected from the clean Zen 4 separation plus its smaller inspected code on both hosts,
+not from the shared-denominator recovery ratios. Code size favours C3 at 792 and 928 bytes against C2's
+872 and 1,024, and neither M4 operation regresses. `51-02` must still carry C3's `@memcpy` non-aliasing
+precondition into production and re-check the inlined codegen.
 
 **Corpus-specificity evidence is thinner than a three-corpus design suggests.** `uscensus2000` supplied
 21 matched pairs; only `census1881`'s 118 constrain anything. Reporting that plainly is right, and it

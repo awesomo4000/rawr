@@ -300,10 +300,24 @@ pub fn build(b: *std.Build) void {
         .name = "bench_array_attribution",
         .root_module = bench_array_attr_mod,
     });
+    const array_candidate_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bench_array_merge_candidates.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const run_array_candidate_tests = b.addRunArtifact(array_candidate_tests);
+    const array_candidate_test_step = b.step(
+        "check-array-merge-candidates",
+        "Test the spec 51-01 scalar merge candidates",
+    );
+    array_candidate_test_step.dependOn(&run_array_candidate_tests.step);
     const bench_array_attr_step = b.step(
         "bench-array-attribution",
         "Build the real-data array OR/ANDNOT attribution worker",
     );
+    bench_array_attr_step.dependOn(&run_array_candidate_tests.step);
     bench_array_attr_step.dependOn(&b.addInstallArtifact(bench_array_attr_exe, .{}).step);
 
     // Spec 48 fixture, lifecycle, and allocation-accounting setup checker.

@@ -299,8 +299,9 @@ arm on this corpus, so there is no evidence to justify writing one.
   **Accepted. GO for the branchy hoisted body** (C2/C3) on both operations and both hosts; the bulk-tail
   candidate C1 is NO-GO because LLVM already emits bulk copies for the existing element-wise drains.
 - **`51-02` productize is unwritten.** `51-01` fixed four of its constraints:
-  - The M4 C2-versus-C3 **timing** ranges must be stated before choosing C3, since C3 carries an
-    `@memcpy` non-aliasing precondition into production and C2 does not.
+  - The M4 C2-versus-C3 ranges overlap for both operations, while Zen 4 separates cleanly in C3's favour.
+    C3 is selected from that Zen 4 result plus smaller code on both hosts, not from the recovery ratios;
+    its `@memcpy` non-aliasing precondition must carry into production.
   - **The canonical board is the corpus-specificity gate.** `uscensus2000` contributed 21 matched pairs
     and constrains almost nothing.
   - The justification may claim a **branchy/hoisted body**, not branch predictability specifically — the
