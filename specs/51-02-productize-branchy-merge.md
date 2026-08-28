@@ -22,9 +22,12 @@ Two loops, both `pub inline` and both called from exactly one production site:
 Replace each body with the C3 form validated in `51-01`. No signature change, no new public API, no
 per-architecture code, no SIMD.
 
-**Rename both.** The `benchmark` prefix was correct when these were extraction hooks; it will be
-misleading once they are the shipped merge and the only implementation. Keep the internal export so the
-rig still reaches them.
+**Rename both** to `arrayUnionWrite` and `arrayDifferenceWrite`. The `benchmark` prefix was correct when
+these were extraction hooks; it is misleading once they are the shipped merge and the only
+implementation. Keep the internal export so the rig still reaches them.
+
+**Every test added by this chunk calls these production helpers**, never a copy preserved in the
+benchmark tree. A test that exercises a duplicate proves nothing about what ships.
 
 ## 2. The aliasing surface — and the third loop nobody measured
 
@@ -57,26 +60,74 @@ difference merge.
 neither input, so a future caller that violates it fails in Debug and ReleaseSafe instead of corrupting
 data in ReleaseFast. A comment cannot fail; this can.
 
+**The guard compares byte ranges, not pointers.** Pointer equality is the one aliasing case that would
+never occur here — the dangerous one is a slice into the middle of an input, which has a different
+pointer and overlaps anyway. The condition is range intersection: `output` and each input overlap unless
+one ends at or before the other begins.
+
+**Testing it needs a child process.** A failed `assert` panics and cannot be caught by an ordinary Zig
+test, so the guard is otherwise unfalsifiable — the exact failure mode this campaign keeps finding.
+Require a small process-isolated harness built in **ReleaseSafe**, invoked per case, with the parent
+checking the child's exit:
+
+| case | expected |
+| --- | --- |
+| `output` is the same slice as an input | panic |
+| `output` overlaps the head of an input | panic |
+| `output` overlaps the tail of an input | panic |
+| `output` lies strictly inside an input | panic |
+| `output` is adjacent to an input, sharing no byte | **no panic** |
+| `output` is a separate allocation | **no panic** |
+
+The last two are the controls, and the adjacent case is the one that matters: it catches an off-by-one
+that makes the guard fire on legitimate callers.
+
 ## 3. Codegen must be re-verified after inlining
 
 `51-01`'s disassembly covered **non-inlined batch symbols**, which is a scope limit its own record states.
 Production inlines these loops into their call sites, and inlining changes register pressure and what the
 optimizer can prove.
 
-**Re-record the disassembly at the production call sites on both hosts** and confirm the data-dependent
-value-comparison branches survive there. If they do not, the shipped code is not the thing `51-01`
-measured, and the board result is the only remaining evidence.
+**Re-record the disassembly on both hosts at the inlined bodies of `arrayUnionArray` and
+`arrayDifferenceArray`** — the production call sites, named explicitly, not a helper symbol that may not
+survive inlining — and state whether the data-dependent value-comparison branch survives in each.
+
+**The outcome is defined in advance, and it decides the wording, not the adoption:**
+
+| result | adoption | what may be claimed |
+| --- | --- | --- |
+| **branches survive** | proceed on `51-01` plus the board | **branchy plus hoisted body** |
+| **branches removed by inlining** | may still proceed, **on the board alone** | **the C3 source form** — nothing attributing the win to branching |
+
+The second row is not a failure. It means the shipped code is not the thing `51-01` timed, so `51-01`
+stops being evidence for it and the board carries the decision by itself. §6's language rule is
+conditional on this outcome.
 
 Update the loop comments. The current *"Branchless merge … on aarch64, LLVM emits csel"* text becomes
 false for these two loops. It stays true for `unionInPlace`.
 
 ## 4. Keep the rig able to measure this
 
-Once production becomes C3, the rig's `a1_rawr_scalar` arm **is** C3, and the A1-versus-A2 gap the whole
-spec was built on disappears from the output.
+Once production becomes C3, the rig's `a1_rawr_scalar` and `c3_*` arms are the same code, and the
+A1-versus-A2 gap the whole spec was built on disappears from the output. The arm set has to be redefined,
+not just extended.
 
-**Retain the old branchless form as its own arm.** Without it the rig reports a meaningless "no gap" and
-the historical baseline is gone — including the ability to detect a future regression back toward it.
+**`a1_rawr_scalar` keeps its meaning: rawr as it ships.** That definition is what makes `A1 - A2`
+comparable across `51-00`, `51-01`, and everything after. Re-point it at the renamed production helper;
+do not repurpose the name for the historical form.
+
+**Add `h1_rawr_branchless_legacy` — a frozen private copy of the pre-`51-02` branchless source.** It must
+be its own source text in the benchmark tree, never a call into production, so it cannot silently track
+future edits and quietly stop being a baseline. It is the regression detector: `a1` drifting back toward
+`h1` becomes visible in one run.
+
+**Retire `c1`, `c2`, and `c3`.** C3 is now `a1`, and C1/C2 were variants of a body that no longer exists.
+Keeping them would leave three arm names whose meanings depend on which chunk you are reading.
+
+**Layer A arm set becomes `a1`, `a2`, `a3`, `h1`** — 4 arms × 2 operations × 3 datasets = **24 tuples**.
+`51-01`'s protocol mutation control rejects a missing row against an expected-row manifest, so **update
+that manifest in the same commit and re-exercise the control**. A stale expected count either fails every
+run or, worse, passes while silently expecting arms that no longer exist.
 
 ## 5. Gates
 
@@ -95,23 +146,44 @@ measurement floor and a shifted untouched row is not evidence of a kernel effect
 
 ### 5.2 Real-data rows — did the thing we were chasing actually move
 
-Re-run the spec 50 harness on all three corpora, both hosts. Layer A recovery does not entail an
-end-to-end move; specs 27 and 35 both produced kernel-level wins that failed to reach the row.
+Layer A recovery does not entail an end-to-end move; specs 27 and 35 both produced kernel-level wins that
+failed to reach the row. Two separate measurements answer two separate questions, and **neither is a
+subtraction across runs**.
 
-**Pre-registered expectations**, from `51-01` recovery applied to `51-00`'s scalar terms. These are
-predictions to check against, **not acceptance thresholds** — the point is that a large divergence means
-the attribution was wrong somewhere:
+#### The measured reduction comes from one binary: `h1 - a1`
 
-| host | operation | scalar term | expected reduction | matched delta today | expected remainder |
-| --- | --- | ---: | ---: | ---: | ---: |
-| M4 | OR | 0.300 ms | ~0.269 ms | 0.500 ms | ~0.23 ms |
-| M4 | ANDNOT | 0.322 ms | ~0.320 ms | 0.265 ms | **at or past parity** |
-| Zen 4 | OR | 0.226 ms | ~0.207 ms | 0.517 ms | ~0.31 ms |
-| Zen 4 | ANDNOT | 0.263 ms | ~0.277 ms | 0.387 ms | ~0.11 ms |
+**Do not quantify the improvement by subtracting a new spec 50 run from the old one.** Different binary,
+different layout, and a reference that moves on its own — spec 39 established that a rawr gain of +4.1%
+sat next to a CRoaring reference moving −7.8% in the same pair of runs, which is why cross-run arithmetic
+was banned.
 
-**Report actual against predicted for all four**, and account for any cell that misses badly. M4 ANDNOT is
-the sharpest prediction: the scalar term exceeds the whole matched delta, so if the row does not reach
-parity the apportionment has a problem worth understanding before the next chunk.
+The retained `h1` arm makes this unnecessary. **`h1 - a1` within a single run is the actual kernel
+reduction**, measured on one binary with one layout, and it is what gets compared against `51-01`'s
+predicted recovery:
+
+| host | operation | scalar term (`51-00`) | `51-01` recovery | predicted `h1 - a1` |
+| --- | --- | ---: | ---: | ---: |
+| M4 | OR | 0.300 ms | 0.895 | ~0.269 ms |
+| M4 | ANDNOT | 0.322 ms | 0.993 | ~0.320 ms |
+| Zen 4 | OR | 0.226 ms | 0.917 | ~0.207 ms |
+| Zen 4 | ANDNOT | 0.263 ms | 1.052 | ~0.277 ms |
+
+**Predictions to check against, not acceptance thresholds.** A large miss means the attribution was wrong
+somewhere, and that is worth knowing before the next chunk.
+
+#### The spec 50 rerun reports the row, and only the row
+
+Re-run the spec 50 harness on all three corpora, both hosts. It answers **where the row now stands** and
+whether anything regressed. It does **not** supply the improvement figure.
+
+**Report the new ratios with their ranges, and quote the old ones as context only.** Do not compute a
+difference of ratios and present it as a measurement — that is the same cross-run arithmetic in a
+different shape, and it is wrong for the same reason. The claim is *the row is now X*, not *the row
+improved by Y*.
+
+`51-00`'s matched deltas of 0.500 / 0.265 / 0.517 / 0.387 ms are the standing context. **M4 ANDNOT is the
+sharpest case**: its scalar term exceeds the entire matched delta, so it should reach or pass parity. If
+it does not, the apportionment has a problem.
 
 ### 5.3 Correctness
 
@@ -126,23 +198,30 @@ this spec** when it lands. Neither record is wrong: that one measured synthetic 
 real data, and the two regimes genuinely differ. An archive holding both conclusions with no link between
 them is the problem.
 
-**Language rule for the claim.** `51-01` measured a **branchy hoisted body**, changing branch structure
-and load behaviour together. Say that. **Do not claim branch predictability specifically** — the
-measurement does not separate it from load hoisting, and `51-01` says so explicitly.
+**Language rule for the claim, conditional on §3.** If the data-dependent branches survive inlining,
+`51-01` measured a **branchy hoisted body** — branch structure and load behaviour changed together, so
+say that and **do not claim branch predictability specifically**. If they do not survive, the claim
+narrows to **the C3 source form**, adopted on board evidence, with nothing attributing the win to
+branching at all.
 
 ## Acceptance
 
-- Both out-of-place loops carry the C3 form; renamed off the `benchmark` prefix; internal export retained.
+- Both out-of-place loops carry the C3 form, renamed to `arrayUnionWrite` / `arrayDifferenceWrite`;
+  internal export retained. **All new tests call these, not benchmark-tree copies.**
 - **`unionInPlace` unchanged**, with a comment recording that its branchless form is deliberate and
   unmeasured and pointing here.
-- **Debug assertion that `output` overlaps neither input**, verified to fire against a deliberately
-  aliased call.
-- Disassembly re-recorded **at the production call sites** on both hosts, stating whether the
-  data-dependent branches survived inlining; loop comments corrected.
-- **Old branchless form retained as a rig arm**, with a run showing the comparison still measurable.
+- **Byte-range overlap assertion**, with the process-isolated ReleaseSafe harness of §2 covering all four
+  panic cases **and both no-panic controls** — the adjacent-slice control specifically.
+- Disassembly re-recorded on both hosts **at the inlined `arrayUnionArray` and `arrayDifferenceArray`
+  bodies**, with the §3 outcome stated and §6's wording chosen from it; loop comments corrected.
+- **Arm set redefined per §4**: `a1` re-pointed at production, `h1_rawr_branchless_legacy` added as frozen
+  source, `c1`/`c2`/`c3` retired, 24 tuples, **expected-row manifest updated and its mutation control
+  re-exercised in the same commit**.
+- **`h1 - a1` reported per operation per host from a single run**, against §5.2's predictions, with any
+  large miss accounted for.
 - Canonical board, both hosts, no row regressing beyond the 5% gate; moved rows reported with ranges.
-- Spec 50 harness re-run, three corpora, both hosts, with **actual against predicted for all four cells**
-  per §5.2 and an account of any large miss.
+- Spec 50 harness re-run, three corpora, both hosts, **reporting new ratios with ranges only** — old
+  ratios quoted as context, **no difference of ratios computed**.
 - §5.3 correctness tests pass; all four suites plus `check-32`, `check-docs`, `check-package` green.
 - Pointer added to `done/optimization-branchless-merge.md`; claim worded per §6.
 
