@@ -275,6 +275,118 @@ A residual scopes what `51-02` may claim; per §2 it does not block `51-02`.
 - **No production change. No SIMD. No per-architecture code. `51-02` remains unwritten.**
 - Existing suites and checks green; no board row moves.
 
+## Outcome (08/27/2026)
+
+**GO for the branchy, hoisted merge body on both operations and both hosts.** C2 and C3 both clear the
+50% recovery gate. C3 is the strongest measured arm and is the candidate to carry into `51-02`; this
+chunk makes no production change.
+
+| host | operation | C2 recovery | C3 recovery | C3 completeness |
+| --- | --- | ---: | ---: | ---: |
+| M4 | OR | 0.891 [0.826, 0.952] | 0.895 [0.804, 0.960] | **residual remains** |
+| M4 | ANDNOT | 0.993 [0.897, 1.077] | 0.993 [0.926, 1.080] | inconclusive |
+| Zen 4 | OR | 0.840 [0.799, 0.954] | 0.917 [0.873, 1.041] | inconclusive |
+| Zen 4 | ANDNOT | 0.931 [0.654, 1.114] | 1.052 [0.942, 1.253] | inconclusive |
+
+The Zen 4 rows use the single target-only rerun required by §7. Its aggregate medians and ranges were:
+
+| operation | A1 | A2 | C1 | C2 | C3 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| OR | 0.335 [0.334, 0.336] | 0.119 [0.118, 0.138] | 0.331 [0.329, 0.332] | 0.154 [0.150, 0.159] | 0.137 [0.133, 0.143] |
+| ANDNOT | 0.424 [0.423, 0.431] | 0.132 [0.125, 0.170] | 0.412 [0.410, 0.414] | 0.152 [0.149, 0.223] | 0.117 [0.114, 0.135] |
+
+C1 does not clear the gate. On Zen 4 its rerun recovery intervals were [0.006, 0.037] for OR and
+[0.030, 0.080] for ANDNOT, both definite NO-GO results. On M4, the permitted C1 rerun made OR a
+definite NO-GO and left ANDNOT overlapping and therefore inconclusive. Since C1 fails the two-host rule,
+the unresolved M4 ANDNOT result does not keep it alive.
+
+**The disassembly changes the interpretation of C1.** On both hosts LLVM already recognizes A1's
+source-level element-wise drains and emits bulk copies. It does the same for C2. C1 therefore did not
+introduce the machine-level tail-copy distinction the source suggested, which explains its failure to
+move the target. The explicit C1 form also made the M4 batch symbol larger (980 bytes versus A1's 896).
+
+The branch/hoisting experiment did execute as designed:
+
+- M4 A1 uses `csel`/`cinc` for the merge advances; its existing ANDNOT conditional store still has a
+  data-dependent branch.
+- Zen 4 A1 uses `cmov`/condition-code materialization for the advances.
+- C2 and C3 retain data-dependent value-comparison branches on both hosts, together with the hoisted
+  values and one-sided reloads. The branch-predictability hypothesis was therefore tested, not
+  if-converted away.
+- C3 produces the smallest inspected batch symbol on both hosts: 792 bytes on M4 and 928 bytes on Zen 4,
+  versus 872 and 1,024 bytes for C2.
+
+The target diagnostics support, but do not by themselves prove, why that body works here. OR drains
+17.50% of its output and ANDNOT drains 15.90%, while merge-decision streaks have p50 8, p90 41, p99 247,
+and max 1,263. The timing establishes the branchy/hoisted body as the lever; it does not separate branch
+predictability from load hoisting. C3's additional Zen 4 improvement over C2 is an interaction, not an
+independent C1 win.
+
+No C3 control row regressed under the non-overlap rule. `census1881` supplied 118 matched pairs per
+operation. `uscensus2000` supplied only 21, so its result is a weak control; the strict rule flagged only
+Zen 4 C1 ANDNOT there, not C3. All candidate outputs and counts matched A1 across all three corpora, and
+the dedicated empty/singleton/disjoint/identical/exhaustion tests passed on both hosts.
+
+The cross-host audit matched all semantic and diagnostic fields across 30 tuples and 150 fresh processes
+per host. Protocol mutation checks rejected a missing row, a changed digest, changed diagnostic metadata,
+and a nonzero Layer A allocation count. Existing test, documentation, package, loader, and normal build
+checks passed; `check-package` remains at 33 allowlisted files. No board row moved.
+
+Artifacts:
+
+- M4: `misc/array-attribution-20260827-230603-summary.txt`, corresponding process TSV, and
+  `misc/array-attribution-20260827-m4-disassembly.txt`
+- Zen 4: `misc/array-attribution-20260827-234324-summary.txt`, corresponding process TSV,
+  `misc/array-attribution-20260827-zen4-target-rerun.tsv`, and
+  `misc/array-attribution-20260827-zen4-disassembly.txt`
+
+## Verification record — implemented, reviewed, ACCEPTED
+
+**Recomputed from the published medians and ranges, not taken on report.** All four C3 recovery intervals
+and the Zen 4 C1/C2 intervals reproduce to within display rounding. The §7 rules were applied as written:
+M4 OR at `S_max = 0.960 < 1.0` is *residual remains*; the other three straddle 1.0 and are correctly
+*inconclusive* rather than rounded to the nearer verdict; C1 at `S_max < 0.50` is NO-GO as a **resolved**
+answer, which is exactly the case the revised sign table was added to handle.
+
+**C1's death is the most valuable result here, and it is the §5 disassembly requirement paying for
+itself.** LLVM already recognizes A1's source-level element-wise drains and emits bulk copies, so C1
+introduced no machine-level difference at all. Without the disassembly, C1's 2–4% recovery reads as *tails
+do not matter much*; the truth is *the tail difference never existed in the binary*. **Same numbers,
+different conclusion.** The general lesson is reusable: a source-level difference is not a difference until
+codegen is checked.
+
+**The C2-versus-C3 choice is better founded than "strongest measured arm" — but by a different
+comparison.** The recovery intervals for C2 and C3 overlap in every cell, which looks like an unresolved
+choice. That is the wrong test: both fractions share A2's range in the denominator, so overlap there says
+little. The direct timing ranges separate cleanly on Zen 4 under the same non-overlap rule §7 uses for
+controls:
+
+| Zen 4 | C2 | C3 | separated? |
+| --- | --- | --- | --- |
+| OR | [0.150, 0.159] | [0.133, 0.143] | yes |
+| ANDNOT | [0.149, 0.223] | [0.114, 0.135] | yes |
+
+**What is not shown is the same comparison on M4.** The M4 recovery points are 0.895 versus 0.891 and
+0.993 versus 0.993 — indistinguishable, but that is inferred from a ratio rather than measured directly.
+**`51-02` must state the M4 C2-versus-C3 timing ranges before committing to C3**, because C3 carries the
+`@memcpy` non-aliasing precondition into production and C2 does not. Code size favours C3 on both hosts
+(792 and 928 bytes against C2's 872 and 1,024, and against A1's 896), so this is probably a formality —
+but "probably" is the thing these rules exist to replace.
+
+**Corpus-specificity evidence is thinner than a three-corpus design suggests.** `uscensus2000` supplied
+21 matched pairs; only `census1881`'s 118 constrain anything. Reporting that plainly is right, and it
+means **the canonical board in `51-02` is the real corpus-specificity gate**, not these controls.
+
+**The diagnostics earned their place.** Tail share of 17.50% (OR) and 15.90% (ANDNOT) capped C1's ceiling
+independently of the codegen finding, and streak lengths of p50 8, p90 41, p99 247, max 1,263 support the
+predictability hypothesis. The record correctly states that the timing does not separate predictability
+from load hoisting — C2 changes both at once, and that limit should survive into `51-02`'s wording rather
+than being quietly dropped.
+
+**One record-keeping obligation for `51-02`.** Adopting C2 or C3 reverses `done/optimization-branchless-
+merge.md` for these two loops on real data. Add a pointer there when it lands, so the archive does not
+hold two contradictory conclusions with no link between them.
+
 ## Estimate
 
 **S/M** — three loop variants and a dataset parameter in a rig that already has arm dispatch, digests,

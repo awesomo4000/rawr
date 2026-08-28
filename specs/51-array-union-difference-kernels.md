@@ -295,11 +295,18 @@ arm on this corpus, so there is no evidence to justify writing one.
 ## 10. Chunking
 
 - **[51-00](51-00-attribution.md)** — Stage 1 attribution. Diagnosis only. **Accepted.**
-- **[51-01](51-01-scalar-merge-candidates.md)** — scalar merge candidates measured as Layer A arms. Still
-  no production change. Covers both operations, since the scalar term is material in all four cells.
-- **`51-02` productize is unwritten**, and stays that way until `51-01` reports which candidate wins. A
-  C3 residual does **not** block it — a candidate meeting the `51-01` §7 gate is worth shipping whether or
-  not the remainder is understood. What a residual blocks is the **explanation**: `51-02` may adopt the
-  winner but may not justify it with an incomplete mechanism story.
+- **[51-01](51-01-scalar-merge-candidates.md)** — scalar merge candidates measured as Layer A arms.
+  **Accepted. GO for the branchy hoisted body** (C2/C3) on both operations and both hosts; the bulk-tail
+  candidate C1 is NO-GO because LLVM already emits bulk copies for the existing element-wise drains.
+- **`51-02` productize is unwritten.** `51-01` fixed four of its constraints:
+  - The M4 C2-versus-C3 **timing** ranges must be stated before choosing C3, since C3 carries an
+    `@memcpy` non-aliasing precondition into production and C2 does not.
+  - **The canonical board is the corpus-specificity gate.** `uscensus2000` contributed 21 matched pairs
+    and constrains almost nothing.
+  - The justification may claim a **branchy/hoisted body**, not branch predictability specifically — the
+    measurement does not separate the two.
+  - Adopting either arm reverses `done/optimization-branchless-merge.md` for these loops on real data, so
+    that record needs a pointer to the new one.
+  - A C3 residual does **not** block productizing. What it blocks is the **explanation**.
 - **Normalization is a separate later chunk**, gated on the wider board and serialized size per §9, not
   on this corpus.
