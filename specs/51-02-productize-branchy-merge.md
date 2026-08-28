@@ -188,8 +188,14 @@ different shape, and it is wrong for the same reason. The claim is *the row is n
 improved by Y*.
 
 `51-00`'s matched deltas of 0.500 / 0.265 / 0.517 / 0.387 ms are the standing context. **M4 ANDNOT is the
-sharpest case**: its scalar term exceeds the entire matched delta, so it should reach or pass parity. If
-it does not, the apportionment has a problem.
+sharpest case**: its scalar term exceeds the entire matched delta, so it should reach or pass parity.
+
+**If it does not, that is not by itself evidence against the apportionment.** The parity result comes
+from a new run while the matched delta is historical, so reference drift and layout movement are live
+explanations — the same reason this section bans cross-run subtraction. **Reconcile against the
+same-binary `h1 - a1` figure instead.** If that came in near prediction, the kernel change did what
+`51-01` said and the row's position is a question about the rest of the pipeline. Only if `h1 - a1` also
+misses badly does the attribution itself come into question.
 
 ### 5.3 Correctness
 
