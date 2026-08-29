@@ -205,9 +205,10 @@ code:
 | --- | ---: | ---: | ---: |
 | `2ba714a` | 2.032 ms | **0.575 ms** | 0.838 ms |
 
-**The allocator costs 1.457 ms — 3.53x — and rawr/libc at 0.575 ms beats CRoaring/libc at 0.838 ms
-(0.686x, rawr ahead).** On this row rawr's serialization code is *faster* than the reference and the
-entire gap is allocator behaviour.
+**The allocator selection adds 1.457 ms — 3.53x — and rawr/libc at 0.575 ms beats CRoaring/libc at
+0.838 ms (0.686x, rawr ahead).** That 1.457 ms delta more than accounts for the 1.194 ms rawr/SMP to
+CRoaring gap in this session. The result localises the gap to allocator-conditioned behaviour; Part B
+does not isolate the mechanism inside or around the allocator.
 
 **A documented mechanism exists, untested here.** Spec 37 established that `SmpAllocator` is
 **order-sensitive** — its cost depends on the address order it returns, not on per-call cost — and an OS,

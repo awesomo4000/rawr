@@ -245,9 +245,25 @@ even the array-row candidate raises it.
 
 **The reference's own build is part of this.** `52-00` recorded that the benchmark compiles CRoaring with
 **AVX-512 disabled**, on a CPU that reports AVX-512 support. Every x86_64 figure in this campaign is
-therefore rawr against **CRoaring-without-AVX-512**, not against CRoaring's fastest available build.
-**Either justify that choice on the record or state it as a scope limit on every claim** — a campaign
-about x86_64 vectorization cannot leave the reference's vectorization configured by an unexamined flag.
+therefore rawr against **CRoaring-without-AVX-512**, not against an AVX-512-enabled CRoaring build. CPU
+support alone does not establish that the enabled build is faster; no such comparison has been measured.
+**Either justify the disabled setting on the record or state it as a scope limit on every claim** — a
+campaign about x86_64 vectorization cannot leave the reference's vectorization configured by an
+unexamined flag.
+
+**Which CRoaring build is the fair reference is now an open scope question.** With a working opt-in path,
+the campaign must decide whether the reference is the default-off build it has always used or an
+AVX-512-enabled one on a capable CPU, since CRoaring's own dispatch would use those paths where compiled
+in. **This is not a question `52-00` Part B answers and it must not be settled by assumption.** Measuring
+default-off against enabled on the same host is a candidate experiment for Part A; until it is run,
+neither build is established as the faster reference and every x86_64 figure stays scoped to default-off.
+
+Stage 0 also found that the documented `-Dcroaring-avx512=true` path did not compile: the C amalgamation
+auto-detected the macro, but translate-c processed rawr's narrow wrapper without seeing that definition.
+The build now defines the same explicit `0` or `1` for the C compilation and translate-c. On Zen 4, the
+enabled worker builds, reports AVX-512 on, reports AVX2 and AVX-512 runtime support, and completes a real
+CRoaring tuple. That establishes a coherent opt-in build path, **not a performance result**; the existing
+campaign figures remain scoped to the default-off reference build.
 
 ## 7. Out of scope
 
