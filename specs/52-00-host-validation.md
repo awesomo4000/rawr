@@ -33,7 +33,12 @@ Identical on both sides, and recorded in the artifact:
   ratio is not like-for-like. Report what exists; do not synthesise a missing pair.
 - **CRoaring dispatch**: report `croaring_hardware_support()` once per environment and map each row to its
   source-gated expected path. **Label this as a source mapping, not branch observation** — it exists to
-  confirm the reference did not change branch between two environments running the same binary.
+  confirm the reference did not change branch between the two environments.
+- **Binary identity, stated rather than assumed.** Both environments are Linux x86_64, so **prefer
+  building the worker once, copying it across, and recording its SHA-256**. If differing glibc or
+  toolchain versions prevent that, build separately, **record both SHA-256 values, and state that the
+  binaries differ** — in which case the comparison is "same source and build configuration", not "same
+  binary", and the report must say so. Two separate builds are not proven identical.
 
 ### A.3 Report absolute times, not only ratios
 
@@ -57,8 +62,18 @@ report the pair.
 Applied to the **15 unique rows**: the 13 of toplevel §3 plus the `bitwiseAnd (sparse)` and
 `bitwiseAnd (array skewed)` controls.
 
-**Classify each row** by the pair of verdicts: *survives both*, *closes on native*, *survives native only*,
-or *inconclusive*. A row that closes on native is **environment-conditioned** — see §D.
+**Classify each row by the complete verdict pair.** An earlier draft omitted the *closes both* case,
+which is the one that would retire a row from the campaign entirely:
+
+| WSL2 | native | classification |
+| --- | --- | --- |
+| survives | survives | **real gap** — carries into Stage 1 |
+| survives | closes | **environment-conditioned** — see §D |
+| closes | survives | **environment-conditioned in the other direction** — report, do not explain away |
+| closes | closes | **not a gap in this session** — reconcile against the 08/28 board rather than assuming it went away |
+| any | inconclusive | **inconclusive** — no classification, rerun once per §A.4 |
+
+A row that closes on native is **environment-conditioned** and nothing stronger — see §D.
 
 ### A.5 One row that needs its own line
 
@@ -66,43 +81,69 @@ or *inconclusive*. A row that closes on native is **environment-conditioned** �
 environments under both allocators and state whether the libc behaviour reproduces. It is the one failing
 row where the allocator argument runs backwards, and nothing in Part A should smooth that over.
 
-## Part B — reconcile the `serialize` SMP discrepancy
+## Part B — reconcile the `serialize` movement
 
-Spec 28 measured **Zen 4 SMP `serialize` at 0.81x** (`1.035 → 0.824 ms`, commit `2ba714a`). It now reads
-**2.771x**. That is a 3.4x swing on a row whose serialization code has not changed.
+### B.0 The anchor is rawr's own time, not a ratio
 
-**Three candidate causes, and the design must separate them:**
+An earlier draft anchored this on "spec 28 recorded 0.81x, it now reads 2.771x". **That anchor is not
+sound.** Spec 28's record does state `0.81x`, but the Zen 4 production artifact it rests on,
+`misc/parity-20260728-204017-summary.txt`, **is not retained** — it is absent from `misc/`. A separate
+`0.802x` figure in that spec comes from the **factorial diagnostic harness**, not the production board.
+**The historical production parity ratio is therefore unknown**, and this chunk may not treat it as given.
 
-| candidate | why it is live |
+**What is durable is rawr's own absolute production SMP time:**
+
+| | rawr SMP `serialize` |
+| --- | ---: |
+| spec 28 outcome, commit `2ba714a` | **0.824 ms** |
+| clean-`b3ab49f` board, 08/28 | **2.004 ms** |
+
+**2.43x slower on the same operation**, and this statement does not depend on the missing artifact or on
+what CRoaring was doing in either run. **Part B investigates that movement.** Any parity ratio recovered
+along the way is reported as a secondary observation.
+
+### B.1 Two independent contrasts, both of which may move
+
+Three causes are live — environment drift, a binary-level change from unrelated edits (`bitmap.zig` has
+been modified many times since `2ba714a`, and spec 28's own finding was that whole-binary layout moves
+untouched rows), and a harness or toolchain change.
+
+**They are not mutually exclusive**, and an earlier draft's three-outcome table wrongly forced a single
+answer. The experiment gives two contrasts:
+
+| contrast | what it isolates |
 | --- | --- |
-| **environment drift** | the host is WSL2 and Part A exists because it may have moved |
-| **binary-level change from unrelated edits** | `bitmap.zig` has been modified many times since `2ba714a`; spec 28's own finding was that whole-binary layout moves untouched rows |
-| **harness or row-definition change** | the row must mean the same thing at both commits, or the comparison is void |
+| historical `2ba714a` (0.824 ms) **vs** current-session `2ba714a` | **session- and environment-conditioned** movement, valid only if B.2 passes |
+| current-session `2ba714a` **vs** current-session `HEAD` | **commit- and binary-conditioned** movement |
 
-### B.1 The decisive experiment
+**Report absolute median and full range for every cell of both contrasts**, SMP and libc, and **allow both
+findings to be true at once**. The environment may have moved *and* later binary layout may contribute.
+No approximate matching against remembered figures, and no forced single cause.
 
-**Build and run both commits in the current WSL2 environment, in one session**: `2ba714a` and current
-`HEAD`, `serialize` row only, SMP and libc, full protocol.
+Both contrasts run on existing hardware.
 
-| result | conclusion |
-| --- | --- |
-| `2ba714a` reproduces **~0.81x** today | the environment is exonerated; **the binary changed** |
-| both commits read **~2.77x** today | **the environment moved** since spec 28 |
-| neither matches either figure | the harness or row definition changed — go to B.2 before concluding |
+### B.2 Comparability audit — a prerequisite, not a follow-up
 
-This runs entirely on existing hardware.
+**Run this before B.1 is interpreted.** Comparing a row across commits assumes the row means the same
+thing; if it does not, B.1's numbers are uninterpretable rather than merely noisy. Audit between
+`2ba714a` and `HEAD`:
 
-### B.2 Verify the row means the same thing
+- the `serialize` **manifest entry**, and the **setup / timing / teardown boundaries**;
+- the **corpus initialisation** called and the **benchmark body**;
+- the **controller protocol** and **`bench_time.zig`**;
+- the **Zig version and build flags** — a toolchain change is neither environment drift nor our code, and
+  would be missed by both contrasts;
+- the **vendored CRoaring revision and its C flags**.
 
-Before comparing anything, **diff the `serialize` row's manifest entry and worker code between `2ba714a`
-and `HEAD`**. If the timing boundary, buffer handling, or input construction changed, the two figures are
-not comparable and no conclusion about drift or regression may be drawn from them. **State this check's
-result either way** — a silent pass here would make B.1's table meaningless.
+**State the result of every item, whether or not it found a change.** Movement in CRoaring or in the
+harness would otherwise be mislabelled as a binary-layout effect — which is exactly the error spec 52 §2.1
+already had to correct once.
 
-### B.3 If the binary changed
+### B.3 If the binary is implicated
 
-Do not bisect speculatively. Report the finding, and note that spec 28's serialize work is the record that
-would need revisiting. **Identifying the responsible change is not this chunk's job.**
+Do not bisect speculatively. Report the finding and note that spec 28's serialize record is what would
+need revisiting — including that its production artifact is missing. **Identifying the responsible change
+is not this chunk's job.**
 
 ## D. What this chunk cannot conclude
 
@@ -119,15 +160,21 @@ report. Attributing it further would need experiments this chunk does not run.
   in this session**, no reuse of the 08/28 boards.
 - §A.2 configuration pinned and recorded, including Zig version and commit; manifest variants reported as
   they exist with no synthesised pairs; CRoaring dispatch reported and **labelled a source mapping**.
+- **Binary identity resolved per §A.2**: one worker copied across with its SHA-256 recorded, or both
+  SHA-256 values recorded and the report stating the binaries differ.
 - **Absolute medians and ranges for both sides in both environments**, with any movement in CRoaring's own
   times called out explicitly. **No difference of ratios computed anywhere.**
 - §A.4 verdict applied to all **15 unique rows** per environment per existing allocator variant, each row
-  classified by its verdict pair.
+  placed in the **complete** classification matrix including *closes both*.
 - `bitwiseAnd (array balanced)` reported separately per §A.5, including whether the libc behaviour
   reproduces.
-- **Part B**: `2ba714a` and `HEAD` both built and run in the current environment, `serialize` row, SMP and
-  libc, with §B.1's table resolved to one of its three outcomes.
-- **§B.2 row-definition diff performed and its result stated**, whether or not it found a change.
+- **Part B anchored on rawr absolute time per §B.0**, not on the unbacked historical ratio. If the missing
+  `parity-20260728-204017` artifact is recovered, say so; otherwise state that the historical parity ratio
+  remains unknown.
+- **§B.2 comparability audit run before B.1 is interpreted**, with **every listed item's result stated**
+  including the ones that found no change.
+- **Both §B.1 contrasts reported** with absolute median and range per cell, SMP and libc, and **both
+  findings permitted to be true** — no single forced cause, no approximate matching to remembered figures.
 - Report contains **no claim that WSL2 specifically caused anything**, and does not use "host artifact".
 - No production change; all four suites plus `check-32`, `check-docs`, `check-package` green.
 
