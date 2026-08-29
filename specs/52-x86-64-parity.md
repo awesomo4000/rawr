@@ -69,20 +69,32 @@ That points at SMP allocation or allocator conditioning on this host — **not**
 serialization code, and not at vector width. The cluster the first draft labelled "unknown mechanism"
 has a strong candidate, and it is not a kernel.
 
-### 2.1 The spec 28 `serialize` discrepancy is open, not resolved
+### 2.1 The `serialize` movement is open, and its anchor is rawr's own time
 
-A previous version of this section claimed spec 28 had measured the libc row and that the contradiction
-dissolved. **That is wrong.** Spec 28 measured **Zen 4 SMP**: `1.035 → 0.824 ms`, reaching **0.81x** with
-rawr ahead. Today's libc figure of `0.805x` is a **coincidence**, and treating a numeric near-match as an
-identification was exactly the reasoning error this campaign keeps having to correct.
+Two earlier versions of this section got this wrong in opposite directions. The first claimed spec 28 had
+measured the libc row and the contradiction dissolved — false, spec 28 measured Zen 4 SMP. The second then
+anchored on spec 28's stated **0.81x** as a production parity ratio — **also unsound**, because the Zen 4
+production artifact behind it, `misc/parity-20260728-204017-summary.txt`, **is not retained**, and the
+separate `0.802x` figure in that spec comes from the **factorial diagnostic harness**, not the board.
+**The historical production parity ratio is unknown.** Today's libc figure of `0.805x` is a coincidence,
+and treating a numeric near-match as an identification is the error that produced the first version.
 
-So the position is: **Zen 4 SMP `serialize` was 0.81x and is now 2.771x, and production serialization has
-not changed since `2ba714a`.** That is a real discrepancy — cross-harness, board-definition, or
-allocator-state — and it is one of the strongest signals on the board precisely because the code is
-constant. **Do not report that nothing regressed.** `52-00` must reconcile it.
+**What is durable is rawr's own absolute production SMP time**, which depends on neither the missing
+artifact nor on what CRoaring was doing:
+
+| | rawr SMP `serialize` |
+| --- | ---: |
+| spec 28 outcome, commit `2ba714a` | **0.824 ms** |
+| clean-`b3ab49f` board, 08/28 | **2.004 ms** |
+
+**2.43x slower on the same operation**, with the serialization code unchanged since `2ba714a`. Three
+causes are live and **not mutually exclusive** — environment drift, binary-level change from unrelated
+edits to the same binary, and a harness or toolchain change. **Do not report that nothing regressed, and
+do not force a single cause.** [`52-00`](52-00-host-validation.md) Part B reconciles it.
 
 This does not weaken §2's split. `toArrayAlloc` and `serialize` are still allocator-localized *today*.
-But `serialize` additionally has a history in which SMP was fine, so it is not a static allocator story.
+But `serialize` additionally has a history in which its SMP time was far lower, so it is not a static
+allocator story.
 
 **One row runs the other way and needs its own account:** `bitwiseAnd (array balanced)` is **2.688x under
 SMP and 9.138x under libc**. Whatever is happening there, "libc exonerates the code" does not apply.
@@ -108,7 +120,7 @@ Clean-`b3ab49f` board, `parity-20260828-134456`.
 | row | SMP | libc | classification |
 | --- | ---: | ---: | --- |
 | `toArrayAlloc (1M values)` | 2.914 | 1.043 | **allocator-localized** — new attribution |
-| `serialize` | 2.771 | 0.805 | **allocator-localized today**, but SMP was **0.81x** in spec 28 with the code unchanged — **open discrepancy**, see §2.1 |
+| `serialize` | 2.771 | 0.805 | **allocator-localized today**, but rawr's own SMP time went **0.824 ms → 2.004 ms** with the code unchanged — **open**, see §2.1. Historical parity ratio unknown. |
 | `bitwiseAnd (array balanced)` | 2.688 | 9.138 | **new attribution** — balanced vector path, libc worse |
 | `lazyOr repair (sparse)` | 1.753 | 1.338 | **previously diagnosed** (38/39); opt-in remedy exists |
 | `bitwiseAnd (dense)` | 1.691 | 1.668 | new attribution — bitset word loop |
@@ -159,9 +171,13 @@ support is unverified because [spec 47](47-portability-matrix.md) was never run.
   such.** The canonical worker currently reports only the compile-time AVX-512 setting, so `52-00` will
   report `croaring_hardware_support()` once per host and **map each row to its source-gated expected
   path**. That is sufficient here, because the purpose is to confirm the reference did not change branch
-  between two environments running the same binary. **It is not branch observation and may not be
-  described as one.** Instrumented benchmark-only C wrappers that report the branch actually taken —
-  which `51-00` built and proved out — belong in Stage 1, where the branch is the thing under study.
+  between the two environments. **It is not branch observation and may not be described as one.**
+  Instrumented benchmark-only C wrappers that report the branch actually taken — which `51-00` built and
+  proved out — belong in Stage 1, where the branch is the thing under study.
+- **Binary identity is stated, not assumed.** Both environments are Linux x86_64, so prefer building the
+  worker once, copying it across, and recording its SHA-256. If toolchain or glibc differences prevent
+  that, record **both** SHA-256 values and report that the binaries differ — the comparison is then "same
+  source and build configuration", not "same binary". See `52-00` §A.2.
 
 **Verdict rule, per row, pre-registered:**
 
