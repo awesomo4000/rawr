@@ -56,8 +56,8 @@ dead end, and this spec may not claim that it does.
 
 ## 2. The allocator evidence, which reframes the whole target
 
-Every board row runs under **both** allocators. The first draft never cross-referenced them. Doing so
-splits the failing rows immediately:
+Most board rows run under **both** allocators (not all — see §4 for the variants that do not pair). The
+first draft never cross-referenced them. Doing so splits the failing rows immediately:
 
 | Zen 4 clean-HEAD row | SMP | libc |
 | --- | ---: | ---: |
@@ -171,7 +171,8 @@ support is unverified because [spec 47](47-portability-matrix.md) was never run.
 | `rawr_max / croaring_min <= 1.10` | **gap closes** |
 | otherwise | **inconclusive** — rerun once, then report as inconclusive |
 
-Applied to all 13 rows plus the four intersection rows of §2, under both allocators. "Collapse" is not a
+Applied to all 13 rows plus the four intersection rows of §2, **under each allocator variant that exists
+for that row**. "Collapse" is not a
 verdict; this table is.
 
 **Stage 0 decides what the campaign is about.** If the allocator-localized rows close on native Linux,
@@ -182,8 +183,8 @@ cannot identify and must not be used.
 
 ## 5. What must not regress — named rows, not categories
 
-**Owner constraint: intersection must not regress.** Stated as exact rows, on **both hosts** and **both
-allocators**:
+**Owner constraint: intersection must not regress.** Stated as exact rows, on **both hosts** and under
+**each allocator variant that exists for the row**:
 
 - `bitwiseAnd (sparse)`
 - `bitwiseAnd (dense)`
@@ -227,8 +228,9 @@ even the array-row candidate raises it.
 
 ## 8. Chunking
 
-- **`52-00` — Stage 0, host validation.** Canonical board on native Linux x86_64, same machine, both
-  allocators, §4 verdict rule applied to every row. **No production change.** Decides whether the rest
+- **`52-00` — Stage 0, host validation.** Canonical board on native Linux x86_64, same machine, every
+  existing manifest variant with SMP/libc compared where both exist, §4 verdict rule applied to every
+  row. **No production change.** Decides whether the rest
   happens and what it is about.
 - **Stage 1 attribution is deliberately unwritten.** Its arms depend on which rows survive Stage 0 and on
   whether the allocator-localized cluster is real. Writing them now would be guessing — the same reason
