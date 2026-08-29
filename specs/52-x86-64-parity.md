@@ -24,9 +24,11 @@ first grep excluded the files that would have contradicted it. **A search that c
 is not evidence of its absence.**
 
 **More importantly, source width does not determine emitted width.** LLVM legalizes a 512-bit logical
-vector to whatever the target provides — four 128-bit operations without AVX2, two with. **Nothing about
-the emitted instructions can be read off the source.** Only production disassembly answers it, and this
-spec must not restate a width claim without one.
+vector however it chooses for the target: it may split it into narrower vector operations, scalarize it
+entirely, or select a different sequence altogether — vector `@popCount` is a particular case where the
+lowering is not obvious. **Predicting an instruction count from the source width is the same error in a
+smaller form.** Only production disassembly is authoritative, and this spec may not restate a width claim
+without one.
 
 ### 1.2 CRoaring is not scalar on aarch64
 
@@ -67,9 +69,20 @@ That points at SMP allocation or allocator conditioning on this host — **not**
 serialization code, and not at vector width. The cluster the first draft labelled "unknown mechanism"
 has a strong candidate, and it is not a kernel.
 
-**This also dissolves the spec 28 contradiction.** Spec 28 recorded Zen 4 `serialize` at **0.81x**;
-today's **libc** figure is **0.805x**. Spec 28 measured the libc row. Nothing regressed and there is no
-contradiction — the first draft manufactured one by comparing an SMP number against a libc record.
+### 2.1 The spec 28 `serialize` discrepancy is open, not resolved
+
+A previous version of this section claimed spec 28 had measured the libc row and that the contradiction
+dissolved. **That is wrong.** Spec 28 measured **Zen 4 SMP**: `1.035 → 0.824 ms`, reaching **0.81x** with
+rawr ahead. Today's libc figure of `0.805x` is a **coincidence**, and treating a numeric near-match as an
+identification was exactly the reasoning error this campaign keeps having to correct.
+
+So the position is: **Zen 4 SMP `serialize` was 0.81x and is now 2.771x, and production serialization has
+not changed since `2ba714a`.** That is a real discrepancy — cross-harness, board-definition, or
+allocator-state — and it is one of the strongest signals on the board precisely because the code is
+constant. **Do not report that nothing regressed.** `52-00` must reconcile it.
+
+This does not weaken §2's split. `toArrayAlloc` and `serialize` are still allocator-localized *today*.
+But `serialize` additionally has a history in which SMP was fine, so it is not a static allocator story.
 
 **One row runs the other way and needs its own account:** `bitwiseAnd (array balanced)` is **2.688x under
 SMP and 9.138x under libc**. Whatever is happening there, "libc exonerates the code" does not apply.
@@ -84,7 +97,8 @@ case fails:
 | `bitwiseAnd (dense)` | 1.691x | 1.668x |
 | `bitwiseAnd (array balanced)` | **2.688x** | **9.138x** |
 
-rawr is **faster** on skewed arrays, where CRoaring falls back to galloping. The gap is specific to the
+**Under SMP** rawr is faster on both the sparse and skewed rows, where CRoaring falls back to galloping
+(the sparse libc figure is 1.391x, so this is an SMP statement, not a general one). The gap is specific to the
 **balanced path where the vector kernel actually runs**.
 
 ## 3. Complete inventory — all 13 Zen 4 SMP rows over the gate
@@ -94,7 +108,7 @@ Clean-`b3ab49f` board, `parity-20260828-134456`.
 | row | SMP | libc | classification |
 | --- | ---: | ---: | --- |
 | `toArrayAlloc (1M values)` | 2.914 | 1.043 | **allocator-localized** — new attribution |
-| `serialize` | 2.771 | 0.805 | **allocator-localized** — new attribution; resolves the spec 28 record |
+| `serialize` | 2.771 | 0.805 | **allocator-localized today**, but SMP was **0.81x** in spec 28 with the code unchanged — **open discrepancy**, see §2.1 |
 | `bitwiseAnd (array balanced)` | 2.688 | 9.138 | **new attribution** — balanced vector path, libc worse |
 | `lazyOr repair (sparse)` | 1.753 | 1.338 | **previously diagnosed** (38/39); opt-in remedy exists |
 | `bitwiseAnd (dense)` | 1.691 | 1.668 | new attribution — bitset word loop |
@@ -135,9 +149,19 @@ support is unverified because [spec 47](47-portability-matrix.md) was never run.
 - source commit, Zig version, optimization mode (`ReleaseFast`), and CPU configuration (`-Dcpu=native`);
 - the spec 22 process protocol: fresh process per cell, warmup then timed, **≥5 process medians with full
   ranges**;
-- **CRoaring's runtime-selected dispatch reported per row**, since it is the reference and its path may
-  differ between the two environments;
-- **both allocators on every row**, since §2 shows the allocator split is the primary signal.
+- **every existing manifest variant**, with the SMP/libc comparison reported **where both exist**. The
+  board does not pair them universally and this spec must not pretend otherwise:
+  `lazy-or-repair-descending` is **SMP-only**; the default/non-allocating and arena rows have no SMP/libc
+  pair; the pre-adoption rows carry rawr SMP and libc but reference **another row's** CRoaring tuple, so
+  their libc ratio is not a like-for-like comparison. A libc descending-free diagnostic, if wanted, is a
+  **benchmark-only tuple to be added**, not something the canonical board already contains.
+- **CRoaring's dispatch reported per row, by the weaker of the two available methods, and labelled as
+  such.** The canonical worker currently reports only the compile-time AVX-512 setting, so `52-00` will
+  report `croaring_hardware_support()` once per host and **map each row to its source-gated expected
+  path**. That is sufficient here, because the purpose is to confirm the reference did not change branch
+  between two environments running the same binary. **It is not branch observation and may not be
+  described as one.** Instrumented benchmark-only C wrappers that report the branch actually taken —
+  which `51-00` built and proved out — belong in Stage 1, where the branch is the thing under study.
 
 **Verdict rule, per row, pre-registered:**
 
@@ -151,7 +175,10 @@ Applied to all 13 rows plus the four intersection rows of §2, under both alloca
 verdict; this table is.
 
 **Stage 0 decides what the campaign is about.** If the allocator-localized rows close on native Linux,
-two of the three largest gaps were a host artifact and the campaign is only about kernels.
+those gaps are **environment-conditioned** and the campaign is mostly about kernels. **That is the only
+claim the experiment supports.** It cannot isolate WSL2 from the kernel, libc, the scheduler, or page
+behaviour, because native boot changes all of them together. "Host artifact" names a cause the design
+cannot identify and must not be used.
 
 ## 5. What must not regress — named rows, not categories
 
@@ -192,7 +219,9 @@ even the array-row candidate raises it.
 ## 7. Out of scope
 
 - **Adding a 32-bit limitation.** rawr ships 32-bit support (spec 40).
-- **Any aarch64 kernel change.** aarch64 is at parity and appears only as a negative control.
+- **Any aarch64 kernel change.** aarch64 is **outside this x86_64-focused campaign** and appears only as
+  a negative control. It is not claimed to be at parity — the clean board has five SMP rows over the
+  gate, which is separate work.
 - **Re-deriving the lazy-OR repair rows.** Specs 38 and 39 diagnosed them and shipped an opt-in remedy;
   this campaign records their status rather than reopening them.
 
