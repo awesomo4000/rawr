@@ -2,167 +2,205 @@
 
 # Spec 52: The x86_64 gap
 
-**Target.** The canonical SMP board splits sharply by architecture. On aarch64 (M4), **3 of 27 rows**
-exceed the 1.10x gate, and two of those three are `pre-adoption baseline` reference variants — the only
-shipped row over the gate is `lazyOr construction (sparse)` at 1.223x, a residual specs 43–46 accepted
-deliberately. On x86_64 (Zen 4), **13 of 27 rows** exceed it, several near or above 2.7x.
+**Target.** The canonical SMP board splits by architecture. On the clean-`b3ab49f` boards of 08/28,
+**aarch64 (M4) has 5 of 27 SMP rows** over the 1.10x gate and **x86_64 (Zen 4) has 13 of 27**, several
+near or above 2.7x. On the candidate boards the counts are 3 and 13.
 
-**Diagnosis first. No kernel written until attribution earns it.** This is the discipline spec 51
-established, and §1 shows the obvious explanation is wrong for the most important row.
+**Diagnosis first. No kernel written until attribution earns it.** An earlier draft of this spec proposed
+a vector-width explanation. §1 records why that was wrong, because the way it was wrong is instructive.
 
-## 1. Three clusters, three candidate mechanisms, none established
+## 1. What an earlier draft got wrong
 
-| Zen 4 SMP row | rawr | CRoaring | ratio |
-| --- | ---: | ---: | ---: |
-| `toArrayAlloc (1M values)` | 3.278 [3.237, 3.375] ms | 1.125 [1.073, 1.184] | **2.914x** |
-| `serialize` | 2.004 [1.975, 2.043] ms | 0.723 [0.699, 0.762] | **2.771x** |
-| `bitwiseAnd (array balanced)` | 152,770 ns/op | 56,833 | **2.688x** |
-| `lazyOr repair (sparse)` | 15.449 ms | 8.716 | 1.772x |
-| `bitwiseAnd (dense)` | 230.187 ns/op | 136.126 | 1.691x |
-| `clone (dense)` | — | — | 1.593x |
-| `addRange (1M)` | — | — | 1.426x |
-| `flip wide range (dense)` | — | — | 1.381x |
-| `bitwiseOr (dense)` | — | — | 1.353x |
+### 1.1 rawr is not uniformly 128-bit
 
-Ranges are non-overlapping and the same rows appear at the same magnitudes on a clean-HEAD board, so
-these are resolved gaps rather than run noise or anything spec 51-02 introduced.
+The first draft claimed every production vector in rawr is 128-bit. **False.** `bitset_container.zig`,
+`container_ops.zig` and `bitmap.zig` all use `@Vector(VEC_SIZE, u64)` with `VEC_SIZE = 8` — a **512-bit
+logical vector**. Only `array_simd.zig` is 128-bit.
 
-### 1.1 What the source establishes
+The claim came from a search for `@Vector\([0-9]+`, which **cannot match a named constant** and so could
+not find the wide vectors it was used to rule out. This is the same failure this campaign has now hit
+three times: spec 51's original hypothesis found a symbol without checking reachability, and spec 47's
+first grep excluded the files that would have contradicted it. **A search that cannot express the defect
+is not evidence of its absence.**
 
-**Every vector in rawr's production code is 128-bit** — `@Vector(8, u16)` and `@Vector(16, u8)`, nothing
-wider anywhere. rawr's x86 gate requires `avx` and `ssse3` and **never requests AVX2**
-(`array_simd.zig:6`). CRoaring carries **70 AVX2-gated sites**, all behind `CROARING_IS_X64`, which is
-defined only for `__x86_64__` / `_M_X64`.
+**More importantly, source width does not determine emitted width.** LLVM legalizes a 512-bit logical
+vector to whatever the target provides — four 128-bit operations without AVX2, two with. **Nothing about
+the emitted instructions can be read off the source.** Only production disassembly answers it, and this
+spec must not restate a width claim without one.
 
-So on aarch64, 128 bits is the full NEON width and CRoaring runs scalar — rawr competes at the hardware
-ceiling against an unvectorized reference. On x86_64 the same rawr code meets a reference using twice the
-width in 70 places. **That is a structural fact about the two sources. It is not a measured cause of any
-row**, and naming a mechanism is not the same as measuring it.
+### 1.2 CRoaring is not scalar on aarch64
 
-### 1.2 Where that story does not hold — the array rows
+The first draft said CRoaring runs scalar on aarch64. **True only for array intersection.** Its bitset
+container operations use NEON under `CROARING_USENEON` (`roaring.c:7990`). So the comfortable story —
+rawr vectorized against an unvectorized reference on aarch64 — is wrong for the bitset cluster, which is
+most of the failing rows.
 
-**CRoaring's array intersect is also 128-bit.** `intersect_vector16` (`roaring.c:822`) uses `__m128i`
-throughout: `_mm_cmpestrm` for the all-pairs compare, then `_mm_shuffle_epi8` against a 256-entry shuffle
-table. rawr's `intersectWriteSimd` uses **the same width and the same shuffle-table algorithm**, with one
-difference — `compareAny` (`array_simd.zig:33`) unrolls **eight lane-splat compares and eight ORs** where
-CRoaring issues **one `_mm_cmpestrm`**.
+**Architecture claims must be made per cluster and backed by disassembly**, never as one statement about
+"CRoaring on ARM".
 
-So `bitwiseAnd (array balanced)` at 2.688x is **not a width gap**. Both sides are 128-bit. The candidate
-is instruction selection at equal width, which is the same shape spec 51 found in the scalar merge:
-portable code expressing in many instructions what a specialized one does in one.
+### 1.3 The array-intersection framing overstated the evidence
 
-**Going wider is not the fix here, and spec 15 already established why.** `vpshufb` cannot compact across
-128-bit lanes, so AVX2 is a dead end for intersection compaction; the enabler would be AVX-512
-`vpcompressw`. **Do not propose AVX2 for the array rows.**
+Both kernels are 128-bit and both use a 256-entry shuffle-mask table. CRoaring uses `_mm_cmpestrm` **and
+`_mm_cmpistrm`**, and its dispatch is AVX2-gated even though the instructions are 128-bit. rawr's
+`compareAny` (`array_simd.zig:33`) unrolls eight lane-splat compares and eight ORs.
 
-### 1.3 The bulk-memory rows are a third thing
+That is a real difference, but **comparing the two shipped kernels cannot isolate it** — the surrounding
+loops differ too. Attribution needs a same-loop alternative arm, or disassembly plus instruction
+accounting.
 
-`toArrayAlloc` and `serialize` are bulk extraction and bulk write. Neither is obviously a vector-width
-problem, and one observation actively contradicts a general "x86_64 is slow" story: **`deserialize` runs
-at 0.4621x — rawr nearly 2.2x *faster* than CRoaring on the same host and the same board.** A mechanism
-that made rawr broadly slow on x86_64 would not produce that.
+**Spec 15 was parked, not executed.** It establishes that `vpshufb` cannot compact across 128-bit lanes,
+which rules out **one** AVX2 compaction strategy. It does not establish that every AVX2 approach is a
+dead end, and this spec may not claim that it does.
 
-**One contradiction must be resolved rather than carried.** Spec 28 recorded Zen 4 `serialize` at
-**0.81x**. It now reads **2.771x**. Either the row regressed since and nobody noticed, the row definition
-moved, or spec 28's figure did not hold. Any of those changes what this campaign is chasing.
+## 2. The allocator evidence, which reframes the whole target
 
-### 1.4 Summary of what Stage 1 must tell apart
+Every board row runs under **both** allocators. The first draft never cross-referenced them. Doing so
+splits the failing rows immediately:
 
-| cluster | rows | candidate mechanism | status |
-| --- | --- | --- | --- |
-| **array kernels** | `bitwiseAnd (array balanced)` | instruction selection at equal 128-bit width | candidate |
-| **dense / bitset word loops** | dense AND/OR, clone, flip, addRange | rawr 128-bit against CRoaring AVX2 | candidate |
-| **bulk memory** | `toArrayAlloc`, `serialize` | unknown — not obviously vector width | **no candidate** |
+| Zen 4 clean-HEAD row | SMP | libc |
+| --- | ---: | ---: |
+| `toArrayAlloc (1M values)` | **2.914x** | **1.043x** |
+| `serialize` | **2.771x** | **0.805x** |
 
-Three clusters may have three causes. **They must not be treated as one phenomenon**, which is the error
-spec 51 §1.3 caught for OR and ANDNOT.
+**The two largest gaps are allocator-localized.** Same operation, same code, different result allocator.
+That points at SMP allocation or allocator conditioning on this host — **not** at conversion or
+serialization code, and not at vector width. The cluster the first draft labelled "unknown mechanism"
+has a strong candidate, and it is not a kernel.
 
-## 2. Stage 0: establish whether the host is representative
+**This also dissolves the spec 28 contradiction.** Spec 28 recorded Zen 4 `serialize` at **0.81x**;
+today's **libc** figure is **0.805x**. Spec 28 measured the libc row. Nothing regressed and there is no
+contradiction — the first draft manufactured one by comparing an SMP number against a libc record.
 
-**The x86_64 host runs WSL2.** Spec 36 already returned inconclusive on it once, and the two largest rows
-are bulk-memory shaped — exactly where a virtualization layer and a different page-management path would
-show. Nothing in §1 can be trusted as a statement about x86_64 until this is settled.
+**One row runs the other way and needs its own account:** `bitwiseAnd (array balanced)` is **2.688x under
+SMP and 9.138x under libc**. Whatever is happening there, "libc exonerates the code" does not apply.
 
-**Run the canonical board on native Linux x86_64 on the same physical machine** — dual boot or live USB,
-not a cloud instance and not Windows. The reasoning is experimental, not preferential:
+**A second localization comes free from the board.** Of four intersection rows, only the balanced array
+case fails:
 
-- **Same machine changes exactly one variable.** A cloud instance changes hardware and OS together, so a
-  difference cannot be attributed to either. Windows changes OS, userland, allocator page behaviour and
-  CRoaring's C toolchain at once, and a null result there would not distinguish WSL2 from
-  Windows-versus-Linux.
-- **The harness runs unchanged.** It is bash, awk, sort, curl and unzip. Windows would need MSYS2 or Git
-  Bash, placing ported `sort` and `awk` inside the pipeline that produces the canonical numbers — a
-  compatibility layer added to remove a virtualization layer.
-- **Linux x86_64 is the deployment target**, so the numbers mean something after the experiment.
+| Zen 4 | SMP | libc |
+| --- | ---: | ---: |
+| `bitwiseAnd (sparse)` | 0.601x | 1.391x |
+| `bitwiseAnd (array skewed)` | 0.663x | 0.964x |
+| `bitwiseAnd (dense)` | 1.691x | 1.668x |
+| `bitwiseAnd (array balanced)` | **2.688x** | **9.138x** |
 
-**Windows is not excluded from the project** — it is a Tier 1 target in [spec 47](47-portability-matrix.md)
-and rawr's support there is currently **unverified**, since 47 was never run. That is portability
-validation and it is a different job from establishing a measurement baseline. Do not conflate them.
+rawr is **faster** on skewed arrays, where CRoaring falls back to galloping. The gap is specific to the
+**balanced path where the vector kernel actually runs**.
 
-**Stage 0 decides whether Stage 1 happens at all.** If `serialize` and `toArrayAlloc` collapse on native
-Linux, two clusters disappear and the campaign is only about kernels.
+## 3. Complete inventory — all 13 Zen 4 SMP rows over the gate
 
-## 3. Stage 1: attribute before building
+Clean-`b3ab49f` board, `parity-20260828-134456`.
 
-Same structure that worked in `51-00`: layers chosen so subtraction is valid, arms whose meaning is
-checked directly rather than assumed, and per-row verdicts rather than an aggregate.
+| row | SMP | libc | classification |
+| --- | ---: | ---: | --- |
+| `toArrayAlloc (1M values)` | 2.914 | 1.043 | **allocator-localized** — new attribution |
+| `serialize` | 2.771 | 0.805 | **allocator-localized** — new attribution; resolves the spec 28 record |
+| `bitwiseAnd (array balanced)` | 2.688 | 9.138 | **new attribution** — balanced vector path, libc worse |
+| `lazyOr repair (sparse)` | 1.753 | 1.338 | **previously diagnosed** (38/39); opt-in remedy exists |
+| `bitwiseAnd (dense)` | 1.691 | 1.668 | new attribution — bitset word loop |
+| `clone (dense)` | 1.633 | 1.617 | **previously diagnosed** (27) — analysed residual on M4, open here |
+| `addRange (1M)` | 1.414 | 1.526 | new attribution |
+| `flip wide range (dense)` | 1.381 | 1.532 | new attribution |
+| `bitwiseOr (dense)` | 1.322 | 1.404 | new attribution — bitset word loop |
+| `lazyOr+repair (pre-adoption baseline)` | 1.293 | 3.927 | **reference variant, not a shipped row** |
+| `addMany (sequential 1M)` | 1.220 | 1.160 | new attribution |
+| `lazyOr+repair (sparse)` | 1.211 | 1.199 | **previously diagnosed** (39-01); opt-in remedy exists |
+| `lazyOr+repair (sparse, descending frees)` | 1.114 | — | **this is the opt-in remedy row** |
 
-**Per cluster, the question differs**, so one arm set will not serve all three. At minimum Stage 1 must
-separate, for each affected row:
+**The unexplained set is far smaller than thirteen.** One row is a baseline reference variant, three are
+already diagnosed with an opt-in remedy shipped, and one is a documented analysed residual. **Do not
+relabel known allocator, clone and repair findings as generic SIMD-width problems** — that is precisely
+what the first draft's framing would have done.
 
-- **kernel time** from **allocation and assembly**, as `51-00` did with its Layer A and Layer B split;
-- for the array rows, **rawr's `compareAny` against CRoaring's `_mm_cmpestrm`** at equal width, replaying
-  the shipped kernels;
-- for the bulk-memory rows, **whether any vector code is on the path at all** before assuming width or
-  instruction selection is involved.
+`add (sequential 1M)` sits on the gate at 1.097 clean / 1.112 candidate and is listed here only so its
+borderline status is on the record.
 
-**`bitwiseAnd (array balanced)` is the priority row** and also the cheapest probe: rawr already has a SIMD
-kernel there, so a gap cannot be explained by a missing one.
+## 4. Stage 0: establish whether the host is representative
 
-## 4. What must not regress
+The x86_64 host runs **WSL2**. Spec 36 already returned inconclusive on it. Given §2, the two largest
+rows are allocator-shaped, and allocator behaviour is exactly what a different kernel and page-management
+path would change.
 
-**`bitwiseAnd` is the protected row.** Owner constraint: an x86_64 change that regresses it is not worth
-having.
+**Run the canonical board on native Linux x86_64 on the same physical machine.**
 
-**aarch64 must not move.** The mechanism is structural — width and instruction selection are comptime
-arch dispatches, and the aarch64 path keeps `@Vector(8, u16)` and its existing NEON kernels untouched.
-The real risk is not the kernel:
+**Honest scope of the comparison.** Native boot does **not** change one variable. It preserves the CPU
+and changes the kernel, libc and userland, the scheduler, page management, and possibly power and
+frequency configuration. It is the *closest available* comparison, not a clean one, and the record must
+say so. A cloud instance changes the hardware as well; Windows additionally changes CRoaring's C
+toolchain and needs MSYS2 or Git Bash inside the pipeline that produces the numbers, and rawr's Windows
+support is unverified because [spec 47](47-portability-matrix.md) was never run.
 
-- **Whole-binary layout movement.** Spec 28 established that adding code moves untouched rows with
-  instruction-identical bodies. Every aarch64 board comparison uses the **paired exact-HEAD protocol**
-  recorded in `51-02` — clean-HEAD and candidate boards run in the same session on the same machine.
-  Separated ranges across different runs are not evidence of a code effect, which is how a 6.2% phantom
-  regression was reported and then withdrawn in `51-02`.
-- **Shared structure changes.** Spec 32's Array-header NO-GO helped one path and hurt another. Nothing in
-  this campaign may change a container layout or a shared struct to serve x86_64.
+**Pin the configuration, or the comparison means nothing:**
 
-**Gate every host on every row.** Spec 35's dual stop-gate: an aggregate that improves while a binding
-constraint regresses is a failure, not a win.
+- source commit, Zig version, optimization mode (`ReleaseFast`), and CPU configuration (`-Dcpu=native`);
+- the spec 22 process protocol: fresh process per cell, warmup then timed, **≥5 process medians with full
+  ranges**;
+- **CRoaring's runtime-selected dispatch reported per row**, since it is the reference and its path may
+  differ between the two environments;
+- **both allocators on every row**, since §2 shows the allocator split is the primary signal.
 
-## 5. The dispatch fork — decide before writing a kernel
+**Verdict rule, per row, pre-registered:**
 
-rawr uses **compile-time** feature detection (`builtin.cpu.features`). CRoaring uses **runtime** dispatch.
+| condition | verdict |
+| --- | --- |
+| `rawr_min / croaring_max > 1.10` | **gap survives** |
+| `rawr_max / croaring_min <= 1.10` | **gap closes** |
+| otherwise | **inconclusive** — rerun once, then report as inconclusive |
 
-Under `-Dcpu=native` the board is a fair comparison either way, and rawr genuinely has only 128-bit code
-even then. But **a library distributed for generic x86_64 gets nothing from a compile-time-only wider
-path**, because the generic baseline has no AVX2 and no SSE4.2.
+Applied to all 13 rows plus the four intersection rows of §2, under both allocators. "Collapse" is not a
+verdict; this table is.
 
-This is a distribution decision, not a performance one, and it changes the shape of every kernel written
-afterwards. **Settle it before Stage 2, not during.** Note that `_mm_cmpestrm` is **SSE4.2**, above
-rawr's current `avx + ssse3` floor, so even the array-row candidate raises this question.
+**Stage 0 decides what the campaign is about.** If the allocator-localized rows close on native Linux,
+two of the three largest gaps were a host artifact and the campaign is only about kernels.
 
-## 6. Out of scope
+## 5. What must not regress — named rows, not categories
 
-- **AVX2 for array intersection compaction** — spec 15 established `vpshufb` cannot compact across
-  128-bit lanes. Any wider array kernel is an AVX-512 `vpcompressw` question, and that remains parked as
-  [spec 15](todo/15-avx512-array-kernel.md).
-- **Adding a 32-bit limitation.** rawr ships 32-bit support (spec 40); per-arch work must not regress it.
-- **Any aarch64 kernel change.** aarch64 is at parity and is out of scope except as a negative control.
+**Owner constraint: intersection must not regress.** Stated as exact rows, on **both hosts** and **both
+allocators**:
 
-## 7. Chunking
+- `bitwiseAnd (sparse)`
+- `bitwiseAnd (dense)`
+- `bitwiseAnd (array balanced)`
+- `bitwiseAnd (array skewed)`
 
-- **`52-00` — Stage 0, host validation.** Canonical board on native Linux x86_64, same machine. Resolves
-  the spec 28 `serialize` contradiction. **No production change.** Decides whether the rest happens.
-- **Stage 1 attribution is deliberately unwritten.** Its arms depend on which clusters survive Stage 0,
-  and writing them now would be guessing — the same reason `51`'s Stage 2 was left unwritten until
-  `51-00` reported.
+`array skewed` and `sparse` matter most here: rawr is currently **faster** than CRoaring on both, so they
+are the rows a specialized balanced-path kernel could most easily damage.
+
+**aarch64 is a negative control and must not move.** The risk is not the kernel — per-arch work is
+comptime-dispatched and leaves the aarch64 path alone. The risks are the two this campaign has already
+been bitten by:
+
+- **Whole-binary layout movement** (spec 28). Every aarch64 comparison uses the **paired exact-HEAD
+  protocol** from `51-02`: clean-HEAD and candidate boards in the same session on the same machine.
+  Separated ranges across different runs are not evidence of a code effect — that produced a phantom 6.2%
+  regression in `51-02` which was then withdrawn.
+- **Shared structure changes** (spec 32's Array-header NO-GO). Nothing here may change a container layout
+  or shared struct to serve x86_64.
+
+**Gate every host and every row, never an aggregate** — spec 35's dual stop-gate.
+
+## 6. The dispatch fork — settle before any kernel
+
+rawr uses **compile-time** feature detection (`builtin.cpu.features`); CRoaring uses **runtime** dispatch.
+Under `-Dcpu=native` the board is fair either way, but **a library distributed for generic x86_64 gets
+nothing from a compile-time-only specialized path**.
+
+This is a distribution decision, not a performance one, and it shapes every kernel written afterwards.
+Note that `_mm_cmpestrm` and `_mm_cmpistrm` are **SSE4.2**, above rawr's current `avx + ssse3` floor, so
+even the array-row candidate raises it.
+
+## 7. Out of scope
+
+- **Adding a 32-bit limitation.** rawr ships 32-bit support (spec 40).
+- **Any aarch64 kernel change.** aarch64 is at parity and appears only as a negative control.
+- **Re-deriving the lazy-OR repair rows.** Specs 38 and 39 diagnosed them and shipped an opt-in remedy;
+  this campaign records their status rather than reopening them.
+
+## 8. Chunking
+
+- **`52-00` — Stage 0, host validation.** Canonical board on native Linux x86_64, same machine, both
+  allocators, §4 verdict rule applied to every row. **No production change.** Decides whether the rest
+  happens and what it is about.
+- **Stage 1 attribution is deliberately unwritten.** Its arms depend on which rows survive Stage 0 and on
+  whether the allocator-localized cluster is real. Writing them now would be guessing — the same reason
+  `51`'s Stage 2 stayed unwritten until `51-00` reported.
