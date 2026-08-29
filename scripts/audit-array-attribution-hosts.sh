@@ -27,7 +27,7 @@ for file in "$first" "$second"; do
         printf 'process artifact not readable: %s\n' "$file" >&2
         exit 1
     fi
-    awk -v expected_runs=5 -v expected_tuples=30 -v expected_processes=150 \
+    awk -v expected_runs=5 -v expected_tuples=24 -v expected_processes=120 \
         -f scripts/validate-array-attribution-results.awk "$file" >/dev/null
 done
 
@@ -44,8 +44,8 @@ normalize() {
             printf "\n"
         }
     ' "$input" | sort -u >"$output"
-    if [[ "$(wc -l <"$output" | tr -d '[:space:]')" != 30 ]]; then
-        printf 'expected 30 normalized tuples from %s\n' "$input" >&2
+    if [[ "$(wc -l <"$output" | tr -d '[:space:]')" != 24 ]]; then
+        printf 'expected 24 normalized tuples from %s\n' "$input" >&2
         exit 1
     fi
 }
@@ -58,4 +58,4 @@ if ! cmp -s "$tmp_dir/first.tsv" "$tmp_dir/second.tsv"; then
     exit 1
 fi
 
-printf 'array-attribution cross-host audit: OK (30 tuples, 150 processes per host)\n'
+printf 'array-attribution cross-host audit: OK (24 tuples, 120 processes per host)\n'

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 const std = @import("std");
+const builtin = @import("builtin");
 const ArrayContainer = @import("array_container.zig").ArrayContainer;
 const BitsetContainer = @import("bitset_container.zig").BitsetContainer;
 const RunContainer = @import("run_container.zig").RunContainer;
@@ -528,7 +529,7 @@ fn arrayUnionArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayCo
     const result = try ArrayContainer.init(allocator, @intCast(@min(max_card, ArrayContainer.MAX_CARDINALITY)));
     errdefer result.deinit(allocator);
 
-    result.cardinality = @intCast(benchmarkArrayUnionWrite(
+    result.cardinality = @intCast(arrayUnionWrite(
         a.values[0..a.cardinality],
         b.values[0..b.cardinality],
         result.values,
@@ -536,31 +537,51 @@ fn arrayUnionArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *ArrayCo
     return arrayToArrayOrRun(allocator, result);
 }
 
-/// Internal benchmark hook for the exact scalar write loop used by array union.
-pub inline fn benchmarkArrayUnionWrite(a: []const u16, b: []const u16, output: []u16) usize {
+/// Internal export for the exact scalar write loop used by array union.
+pub inline fn arrayUnionWrite(a: []const u16, b: []const u16, output: []u16) usize {
+    assertDisjointOutput(a, b, output);
+
     var i: usize = 0;
     var j: usize = 0;
     var k: usize = 0;
 
-    // Branchless merge: always write the smaller value, advance contributing pointer(s).
-    // On aarch64, LLVM emits csel for the output and cset for advances.
-    while (i < a.len and j < b.len) {
-        const a_val = a[i];
-        const b_val = b[j];
-
-        output[k] = if (a_val <= b_val) a_val else b_val;
-        k += 1;
-
-        i += @intFromBool(a_val <= b_val);
-        j += @intFromBool(b_val <= a_val);
+    // Hoist the current values and reload only the side that advances.
+    if (a.len != 0 and b.len != 0) {
+        var a_val = a[0];
+        var b_val = b[0];
+        while (true) {
+            if (a_val < b_val) {
+                output[k] = a_val;
+                k += 1;
+                i += 1;
+                if (i == a.len) break;
+                a_val = a[i];
+            } else if (b_val < a_val) {
+                output[k] = b_val;
+                k += 1;
+                j += 1;
+                if (j == b.len) break;
+                b_val = b[j];
+            } else {
+                output[k] = a_val;
+                k += 1;
+                i += 1;
+                j += 1;
+                if (i == a.len or j == b.len) break;
+                a_val = a[i];
+                b_val = b[j];
+            }
+        }
     }
-    while (i < a.len) : (i += 1) {
-        output[k] = a[i];
-        k += 1;
-    }
-    while (j < b.len) : (j += 1) {
-        output[k] = b[j];
-        k += 1;
+
+    if (i < a.len) {
+        const tail = a[i..];
+        @memcpy(output[k..][0..tail.len], tail);
+        k += tail.len;
+    } else if (j < b.len) {
+        const tail = b[j..];
+        @memcpy(output[k..][0..tail.len], tail);
+        k += tail.len;
     }
     return k;
 }
@@ -1003,7 +1024,7 @@ fn arrayDifferenceArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *Ar
     const result = try ArrayContainer.init(allocator, a.cardinality);
     errdefer result.deinit(allocator);
 
-    result.cardinality = @intCast(benchmarkArrayDifferenceWrite(
+    result.cardinality = @intCast(arrayDifferenceWrite(
         a.values[0..a.cardinality],
         b.values[0..b.cardinality],
         result.values,
@@ -1011,30 +1032,95 @@ fn arrayDifferenceArray(allocator: std.mem.Allocator, a: *ArrayContainer, b: *Ar
     return .{ .array = result };
 }
 
-/// Internal benchmark hook for the exact scalar write loop used by array difference.
-pub inline fn benchmarkArrayDifferenceWrite(a: []const u16, b: []const u16, output: []u16) usize {
+/// Internal export for the exact scalar write loop used by array difference.
+pub inline fn arrayDifferenceWrite(a: []const u16, b: []const u16, output: []u16) usize {
+    assertDisjointOutput(a, b, output);
+
     var i: usize = 0;
     var j: usize = 0;
     var k: usize = 0;
 
-    // Branchless merge: keep an element from A only when A < B.
-    while (i < a.len and j < b.len) {
-        const a_val = a[i];
-        const b_val = b[j];
-
-        if (a_val < b_val) {
-            output[k] = a_val;
-            k += 1;
+    // Hoist the current values and reload only the side that advances.
+    if (a.len != 0 and b.len != 0) {
+        var a_val = a[0];
+        var b_val = b[0];
+        while (true) {
+            if (a_val < b_val) {
+                output[k] = a_val;
+                k += 1;
+                i += 1;
+                if (i == a.len) break;
+                a_val = a[i];
+            } else if (a_val == b_val) {
+                i += 1;
+                j += 1;
+                if (i == a.len or j == b.len) break;
+                a_val = a[i];
+                b_val = b[j];
+            } else {
+                j += 1;
+                if (j == b.len) break;
+                b_val = b[j];
+            }
         }
+    }
 
-        i += @intFromBool(a_val <= b_val);
-        j += @intFromBool(b_val <= a_val);
+    const tail = a[i..];
+    @memcpy(output[k..][0..tail.len], tail);
+    return k + tail.len;
+}
+
+inline fn assertDisjointOutput(a: []const u16, b: []const u16, output: []u16) void {
+    if (comptime builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+        if (slicesOverlap(a, output) or slicesOverlap(b, output)) {
+            @panic("array merge output aliases input");
+        }
     }
-    while (i < a.len) : (i += 1) {
-        output[k] = a[i];
-        k += 1;
-    }
-    return k;
+}
+
+fn slicesOverlap(a: []const u16, b: []const u16) bool {
+    if (a.len == 0 or b.len == 0) return false;
+    const a_start = @intFromPtr(a.ptr);
+    const b_start = @intFromPtr(b.ptr);
+    const a_end = a_start + a.len * @sizeOf(u16);
+    const b_end = b_start + b.len * @sizeOf(u16);
+    return a_start < b_end and b_start < a_end;
+}
+
+fn expectArrayWriteCases(
+    a: []const u16,
+    b: []const u16,
+    expected_union: []const u16,
+    expected_difference: []const u16,
+) !void {
+    var output: [32]u16 = undefined;
+    const union_count = arrayUnionWrite(a, b, &output);
+    try std.testing.expectEqualSlices(u16, expected_union, output[0..union_count]);
+    const difference_count = arrayDifferenceWrite(a, b, &output);
+    try std.testing.expectEqualSlices(u16, expected_difference, output[0..difference_count]);
+}
+
+test "array union and difference write edge cases" {
+    try expectArrayWriteCases(&.{}, &.{}, &.{}, &.{});
+    try expectArrayWriteCases(&.{}, &.{ 1, 3 }, &.{ 1, 3 }, &.{});
+    try expectArrayWriteCases(&.{ 1, 3 }, &.{}, &.{ 1, 3 }, &.{ 1, 3 });
+    try expectArrayWriteCases(&.{1}, &.{2}, &.{ 1, 2 }, &.{1});
+    try expectArrayWriteCases(&.{ 1, 3, 5 }, &.{ 2, 4, 6 }, &.{ 1, 2, 3, 4, 5, 6 }, &.{ 1, 3, 5 });
+    try expectArrayWriteCases(&.{ 1, 2, 3 }, &.{ 1, 2, 3 }, &.{ 1, 2, 3 }, &.{});
+    try expectArrayWriteCases(&.{ 1, 2 }, &.{ 1, 2, 3, 4 }, &.{ 1, 2, 3, 4 }, &.{});
+    try expectArrayWriteCases(&.{ 1, 2, 3, 4 }, &.{ 1, 2 }, &.{ 1, 2, 3, 4 }, &.{ 3, 4 });
+}
+
+test "array write overlap detection uses byte ranges" {
+    var values: [16]u16 = undefined;
+    try std.testing.expect(slicesOverlap(values[0..8], values[0..8]));
+    try std.testing.expect(slicesOverlap(values[2..8], values[4..10]));
+    try std.testing.expect(slicesOverlap(values[4..10], values[2..8]));
+    try std.testing.expect(slicesOverlap(values[2..14], values[5..9]));
+    try std.testing.expect(!slicesOverlap(values[0..4], values[4..8]));
+    try std.testing.expect(!slicesOverlap(values[0..0], values[0..4]));
+    var separate: [4]u16 = undefined;
+    try std.testing.expect(!slicesOverlap(values[0..4], &separate));
 }
 
 fn arrayDifferenceBitset(allocator: std.mem.Allocator, ac: *ArrayContainer, bc: *BitsetContainer) !Container {

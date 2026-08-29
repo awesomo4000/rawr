@@ -49,13 +49,13 @@ summary="${prefix}-summary.txt"
 
 row_count="$(awk -F '\t' '$1 == "ROW" { count++ } END { print count + 0 }' "$manifest_file")"
 tuple_count="$(awk -F '\t' '$1 == "TUPLE" { count++ } END { print count + 0 }' "$manifest_file")"
-if [[ "$row_count" != 6 || "$tuple_count" != 30 ]]; then
-    printf 'expected 6 rows and 30 tuples, got %s rows and %s tuples\n' \
+if [[ "$row_count" != 6 || "$tuple_count" != 24 ]]; then
+    printf 'expected 6 rows and 24 tuples, got %s rows and %s tuples\n' \
         "$row_count" "$tuple_count" >&2
     exit 1
 fi
 
-printf 'Array scalar candidates: %s tuples, %s independent processes each\n' "$tuple_count" "$runs"
+printf 'Array production/legacy comparison: %s tuples, %s independent processes each\n' "$tuple_count" "$runs"
 while IFS=$'\t' read -r kind dataset operation arm; do
     [[ "$kind" == "TUPLE" ]] || continue
     run=1
@@ -119,8 +119,8 @@ sort -t "$tab" -k1,1 -k2,2 -k3,3 -k4,4n "$process_rows" | awk -F '\t' '
 ' >"$aggregate_rows"
 
 {
-    printf 'Array OR/ANDNOT scalar candidates\n'
-    printf '=================================\n'
+    printf 'Array OR/ANDNOT production and legacy scalar forms\n'
+    printf '==================================================\n'
     printf 'Processes per tuple: %s\n' "$runs"
     cat "$header_file"
     cat "$validation_file"
@@ -147,68 +147,26 @@ sort -t "$tab" -k1,1 -k2,2 -k3,3 -k4,4n "$process_rows" | awk -F '\t' '
             $35, $36, $37, $38, $39, $40, $41, $42, $43
     }' "$aggregate_rows"
 
-    printf '\nTarget recovery verdicts (wikileaks-noquotes)\n'
-    awk -F '\t' '
-        function report(op, candidate, threshold, label,    dmed,nmed,dmin,dmax,nmin,nmax,s,smin,smax,interval,verdict) {
-            dmed = median[op,a1] - median[op,a2]
-            nmed = median[op,a1] - median[op,candidate]
-            dmin = minimum[op,a1] - maximum[op,a2]
-            dmax = maximum[op,a1] - minimum[op,a2]
-            nmin = minimum[op,a1] - maximum[op,candidate]
-            nmax = maximum[op,a1] - minimum[op,candidate]
-            s = (dmed == 0 ? 0 : nmed / dmed)
-            interval = "N/A"
-            if (dmax <= 0) verdict = "NO_GAP"
-            else if (dmin <= 0 && dmax > 0) verdict = "INCONCLUSIVE_GAP"
-            else if (nmax <= 0) verdict = "NO_GO"
-            else if (nmin < 0 && nmax > 0) verdict = "INCONCLUSIVE"
-            else {
-                smin = nmin / dmax
-                smax = nmax / dmin
-                interval = sprintf("[%.3f,%.3f]", smin, smax)
-                verdict = (smin >= threshold ? "GO" : (smax < threshold ? "NO_GO" : "INCONCLUSIVE"))
-            }
-            if (label == "completeness") {
-                if (verdict == "GO") verdict = "EXPLAINS_TERM"
-                else if (verdict == "NO_GO") verdict = "RESIDUAL_REMAINS"
-            }
-            printf "%s %-23s %s=%.3f interval=%s verdict=%s\n", \
-                op, candidate, label, s, interval, verdict
-        }
-        $1 == "AGG" && $2 == "wikileaks-noquotes" {
-            median[$3,$4] = $5 + 0
-            minimum[$3,$4] = $6 + 0
-            maximum[$3,$4] = $7 + 0
-        }
-        END {
-            a1 = "a1-rawr-scalar"; a2 = "a2-croaring-scalar"
-            candidates[1] = "c1-bulk-tail"
-            candidates[2] = "c2-branchy"
-            candidates[3] = "c3-branchy-bulk-tail"
-            operations[1] = "pair-or"; operations[2] = "pair-andnot"
-            for (o = 1; o <= 2; o++) {
-                for (c = 1; c <= 3; c++) report(operations[o], candidates[c], 0.50, "recovery")
-                report(operations[o], "c3-branchy-bulk-tail", 1.0, "completeness")
-            }
-        }
-    ' "$aggregate_rows"
-
-    printf '\nControl-corpus regression checks\n'
+    printf '\nSame-binary legacy minus production reduction\n'
     awk -F '\t' '
         $1 == "AGG" {
+            median[$2,$3,$4] = $5 + 0
             minimum[$2,$3,$4] = $6 + 0
             maximum[$2,$3,$4] = $7 + 0
         }
         END {
-            datasets[1] = "uscensus2000"; datasets[2] = "census1881"
+            datasets[1] = "uscensus2000"; datasets[2] = "census1881"; datasets[3] = "wikileaks-noquotes"
             operations[1] = "pair-or"; operations[2] = "pair-andnot"
-            candidates[1] = "c1-bulk-tail"
-            candidates[2] = "c2-branchy"
-            candidates[3] = "c3-branchy-bulk-tail"
-            for (d = 1; d <= 2; d++) for (o = 1; o <= 2; o++) for (c = 1; c <= 3; c++) {
-                dataset = datasets[d]; op = operations[o]; candidate = candidates[c]
-                regression = minimum[dataset,op,candidate] > maximum[dataset,op,"a1-rawr-scalar"]
-                printf "%s %s %-23s %s\n", dataset, op, candidate, (regression ? "REGRESSION" : "OK")
+            a1 = "a1-rawr-scalar"; h1 = "h1-rawr-branchless-legacy"
+            for (d = 1; d <= 3; d++) for (o = 1; o <= 2; o++) {
+                dataset = datasets[d]; op = operations[o]
+                delta = median[dataset,op,h1] - median[dataset,op,a1]
+                delta_min = minimum[dataset,op,h1] - maximum[dataset,op,a1]
+                delta_max = maximum[dataset,op,h1] - minimum[dataset,op,a1]
+                verdict = (delta_min > 0 ? "PRODUCTION_FASTER" : \
+                    (delta_max < 0 ? "PRODUCTION_REGRESSION" : "OVERLAP"))
+                printf "%s %s delta=%.3f ms [%.3f,%.3f] %s\n", dataset, op, \
+                    delta / 1000000.0, delta_min / 1000000.0, delta_max / 1000000.0, verdict
             }
         }
     ' "$aggregate_rows"
