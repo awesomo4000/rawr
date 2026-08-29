@@ -37,15 +37,24 @@ if ! [[ "$runs" =~ ^[0-9]+$ ]] || (( runs < 5 || runs % 2 == 0 )); then
     exit 2
 fi
 
-build_args=(bench-parity-worker -Dcpu=native)
+build_args=(-Dcpu=native)
 case "${CROARING_AVX512:-0}" in
-    0) ;;
-    1) build_args+=(-Dcroaring-avx512=true) ;;
+    0) expected_croaring_avx512=off ;;
+    1)
+        expected_croaring_avx512=on
+        build_args+=(-Dcroaring-avx512=true)
+        ;;
     *) printf 'CROARING_AVX512 must be 0 or 1\n' >&2; exit 2 ;;
 esac
-zig build "${build_args[@]}"
 
-worker="./zig-out/bin/bench_parity_worker"
+if [[ -n "${PARITY_WORKER:-}" ]]; then
+    zig build bench-croaring-support "${build_args[@]}"
+    worker="$PARITY_WORKER"
+else
+    zig build bench-parity-worker bench-croaring-support "${build_args[@]}"
+    worker="./zig-out/bin/bench_parity_worker"
+fi
+
 if [[ ! -x "$worker" && -x "${worker}.exe" ]]; then
     worker="${worker}.exe"
 fi
@@ -54,17 +63,55 @@ if [[ ! -x "$worker" ]]; then
     exit 1
 fi
 
+support_worker="./zig-out/bin/bench_croaring_support"
+if [[ ! -x "$support_worker" && -x "${support_worker}.exe" ]]; then
+    support_worker="${support_worker}.exe"
+fi
+if [[ ! -x "$support_worker" ]]; then
+    printf 'CRoaring support reporter not found: %s\n' "$support_worker" >&2
+    exit 1
+fi
+
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{ print $1 }'
+    else
+        shasum -a 256 "$1" | awk '{ print $1 }'
+    fi
+}
+
 mkdir -p misc
 stamp="$(date -u +%Y%m%d-%H%M%S)"
 prefix="misc/parity-${stamp}"
 manifest_file="${prefix}-manifest.tsv"
 header_file="${prefix}-header.txt"
+environment_file="${prefix}-environment.txt"
 process_rows="${prefix}-process-rows.tsv"
 aggregate_rows="${prefix}-aggregate.tsv"
 summary="${prefix}-summary.txt"
 
 "$worker" --list >"$manifest_file" 2>&1
 "$worker" --header >"$header_file" 2>&1
+if ! grep -Fqx "# croaring-avx512: ${expected_croaring_avx512}" "$header_file"; then
+    printf 'worker CRoaring AVX512 setting does not match CROARING_AVX512=%s\n' \
+        "${CROARING_AVX512:-0}" >&2
+    exit 1
+fi
+{
+    printf '# source-commit: %s\n' "$(git rev-parse HEAD)"
+    printf '# source-tree: %s\n' "$(if [[ -n "$(git status --porcelain)" ]]; then printf dirty; else printf clean; fi)"
+    printf '# worker-sha256: %s\n' "$(sha256_file "$worker")"
+    printf '# worker-origin: %s\n' "$(if [[ -n "${PARITY_WORKER:-}" ]]; then printf supplied; else printf local-build; fi)"
+    printf '# uname: '; uname -a
+    printf '# zig: %s\n' "$(zig version)"
+    if command -v ldd >/dev/null 2>&1; then
+        printf '# libc: '; ldd --version 2>&1 | awk 'NR == 1 { print; exit }'
+    else
+        printf '# libc: ldd unavailable\n'
+    fi
+    "$support_worker"
+    printf '# croaring-dispatch: runtime capability only; row paths require source mapping, not branch observation\n'
+} >"$environment_file"
 : >"$process_rows"
 
 tuple_count="$(awk -F '\t' '$1 == "TUPLE" { count++ } END { print count + 0 }' "$manifest_file")"
@@ -146,6 +193,7 @@ sort -t $'\t' -k1,1 -k2,2 -k3,3 -k6,6n "$process_rows" | awk -F '\t' '
     printf 'Accurate Rawr vs CRoaring parity table\n'
     printf '======================================\n'
     printf 'Processes per tuple: %s\n' "$runs"
+    cat "$environment_file"
     cat "$header_file"
     printf '\n%-28s %-8s %12s %25s %12s %25s %8s\n' \
         operation variant unit 'rawr median [min,max]' unit 'CR median [min,max]' ratio

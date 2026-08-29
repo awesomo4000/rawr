@@ -10,6 +10,9 @@ pub fn build(b: *std.Build) void {
         "croaring-avx512",
         "Enable AVX512 in the vendored CRoaring reference build",
     ) orelse false;
+    if (croaring_avx512 and target.result.cpu.arch != .x86_64) {
+        std.debug.panic("-Dcroaring-avx512=true requires an x86_64 target", .{});
+    }
 
     // Library module (exposed for package consumers)
     const lib_mod = b.addModule("rawr", .{
@@ -251,6 +254,35 @@ pub fn build(b: *std.Build) void {
         "Build manifest-backed CRoaring parity worker",
     );
     bench_parity_worker_step.dependOn(&b.addInstallArtifact(bench_parity_worker_exe, .{}).step);
+
+    // Separate dispatch reporter so environment capture cannot perturb the parity worker layout.
+    const bench_croaring_support_mod = b.createModule(.{
+        .root_source_file = b.path("src/bench_croaring_support.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    addBenchmarkPlatformShim(b, bench_croaring_support_mod, target);
+    addTranslatedCImport(b, bench_croaring_support_mod, .{
+        .header = "tools/croaring_support.h",
+        .include_dir = "tools/",
+        .c_source = "vendor/roaring.c",
+        .extra_c_sources = &.{"tools/croaring_support.c"},
+        .croaring_avx512 = croaring_avx512,
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const bench_croaring_support_exe = b.addExecutable(.{
+        .name = "bench_croaring_support",
+        .root_module = bench_croaring_support_mod,
+    });
+    const bench_croaring_support_step = b.step(
+        "bench-croaring-support",
+        "Build CRoaring runtime dispatch reporter",
+    );
+    bench_croaring_support_step.dependOn(
+        &b.addInstallArtifact(bench_croaring_support_exe, .{}).step,
+    );
 
     // Fresh-process real-data comparison worker used by run-realdata-bench.sh.
     const bench_realdata_mod = b.createModule(.{
@@ -1287,9 +1319,8 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
     if (opts.target.result.os.tag == .freebsd) {
         mod.addCMacro("bswap64", "__builtin_bswap64");
     }
-    if (!opts.croaring_avx512) {
-        mod.addCMacro("CROARING_COMPILER_SUPPORTS_AVX512", "0");
-    }
+    const croaring_avx512_value = if (opts.croaring_avx512) "1" else "0";
+    mod.addCMacro("CROARING_COMPILER_SUPPORTS_AVX512", croaring_avx512_value);
 
     if (opts.c_source) |c_source| {
         mod.addCSourceFile(.{
@@ -1314,18 +1345,17 @@ fn addTranslatedCImport(b: *std.Build, mod: *std.Build.Module, opts: struct {
     if (opts.target.result.os.tag == .freebsd) {
         translate_c.defineCMacro("bswap64", "__builtin_bswap64");
     }
-    if (!opts.croaring_avx512) {
-        translate_c.defineCMacro("CROARING_COMPILER_SUPPORTS_AVX512", "0");
-    }
+    translate_c.defineCMacro("CROARING_COMPILER_SUPPORTS_AVX512", croaring_avx512_value);
 
     mod.addImport(opts.import_name, translate_c.createModule());
 }
 
 fn croaringCFlags(b: *std.Build, base: []const []const u8, croaring_avx512: bool) []const []const u8 {
-    if (croaring_avx512) return base;
-
     const flags = b.allocator.alloc([]const u8, base.len + 1) catch @panic("OOM");
     @memcpy(flags[0..base.len], base);
-    flags[base.len] = "-DCROARING_COMPILER_SUPPORTS_AVX512=0";
+    flags[base.len] = if (croaring_avx512)
+        "-DCROARING_COMPILER_SUPPORTS_AVX512=1"
+    else
+        "-DCROARING_COMPILER_SUPPORTS_AVX512=0";
     return flags;
 }
