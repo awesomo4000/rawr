@@ -87,10 +87,14 @@ artifact nor on what CRoaring was doing:
 | spec 28 outcome, commit `2ba714a` | **0.824 ms** |
 | clean-`b3ab49f` board, 08/28 | **2.004 ms** |
 
-**2.43x slower on the same operation**, with the serialization code unchanged since `2ba714a`. Three
-causes are live and **not mutually exclusive** — environment drift, binary-level change from unrelated
-edits to the same binary, and a harness or toolchain change. **Do not report that nothing regressed, and
-do not force a single cause.** [`52-00`](52-00-host-validation.md) Part B reconciles it.
+**Part B resolved the movement on 08/29/2026.** In one current WSL2 session, `2ba714a` measured
+**2.032 [2.011, 2.324] ms** and current `7d295e0` measured **2.094 [2.063, 2.261] ms** under rawr/SMP.
+The historical `0.824 ms` point lies below the complete current-session old-commit range, while the two
+current-session commit ranges overlap. The historical movement is therefore **session- and
+environment-conditioned**, and later commit/binary changes show no resolved rawr movement in this run.
+The row audit passed; both workers used Zig 0.16.0 and the same build protocol. See
+[`52-00` §B.4](52-00-host-validation.md#b4-outcome-complete-08292026). The historical production parity
+ratio remains unknown because its artifact is still missing.
 
 This does not weaken §2's split. `toArrayAlloc` and `serialize` are still allocator-localized *today*.
 But `serialize` additionally has a history in which its SMP time was far lower, so it is not a static

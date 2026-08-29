@@ -145,6 +145,47 @@ Do not bisect speculatively. Report the finding and note that spec 28's serializ
 need revisiting — including that its production artifact is missing. **Identifying the responsible change
 is not this chunk's job.**
 
+### B.4 Outcome: complete 08/29/2026
+
+Part B ran in one WSL2 session with Zig 0.16.0, `ReleaseFast`, `-Dcpu=native`, AVX-512 disabled, and five
+fresh worker processes per tuple. The retained artifact is
+`misc/serialize-history-20260829-103843-summary.txt`. The artifact remains gitignored; the reproducible
+controller is `scripts/run-serialize-history.sh`.
+
+The comparability audit passed:
+
+| item | result |
+| --- | --- |
+| manifest and boundaries | the runtime `serialize` manifest rows are byte-identical, including seed, corpus, setup, timed work, teardown, and validation oracle |
+| corpus and benchmark body | both commits call the same deterministic one-million-value corpus setup and the same rawr and CRoaring serialize bodies |
+| serialization implementation | `src/serialize.zig` is unchanged after `2ba714a` |
+| controller and clock | `bench_time.zig`, the 3-warmup/21-timed process protocol, and five-process aggregation are unchanged; the controller's only relevant diff is the expected total manifest count, 39 to 42 |
+| toolchain and flags | both current-session workers use Zig 0.16.0, `ReleaseFast`, `-Dcpu=native`, and the same CRoaring C flags (`-std=c11 -O3 -DNDEBUG`, AVX-512 disabled) |
+| vendored reference | `vendor/roaring.c` is unchanged; wrapper additions do not change the portable serialize declaration or implementation |
+| binary identity | the worker SHA-256 values differ, as expected from unrelated additions to the benchmark binary; the row-level audit above is therefore required rather than assuming binary identity |
+
+The current-session measurements are:
+
+| commit | implementation | allocator | median ms [full range] |
+| --- | --- | --- | ---: |
+| `2ba714a` | rawr | SMP | **2.032 [2.011, 2.324]** |
+| `2ba714a` | rawr | libc | 0.575 [0.566, 0.652] |
+| `2ba714a` | CRoaring | libc | 0.838 [0.768, 3.105] |
+| `7d295e0` | rawr | SMP | **2.094 [2.063, 2.261]** |
+| `7d295e0` | rawr | libc | 0.602 [0.587, 0.725] |
+| `7d295e0` | CRoaring | libc | 0.852 [0.832, 0.884] |
+
+The historical `0.824 ms` result is below the complete current-session `2ba714a` range. The old commit is
+2.466x slower in this session, so the historical movement is **session- and environment-conditioned**.
+The current-session `2ba714a` and `7d295e0` ranges overlap for rawr/SMP, rawr/libc, and CRoaring/libc.
+Later source and whole-binary changes therefore show **no resolved movement in this run**. Both results
+can be true: the session/environment contrast moved, while the same-session commit/binary contrast did
+not. The missing historical production artifact was not recovered, so its parity ratio remains unknown.
+
+Part A remains open until native Linux is available on the same physical Zen 4 machine. The canonical
+runner now records source state, worker SHA-256, OS and libc, Zig version, and CRoaring runtime support via
+a separate executable so the dispatch report cannot change the parity worker's code layout.
+
 ## D. What this chunk cannot conclude
 
 **Native boot does not isolate one variable.** It preserves the CPU and changes the kernel, libc and
