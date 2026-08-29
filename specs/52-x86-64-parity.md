@@ -171,8 +171,9 @@ support is unverified because [spec 47](47-portability-matrix.md) was never run.
 | `rawr_max / croaring_min <= 1.10` | **gap closes** |
 | otherwise | **inconclusive** — rerun once, then report as inconclusive |
 
-Applied to all 13 rows plus the four intersection rows of §2, **under each allocator variant that exists
-for that row**. "Collapse" is not a
+Applied to the **15 unique rows**: all 13 of §3 plus the `bitwiseAnd (sparse)` and `bitwiseAnd (array
+skewed)` controls (dense and balanced intersection are already among the 13), **under each allocator
+variant that exists for that row**. "Collapse" is not a
 verdict; this table is.
 
 **Stage 0 decides what the campaign is about.** If the allocator-localized rows close on native Linux,
@@ -228,10 +229,11 @@ even the array-row candidate raises it.
 
 ## 8. Chunking
 
-- **`52-00` — Stage 0, host validation.** Canonical board on native Linux x86_64, same machine, every
-  existing manifest variant with SMP/libc compared where both exist, §4 verdict rule applied to every
-  row. **No production change.** Decides whether the rest
-  happens and what it is about.
+- **[`52-00`](52-00-host-validation.md) — Stage 0, host validation.** Two parts. **Part A**: the canonical
+  board on native Linux x86_64 *and* WSL2, same machine, same commit, **both measured fresh** — the 08/28
+  boards may not be reused, since assuming this environment has not drifted is assuming the answer.
+  **Part B**: reconcile the §2.1 `serialize` discrepancy by running `2ba714a` and `HEAD` in the current
+  environment. **Part B needs no new hardware and can start immediately.** No production change.
 - **Stage 1 attribution is deliberately unwritten.** Its arms depend on which rows survive Stage 0 and on
   whether the allocator-localized cluster is real. Writing them now would be guessing — the same reason
   `51`'s Stage 2 stayed unwritten until `51-00` reported.
