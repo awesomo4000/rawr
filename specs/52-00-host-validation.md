@@ -186,6 +186,45 @@ Part A remains open until native Linux is available on the same physical Zen 4 m
 runner now records source state, worker SHA-256, OS and libc, Zig version, and CRoaring runtime support via
 a separate executable so the dispatch report cannot change the parity worker's code layout.
 
+### B.5 Verification record — Part B reviewed and ACCEPTED
+
+**Both contrasts recomputed, not taken on report.** The historical `0.824 ms` lies below the complete
+current-session `2ba714a` range `[2.011, 2.324]`, so contrast 1 is resolved. The two current-session
+ranges `[2.011, 2.324]` and `[2.063, 2.261]` overlap — the second is entirely inside the first — so
+contrast 2 is correctly reported as **no resolved movement**. Both findings stated as simultaneously true,
+which is what the revised §B.1 asked for.
+
+**The comparability audit was run the way it was meant to be.** Every item has a stated result including
+the ones that found nothing, and the SHA-256 mismatch **triggered** the row-level audit rather than being
+explained away — that is exactly the §A.2 fallback path working rather than a gap.
+
+**The result the table contains but the summary does not.** In one session, on one commit, with identical
+code:
+
+| | rawr/SMP | rawr/libc | CRoaring/libc |
+| --- | ---: | ---: | ---: |
+| `2ba714a` | 2.032 ms | **0.575 ms** | 0.838 ms |
+
+**The allocator costs 1.457 ms — 3.53x — and rawr/libc at 0.575 ms beats CRoaring/libc at 0.838 ms
+(0.686x, rawr ahead).** On this row rawr's serialization code is *faster* than the reference and the
+entire gap is allocator behaviour.
+
+**A documented mechanism exists, untested here.** Spec 37 established that `SmpAllocator` is
+**order-sensitive** — its cost depends on the address order it returns, not on per-call cost — and an OS,
+kernel, or page-management change is precisely what would alter that order. That makes the spec-37
+pathology a **named candidate** for the session-conditioned movement rather than an open question. It is a
+hypothesis: Part B did not test it, and this record does not claim it.
+
+**Consequence the campaign must absorb: the 08/28 Zen 4 inventory is provisional.** Part B has shown this
+environment producing a 2.47x different result for *identical code* against a historical run. Every Zen 4
+figure in toplevel §3 was measured on 08/28 in that environment, so those 13 rows are a snapshot rather
+than an established inventory. **Part A must re-measure them in its own session** — which it already
+requires — and toplevel §3 is marked provisional accordingly.
+
+**Two items for the record.** `CRoaring/libc` at `2ba714a` ranged `[0.768, 3.105]` — a four-fold spread in
+one cell, further evidence about host stability rather than about either implementation. And the build
+compiles CRoaring with **AVX-512 disabled** on a CPU that reports AVX-512 support; see toplevel §6.
+
 ## D. What this chunk cannot conclude
 
 **Native boot does not isolate one variable.** It preserves the CPU and changes the kernel, libc and

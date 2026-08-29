@@ -117,9 +117,14 @@ case fails:
 (the sparse libc figure is 1.391x, so this is an SMP statement, not a general one). The gap is specific to the
 **balanced path where the vector kernel actually runs**.
 
-## 3. Complete inventory — all 13 Zen 4 SMP rows over the gate
+## 3. Inventory — all 13 Zen 4 SMP rows over the gate
 
 Clean-`b3ab49f` board, `parity-20260828-134456`.
+
+**These figures are provisional.** `52-00` Part B showed this environment producing a **2.47x different
+result for identical code** against a historical run, so an 08/28 measurement is a snapshot of that
+session rather than an established inventory. **Part A re-measures every row in its own session**, and no
+row may be opened, closed, or planned against on the strength of this table alone.
 
 | row | SMP | libc | classification |
 | --- | ---: | ---: | --- |
@@ -237,6 +242,12 @@ nothing from a compile-time-only specialized path**.
 This is a distribution decision, not a performance one, and it shapes every kernel written afterwards.
 Note that `_mm_cmpestrm` and `_mm_cmpistrm` are **SSE4.2**, above rawr's current `avx + ssse3` floor, so
 even the array-row candidate raises it.
+
+**The reference's own build is part of this.** `52-00` recorded that the benchmark compiles CRoaring with
+**AVX-512 disabled**, on a CPU that reports AVX-512 support. Every x86_64 figure in this campaign is
+therefore rawr against **CRoaring-without-AVX-512**, not against CRoaring's fastest available build.
+**Either justify that choice on the record or state it as a scope limit on every claim** — a campaign
+about x86_64 vectorization cannot leave the reference's vectorization configured by an unexamined flag.
 
 ## 7. Out of scope
 
