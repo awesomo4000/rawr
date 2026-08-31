@@ -188,7 +188,7 @@ a testing gap, not a library defect.
 
 ## 6. Deliverable — an evidence table, not a claim
 
-For every cell, record one of:
+For every cell, record **one status in each tier** — the two are independent, not alternatives:
 
 **Two independent columns, because the tiers are not alternatives.** An earlier draft required exactly
 one status per cell, which is wrong: a target can be Tier 1 **verified** *and* carry a Tier 2 tooling gap
@@ -201,13 +201,13 @@ at the same time, and forcing a choice would either hide a working library or hi
 | **verified** | compiles **and** the §4 runtime set passes on real hardware/VM |
 | **compiles** | Tier 1 cross-compile passes; not executed |
 | **broken** | with the actual error |
-| **not targetable** | Zig 0.16 cannot target it — see the §7.1 definition, which exists so a rawr defect cannot be filed here |
+| **not targetable** | Zig 0.16 cannot resolve or build a **minimal control program** for the target. See [`47-01` §1](47-01-compile-matrix.md) — a probe or package-consumer failure is `broken`, even when the diagnostic reads like a target limitation, so a rawr defect cannot be filed here |
 
 **Tier 2 — dev tooling:**
 
 | Status | Meaning |
 | --- | --- |
-| **passes** | `difftest` / benches run on this cell |
+| **passes** | **`zig build difftest` and `zig build difftest64`** both run and pass on this cell |
 | **gap** | unavailable — **say why** |
 | **not-run** | not attempted |
 
@@ -244,7 +244,10 @@ different.
 - **`check-package` run on OpenBSD and FreeBSD before other unverified cells**, since §1 shows they are
   the only OS values that branch in shipped code.
 - Runtime set (§4) run on every host the owner provides; results recorded per cell.
-- Evidence table complete in `docs/`, every cell carrying one of the §6 statuses.
+- **Two tables complete in `docs/`** ([`47-02` §2](47-02-runtime-and-evidence.md)): the 16 target-triple
+  cells each carrying **both** a Tier 1 and a Tier 2 status, and a separate **feature-dispatch table keyed
+  by target triple + CPU profile** for the baseline cells. **No cell forced to a single status**, and no
+  baseline cell folded into the triple-keyed table.
 - `README.md` support statement matches the table — **verified vs compiles distinguished**, and the
   Linux/x86_64 cell recorded as **WSL2** unless native Linux has run.
 - Any **Tier 1** breakage either fixed or recorded as a known limitation with its error.
