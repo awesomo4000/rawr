@@ -17,9 +17,12 @@ An earlier version of this section said all OS-conditional code lives in the ben
 `build.zig`'s `addBenchmarkPlatformShim` does not ship. **That contradicted this spec's own Tier 1 table**,
 which correctly lists `build.zig` as shipped. Re-verified 08/31:
 
-- **Sources: clean.** Every one of the **33** files in `build.zig.zon`'s `.paths`, **including the test
-  files that ship**, is free of `builtin.os` and `os.tag`. *(An earlier check excluded test files; they
-  are in `.paths`, so they are Tier 1 and had to be included. The answer did not change.)*
+- **Sources: clean.** All **26 `src/*.zig` entries** in `build.zig.zon`'s `.paths`, **including the test
+  files that ship**, are free of `builtin.os` and `os.tag`. *(An earlier check excluded test files; they
+  are in `.paths`, so they are Tier 1 and had to be included. The answer did not change.)* The `.paths`
+  allowlist holds **33** entries in total — those 26 sources plus `build.zig`, `build.zig.zon`, and five
+  docs/asset files. **Saying "all 33 are clean" contradicts the next bullet**, since `build.zig` is one of
+  the 33 and is not clean. The sources are audited as a set; `build.zig` is audited separately.
 - **`build.zig`: three OS-conditional sites, and it ships.** `addBenchmarkPlatformShim` branches on
   **OpenBSD** (`:1297`) and adds `src/bench_openbsd.c` — **a file that is not in `.paths`**. Two further
   branches add a `bswap64` macro on **FreeBSD** (`:1319`, `:1345`) in the CRoaring translate-c setup.
@@ -73,9 +76,27 @@ attaches to the OS family.
 
 ## 3. Tier 1 — compile matrix first (cheap, catches most)
 
-**Generalize the existing `check-32` mechanism.** `tools/check_32_api.zig` is already an exported probe
-covering the full public surface of all five stable types — it exists, it works, and spec 40-01
-established that its enumerated surface *is* the guard boundary. Reuse it verbatim.
+**Generalize the existing `check-32` mechanism** — but not verbatim, and not alone.
+
+**The probe does not cover all five stable types.** `tools/check_32_api.zig` never references
+`OwnedBitmap`, so a portability defect confined to its six methods would pass unnoticed. Spec 40-01
+established that the probe's **enumerated surface is the guard boundary**, which is exactly why the gap
+matters: an unenumerated type is invisible, not implicitly covered. **Extend the probe to `OwnedBitmap`
+and add a seeded failure control** proving the added surface actually trips the guard. Until then, this
+spec may not describe the probe as covering the full public surface.
+
+**Compiling the probe does not exercise the shipped `build.zig`.** `check-32` compiles source modules
+directly and bypasses the dependency/package path — which is precisely where §1's OpenBSD and FreeBSD
+branches live. A matrix built only on the probe would reprioritise the BSDs and then never test the thing
+that made them the priority. **Add a per-target, allowlist-only package consumer that passes the target
+into `b.dependency`**, so the shipped build script is executed for every cell. Native `check-package`
+remains its runtime counterpart.
+
+**Report every cell.** A single aggregate step cannot: one failing or non-targetable target stops it, and
+the remaining cells go unrecorded while looking merely absent. **Require independently invocable
+per-target substeps, or a controller that runs each cell and records pass, failure, or not-targetable
+without silently skipping the rest.** The deliverable is an evidence table, and a table with unexplained
+holes is the failure mode.
 
 Add **`zig build check-portability`**: compile that probe for every target in the matrix.
 
@@ -92,8 +113,14 @@ Add **`zig build check-portability`**: compile that probe for every target in th
 
 ### 3.1 Build options are part of the buildable surface
 
-**Exercise every documented `-D` build option**, at minimum compiling with each of its values on the dev
-host. There is currently exactly **one**: `-Dcroaring-avx512`.
+**Exercise every documented `-D` build option through a step that actually reaches the affected code.**
+There is currently exactly **one**: `-Dcroaring-avx512`.
+
+**A plain `zig build -Dcroaring-avx512=true` would pass with the defect present.** It builds the library
+and need not instantiate translate-c, and translate-c was the broken path. The check must name a
+**CRoaring-backed step** — `bench-parity-worker` or equivalent. **`true` also panics deliberately on
+non-x86_64** (`build.zig:13`), so that value runs only on an x86_64 target while `false` runs everywhere.
+Pin both commands exactly rather than describing them.
 
 That single option **did not compile** until `52-00` fixed it — the C amalgamation auto-detected the macro
 while translate-c processed rawr's wrapper without seeing the definition. **100% of the documented build
@@ -106,10 +133,17 @@ spec exists to find, and the cost of covering it is one extra compile per value.
 `array_simd.zig` gates on **features, not just architecture**: `has_x86_simd` requires `avx` **and**
 `ssse3`, `has_neon` requires the NEON bit. A target lacking them takes scalar paths silently.
 
-**Add baseline-feature cells** — `x86_64` with no AVX and `aarch64` with no NEON — and confirm they
-compile and pass. This is cheap cross-compilation and it records a fact consumers need: **a generically
-built rawr gets no SIMD at all**, which is the same compile-time-versus-runtime dispatch question raised
-in [spec 52 §6](52-x86-64-parity.md). The matrix should state it rather than leave it implicit.
+**Add baseline-feature cells** — `x86_64` with no AVX and `aarch64` with no NEON — which **compile and
+assert the expected dispatch**. They are cross-compile-only, so "pass" is not available to them and the
+assertion is the deliverable.
+
+**The fact to record is narrower than an earlier draft claimed.** That draft said a generically built rawr
+"gets no SIMD at all". **False.** The gates select only the explicit array-intersection kernels
+(`array_simd.zig` defines `has_x86_simd`/`has_neon`; `array_kernels.zig:145` consumes them). **Bitset
+container operations are vectorized unconditionally** — `simdBitsetOp` (`bitset_container.zig:213`) uses
+`@Vector(8, u64)` with no feature gate at all, and its lowering is LLVM's choice. The correct statement is
+that a baseline target **takes the scalar array-intersection path**, and it connects to the
+compile-time-versus-runtime dispatch question in [spec 52 §6](52-x86-64-parity.md).
 
 ## 4. Tier 1 — runtime verification, per available host
 
@@ -134,8 +168,9 @@ a testing gap, not a library defect.
   `openbsd_c_allocator` (`bench_time.zig:427-442`): evidence of **prior platform-specific work**, but
   whether it was forced by a defect or chosen as a preference is **not established by its existence**.
   Establish which. NetBSD is untried and branches nowhere, so it is the lower-risk BSD.
-- **There is an OpenBSD stash in the working tree.** Examine it before starting — it may already contain
-  findings, and rediscovering them would be waste.
+- **The OpenBSD stash was examined and is superseded.** Its changes landed in `29c51d7`; it holds only
+  Tier 2 benchmark fixes for `ReleaseFast` copying large arrays onto OpenBSD's 4 MB stack. **No library or
+  package finding.** Recorded so it is not re-inspected.
 - **aarch64 on Linux/BSD/Windows** — NEON gating is on `builtin.cpu.arch == .aarch64` **plus** the NEON
   feature bit, so a target without the feature silently takes scalar paths. Confirm which path each
   aarch64 cell actually takes, and record it.
@@ -154,6 +189,12 @@ For every cell, record one of:
 | **broken** | with the actual error |
 | **not targetable** | Zig 0.16 cannot target it |
 
+**Status attaches to a target triple, never to an OS family.** §3 distinguishes `linux-gnu` from
+`linux-musl` and `windows-gnu` from `windows-msvc` at compile time, so runtime status must keep that
+distinction: **running Windows GNU does not make Windows MSVC `verified`**, and Linux GNU says nothing
+about musl. An executed cell is `verified`; its unexecuted ABI siblings stay `compiles`. *(An earlier
+draft collapsed runtime status to the OS family, which would have promoted untested ABIs for free.)*
+
 Record it in `docs/` (repo-only). **Then update `README.md`'s support statement to match the evidence** —
 that is the point of the exercise. Today the README claims 32-bit targets it *does* verify via
 `check-32`; the arch/OS matrix currently has no such statement, and it should not acquire an optimistic
@@ -167,10 +208,17 @@ different.
 
 - `zig build check-portability` added, reusing `tools/check_32_api.zig`, covering the matrix; targets Zig
   cannot build are **recorded, not silently skipped**.
-- **Every documented `-D` option compiled with each of its values** (§3.1) — currently just
-  `-Dcroaring-avx512`, whose broken state went unnoticed because nothing exercised non-default values.
-- **Baseline-feature cells covered** (§3.2): `x86_64` without AVX and `aarch64` without NEON compile and
-  pass, and the evidence table records that a generically built rawr takes scalar paths.
+- **Probe extended to `OwnedBitmap` with a seeded failure control** proving the added surface trips the
+  guard (§3).
+- **Per-target allowlist-only package consumer** exercising the shipped `build.zig` for every cell, and
+  **every cell reported** — pass, failure, or not-targetable — with no silent skipping (§3).
+- **Every documented `-D` option exercised through a CRoaring-backed step with each of its values**
+  (§3.1), `true` on x86_64 only, both commands pinned. Its broken state went unnoticed because nothing
+  exercised non-default values.
+- **Baseline-feature cells covered** (§3.2): `x86_64` without AVX and `aarch64` without NEON **compile and
+  assert the expected dispatch**, and the table records that they take the **scalar array-intersection
+  path** — not that they lack SIMD, since bitset operations stay vectorized.
+- **Every status recorded per target triple**, with ABI siblings never promoted by association (§6).
 - **`check-package` run on OpenBSD and FreeBSD before other unverified cells**, since §1 shows they are
   the only OS values that branch in shipped code.
 - Runtime set (§4) run on every host the owner provides; results recorded per cell.
