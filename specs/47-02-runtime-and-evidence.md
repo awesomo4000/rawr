@@ -17,15 +17,36 @@ stays `compiles`, and the chunk completes with partial runtime coverage.
    whether a consumer resolving the shipped `build.zig` ever reaches its OpenBSD or FreeBSD branches.
    Run it there first if either host is available.
 
+**Record the resolved target triple for every runtime cell, and use an explicit `-Dtarget` for any
+non-default ABI.** These commands otherwise resolve to the host default — on a glibc Linux host,
+`zig build test` verifies `linux-gnu` and says nothing about `linux-musl`. **An ABI not explicitly
+targeted and executed stays `compiles`**, no matter what ran on that machine.
+
 `difftest` / `difftest64` are **Tier 2** — they link CRoaring. Run where they work; **absence is a testing
-gap, never a library defect**, and it may not be reported as an unsupported platform.
+gap, never a library defect**, and it may not be reported as an unsupported platform. Their result goes in
+the Tier 2 column, independently of Tier 1.
 
 ## 2. The evidence table
 
-In `docs/`, repo-only. Every cell carries exactly one toplevel §6 status: `verified`, `compiles`,
-`tooling-gap` (with the reason), `broken` (with the error), or `not targetable`.
+In `docs/`, repo-only. **Two tables, and each cell carries two independent statuses — not one.**
 
-**Keyed by target triple, not OS family.** Running `windows-gnu` does not make `windows-msvc` `verified`;
+**Table 1 — the 16 target triples**, one row each, with **two columns**:
+
+| column | values |
+| --- | --- |
+| **Tier 1** (shipped library) | `verified` \| `compiles` \| `broken` (error) \| `not targetable` (per `47-01` §1) |
+| **Tier 2** (dev tooling) | `passes` \| `gap` (**say why**) \| `not-run` |
+
+*(An earlier draft required exactly one status per cell. **Wrong** — the tiers are orthogonal. A target can
+be Tier 1 `verified` while `difftest` cannot run there, and forcing a single value would either hide a
+working library or hide a testing hole.)*
+
+**Table 2 — feature dispatch**, keyed by **target triple + CPU profile**, holding the `47-00` §4 baseline
+cells and their asserted kernel selection. *(An earlier draft folded these into Table 1, which collides:
+`x86_64-linux-gnu` baseline and `x86_64-linux-gnu` default **share a triple** and are different cells. The
+key for that table is a target **configuration**, not a triple.)*
+
+**Table 1 is keyed by target triple, not OS family.** Running `windows-gnu` does not make `windows-msvc` `verified`;
 `linux-gnu` says nothing about `linux-musl`. An executed cell is `verified` and its unexecuted ABI
 siblings stay `compiles`. The 12 host families are provisioning context; the **16 target cells** are the
 evidence unit.
@@ -64,10 +85,13 @@ uniformly reassuring would be less useful than none.
   chunk **completes anyway**.
 - `check-package` run on OpenBSD and/or FreeBSD **if either is available**, with toplevel §1's consumer-path
   question answered or explicitly left open.
-- Evidence table in `docs/`, **keyed by target triple**, every one of the 16 cells plus the two
-  baseline-feature cells carrying exactly one §6 status, with reasons and errors where the status requires
-  them.
-- **No ABI sibling promoted by association.**
+- **Two tables in `docs/`** per §2: Table 1 keyed by **target triple**, all 16 cells, each carrying **both**
+  a Tier 1 and a Tier 2 status; Table 2 keyed by **target triple + CPU profile** holding the baseline
+  feature-dispatch cells and their asserted kernel selection. Reasons and errors recorded where a status
+  requires them.
+- **No cell forced to a single status** across the two tiers, and **no baseline cell folded into Table 1**.
+- **No ABI sibling promoted by association**, and **every runtime cell recording its resolved target
+  triple**; any non-default ABI verified only via an explicit `-Dtarget` run, else left at `compiles`.
 - Linux/x86_64 recorded as **WSL2**, with a note that `52-00` Part A upgrades it.
 - README support statement matches the table, **`verified` and `compiles` distinguished**, no performance
   claims, **Tier 2 gaps not presented as unsupported platforms**.

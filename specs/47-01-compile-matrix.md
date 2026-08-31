@@ -17,8 +17,17 @@ openbsd}` = **16 cells**, plus the two baseline-feature cells of `47-00` §4.
 probe compiles but the package consumer fails is a **finding, not a pass** — that combination is exactly
 the shipped-`build.zig` defect shape the toplevel is chasing.
 
-**Targets Zig 0.16 cannot build at all are recorded as `not targetable`**, with the error. Silent
-omission is the failure mode `47-00` §5 exists to prevent, and this chunk is where it would happen.
+**`not targetable` has a definition, and it is deliberately hard to reach.** It applies **only when Zig
+0.16 cannot resolve or build a minimal control program for that target** — a hello-world, not rawr.
+**A probe or package-consumer failure is `broken`, even when the compiler diagnostic reads like a target
+limitation.** Without this rule, a genuine rawr defect gets filed as someone else's problem and the cell
+goes quiet.
+
+**So the classification requires the minimal control**: build it first, and record its result alongside
+the cell. A cell may only be `not targetable` if that control also failed.
+
+Silent omission is the failure mode `47-00` §5 exists to prevent, and this chunk is where it would
+happen.
 
 ## 2. Order — highest known risk first
 
@@ -64,6 +73,8 @@ may be described as verified here — nothing has executed. The distinction is t
 - All **16 cells** plus the two baseline-feature cells run, **both checks each**.
 - Every cell recorded as `compiles`, `broken` with its error, or `not targetable` with its error —
   **none silently skipped**, demonstrated by the `47-00` §5 reporting path.
+- **Every `not targetable` cell backed by a failing minimal-control build**, per §1. A cell whose control
+  built but whose rawr checks did not is `broken`.
 - Cells run in §2 order, with BSD and Windows results reported first.
 - Baseline-feature cells report their **asserted kernel selection**.
 - Every breakage **either fixed or recorded**, explicitly labelled which.

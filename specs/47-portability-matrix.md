@@ -190,13 +190,26 @@ a testing gap, not a library defect.
 
 For every cell, record one of:
 
+**Two independent columns, because the tiers are not alternatives.** An earlier draft required exactly
+one status per cell, which is wrong: a target can be Tier 1 **verified** *and* carry a Tier 2 tooling gap
+at the same time, and forcing a choice would either hide a working library or hide a testing hole.
+
+**Tier 1 — the shipped library:**
+
 | Status | Meaning |
 | --- | --- |
 | **verified** | compiles **and** the §4 runtime set passes on real hardware/VM |
 | **compiles** | Tier 1 cross-compile passes; not executed |
-| **tooling-gap** | library fine, Tier 2 (difftest/bench) unavailable — say *why* |
 | **broken** | with the actual error |
-| **not targetable** | Zig 0.16 cannot target it |
+| **not targetable** | Zig 0.16 cannot target it — see the §7.1 definition, which exists so a rawr defect cannot be filed here |
+
+**Tier 2 — dev tooling:**
+
+| Status | Meaning |
+| --- | --- |
+| **passes** | `difftest` / benches run on this cell |
+| **gap** | unavailable — **say why** |
+| **not-run** | not attempted |
 
 **Status attaches to a target triple, never to an OS family.** §3 distinguishes `linux-gnu` from
 `linux-musl` and `windows-gnu` from `windows-msvc` at compile time, so runtime status must keep that
