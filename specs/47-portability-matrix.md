@@ -241,6 +241,20 @@ different.
   `check-docs` and `check-package` are **host-local** checks, run on the dev machine; they are not part of
   the per-target matrix.
 
+## 7.1 Chunking
+
+- **[47-00](47-00-portability-machinery.md)** — build the checks and **exercise all five falsification
+  controls**. The toplevel review found four proposed guards that would pass with their defect present, so
+  the controls are the deliverable as much as the checks are. No matrix run.
+- **[47-01](47-01-compile-matrix.md)** — run the 16 target cells plus the two baseline-feature cells, BSD
+  and Windows first. Breakage **fixed or recorded, labelled which**. No cell called `verified`.
+- **[47-02](47-02-runtime-and-evidence.md)** — runtime cells on whatever hosts exist, the evidence table
+  keyed by **target triple**, and the README. **Unprovisioned cells stay `compiles` and the chunk
+  completes** — this spec makes useful progress without every host.
+
+**`52-00` Part A is not a dependency.** Its only interaction is upgrading the Linux/x86_64 cell from WSL2
+to native when it runs, which is a one-line change in `47-02`.
+
 ## 8. Out of scope
 
 - VM/host provisioning (owner-handled).
