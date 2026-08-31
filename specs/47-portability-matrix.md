@@ -35,12 +35,20 @@ difftest modules, but "appears to be" is not the standard this campaign uses.
 
 **`check-package` on OpenBSD and FreeBSD is the check that settles it**, because it builds and runs a
 consumer from the allowlist alone: if the consumer path needed `src/bench_openbsd.c`, it would fail on a
-missing file. Those two cells therefore rank **above** Windows for Tier 1 risk, even though Windows is the
-larger unknown overall.
+missing file.
 
-**Arch-conditional code is confined to `array_simd.zig`:** `has_x86_simd` requires `x86_64` + AVX,
-`has_neon` requires `aarch64` + NEON. Everything else takes scalar paths — already proven by `check-32`
-across four 32-bit targets.
+**Stated precisely:** call-site inspection confirms the OpenBSD and FreeBSD helpers attach only to
+repository development modules, **never to `lib_mod`**. So they are **the highest known
+package-integrity risk** — the shipped build graph declares them and a consumer resolves that graph —
+**not** categorically above Windows for overall Tier 1 portability risk. Windows remains the larger
+unknown. *(An earlier draft made the broader claim, which the call sites do not support.)*
+
+**Explicit target-feature predicates live in `array_simd.zig`** — `has_x86_simd` requires `x86_64` + AVX
++ SSSE3, `has_neon` requires `aarch64` + NEON — and `array_kernels.zig` consumes them to select the
+**array-intersection kernels**. *(An earlier draft added "everything else takes scalar paths". **False**,
+and it contradicts §3.2: other code still uses portable `@Vector` with no feature gate, notably
+`simdBitsetOp`.)* What the predicates gate is the array-intersection path, nothing wider. Scalar
+correctness across targets is separately proven by `check-32` on four 32-bit targets.
 
 **So portability splits into two tiers with very different stakes**, and conflating them would
 overstate the problem:
@@ -66,13 +74,14 @@ That finding is about timing, not correctness, so this cell is genuine evidence 
 test-passing* — but a README line saying "Linux/x86_64 verified" would be resting on a virtualized
 environment. **Record it as WSL2 specifically** until native Linux runs, which `52-00` Part A will supply.
 
-That leaves **10 of the 12 runtime cells** (2 arches × 6 OS families) genuinely unverified, plus native
-Linux/x86_64 as a qualified eleventh.
+That leaves **10 of the 12 host families** genuinely unverified, plus native Linux/x86_64 as a qualified
+eleventh — and rather more than 10 *cells*, since the unverified families include ABI pairs (§6).
 
-**Note the two counts differ and should not be conflated:** the §3 *compile* matrix has **16 cells**
-(2 arches × 8 target triples, since Linux and Windows each have two ABIs), while the §4 *runtime* matrix
-has **12** (2 arches × 6 OS families). The evidence table (§6) is keyed by compile target; runtime status
-attaches to the OS family.
+**The 12 is provisioning context only, not an evidence unit.** 2 arches × 6 OS families = **12 hosts to
+provision**, but **evidence and `verified` status attach independently to all 16 ABI-specific target
+cells** (§6), because Linux and Windows each carry two ABIs and running one never verifies its sibling.
+The §3 compile matrix and the §6 evidence table are both keyed by **target triple**. *(An earlier draft
+attached runtime status to the OS family, which §6 correctly forbids.)*
 
 ## 3. Tier 1 — compile matrix first (cheap, catches most)
 
