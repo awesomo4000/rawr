@@ -264,8 +264,9 @@ different.
   the controls are the deliverable as much as the checks are. No matrix run.
 - **[47-01](47-01-compile-matrix.md)** — run the 16 target cells plus the two baseline-feature cells, BSD
   and Windows first. Breakage **fixed or recorded, labelled which**. No cell called `verified`.
-- **[47-02](47-02-runtime-and-evidence.md)** — runtime cells on whatever hosts exist, the evidence table
-  keyed by **target triple**, and the README. **Unprovisioned cells stay `compiles` and the chunk
+- **[47-02](47-02-runtime-and-evidence.md)** — runtime cells on whatever hosts exist, **two** evidence
+  tables (the 16 target triples with a Tier 1 *and* a Tier 2 status each, plus a separate feature-dispatch
+  table keyed by **target triple + CPU profile**), and the README. **Unprovisioned cells stay `compiles` and the chunk
   completes** — this spec makes useful progress without every host.
 
 **`52-00` Part A is not a dependency.** Its only interaction is upgrading the Linux/x86_64 cell from WSL2

@@ -35,7 +35,7 @@ In `docs/`, repo-only. **Two tables, and each cell carries two independent statu
 | column | values |
 | --- | --- |
 | **Tier 1** (shipped library) | `verified` \| `compiles` \| `broken` (error) \| `not targetable` (per `47-01` §1) |
-| **Tier 2** (dev tooling) | `passes` \| `gap` (**say why**) \| `not-run` |
+| **Tier 2** (dev tooling) | `passes` (**`zig build difftest` and `zig build difftest64` both run and pass**) \| `gap` (**say why**) \| `not-run` |
 
 *(An earlier draft required exactly one status per cell. **Wrong** — the tiers are orthogonal. A target can
 be Tier 1 `verified` while `difftest` cannot run there, and forcing a single value would either hide a
