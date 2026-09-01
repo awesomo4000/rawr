@@ -10,6 +10,7 @@ const rawr = @import("rawr");
 
 const RoaringBitmap = rawr.RoaringBitmap;
 const Roaring64Bitmap = rawr.Roaring64Bitmap;
+const OwnedBitmap = rawr.OwnedBitmap;
 const FrozenBitmap = rawr.FrozenBitmap;
 const Frozen64Bitmap = rawr.Frozen64Bitmap;
 
@@ -72,6 +73,7 @@ fn runProbe() !void {
     defer allocator.free(bytes);
     var decoded = try RoaringBitmap.deserialize(allocator, bytes);
     defer decoded.deinit();
+    try probeOwnedBitmap(allocator, &left, &right, bytes);
     var frozen = try FrozenBitmap.init(bytes);
     defer frozen.deinit();
     _ = frozen.isEmpty();
@@ -134,4 +136,71 @@ fn runProbe() !void {
     _ = frozen64.maximum();
     var frozen_iter64 = frozen64.iterator();
     _ = frozen_iter64.next();
+}
+
+fn probeOwnedBitmap(
+    allocator: std.mem.Allocator,
+    left: *const RoaringBitmap,
+    right: *const RoaringBitmap,
+    serialized: []const u8,
+) !void {
+    {
+        var owned = try RoaringBitmap.deserializeOwned(allocator, serialized);
+        defer owned.deinit();
+        try probeOwnedMethods(allocator, &owned);
+    }
+    {
+        var owned = try RoaringBitmap.deserializeSafeOwned(allocator, serialized);
+        defer owned.deinit();
+        try probeOwnedMethods(allocator, &owned);
+    }
+    {
+        var owned = try left.bitwiseAndOwned(allocator, right);
+        defer owned.deinit();
+        try probeOwnedMethods(allocator, &owned);
+    }
+    {
+        var owned = try left.bitwiseOrOwned(allocator, right);
+        defer owned.deinit();
+        try probeOwnedMethods(allocator, &owned);
+    }
+    {
+        var owned = try left.bitwiseDifferenceOwned(allocator, right);
+        defer owned.deinit();
+        try probeOwnedMethods(allocator, &owned);
+    }
+    {
+        var owned = try left.flipOwned(allocator, 1, 20);
+        defer owned.deinit();
+        try probeOwnedMethods(allocator, &owned);
+    }
+    {
+        var values = [_]u32{ 20, 1, 10, 10 };
+        var owned = try RoaringBitmap.fromSliceOwned(allocator, &values);
+        defer owned.deinit();
+        try probeOwnedMethods(allocator, &owned);
+    }
+
+    const bitmaps = [_]*const RoaringBitmap{ left, right };
+    {
+        var owned = try RoaringBitmap.orManyOwned(allocator, &bitmaps);
+        defer owned.deinit();
+        try probeOwnedMethods(allocator, &owned);
+    }
+    {
+        var owned = try RoaringBitmap.xorManyOwned(allocator, &bitmaps);
+        defer owned.deinit();
+        try probeOwnedMethods(allocator, &owned);
+    }
+}
+
+fn probeOwnedMethods(allocator: std.mem.Allocator, owned: *OwnedBitmap) !void {
+    _ = owned.contains(10);
+    const borrowed = owned.asBitmap();
+    probe_sink +%= owned.cardinality();
+    probe_sink +%= borrowed.cardinality();
+    var iter = owned.iterator();
+    _ = iter.next();
+    const bytes = try owned.serialize(allocator);
+    defer allocator.free(bytes);
 }

@@ -54,7 +54,8 @@ pub fn build(b: *std.Build) void {
 
     addCheck32Step(b);
     addCheckDocsStep(b);
-    addCheckPackageStep(b);
+    const check_package_exe = addCheckPackageStep(b);
+    addCheckPortabilitySteps(b, check_package_exe);
     addRealdataCorpusSteps(b, target);
     addCrossWidthFixtureSteps(b, lib_mod, target);
 
@@ -1239,7 +1240,7 @@ fn addCheckDocsStep(b: *std.Build) void {
     step.dependOn(&run_check.step);
 }
 
-fn addCheckPackageStep(b: *std.Build) void {
+fn addCheckPackageStep(b: *std.Build) *std.Build.Step.Compile {
     const check_mod = b.createModule(.{
         .root_source_file = b.path("check_package.zig"),
         .target = b.graph.host,
@@ -1254,6 +1255,301 @@ fn addCheckPackageStep(b: *std.Build) void {
 
     const step = b.step("check-package", "Build and run an allowlist-only package consumer");
     step.dependOn(&run_check.step);
+    return check_exe;
+}
+
+const PortabilityCell = struct {
+    name: []const u8,
+    target_arg: []const u8,
+    cpu_arg: ?[]const u8 = null,
+    query: std.Target.Query,
+    baseline_dispatch: bool = false,
+};
+
+const portability_cells = [_]PortabilityCell{
+    .{
+        .name = "aarch64-openbsd",
+        .target_arg = "aarch64-openbsd",
+        .query = .{ .cpu_arch = .aarch64, .cpu_model = .baseline, .os_tag = .openbsd },
+    },
+    .{
+        .name = "x86_64-openbsd",
+        .target_arg = "x86_64-openbsd",
+        .query = .{ .cpu_arch = .x86_64, .cpu_model = .baseline, .os_tag = .openbsd },
+    },
+    .{
+        .name = "aarch64-freebsd",
+        .target_arg = "aarch64-freebsd",
+        .query = .{ .cpu_arch = .aarch64, .cpu_model = .baseline, .os_tag = .freebsd },
+    },
+    .{
+        .name = "x86_64-freebsd",
+        .target_arg = "x86_64-freebsd",
+        .query = .{ .cpu_arch = .x86_64, .cpu_model = .baseline, .os_tag = .freebsd },
+    },
+    .{
+        .name = "aarch64-windows-gnu",
+        .target_arg = "aarch64-windows-gnu",
+        .query = .{ .cpu_arch = .aarch64, .cpu_model = .baseline, .os_tag = .windows, .abi = .gnu },
+    },
+    .{
+        .name = "x86_64-windows-gnu",
+        .target_arg = "x86_64-windows-gnu",
+        .query = .{ .cpu_arch = .x86_64, .cpu_model = .baseline, .os_tag = .windows, .abi = .gnu },
+    },
+    .{
+        .name = "aarch64-windows-msvc",
+        .target_arg = "aarch64-windows-msvc",
+        .query = .{ .cpu_arch = .aarch64, .cpu_model = .baseline, .os_tag = .windows, .abi = .msvc },
+    },
+    .{
+        .name = "x86_64-windows-msvc",
+        .target_arg = "x86_64-windows-msvc",
+        .query = .{ .cpu_arch = .x86_64, .cpu_model = .baseline, .os_tag = .windows, .abi = .msvc },
+    },
+    .{
+        .name = "aarch64-linux-gnu",
+        .target_arg = "aarch64-linux-gnu",
+        .query = .{ .cpu_arch = .aarch64, .cpu_model = .baseline, .os_tag = .linux, .abi = .gnu },
+    },
+    .{
+        .name = "x86_64-linux-gnu",
+        .target_arg = "x86_64-linux-gnu",
+        .query = .{ .cpu_arch = .x86_64, .cpu_model = .baseline, .os_tag = .linux, .abi = .gnu },
+    },
+    .{
+        .name = "aarch64-linux-musl",
+        .target_arg = "aarch64-linux-musl",
+        .query = .{ .cpu_arch = .aarch64, .cpu_model = .baseline, .os_tag = .linux, .abi = .musl },
+    },
+    .{
+        .name = "x86_64-linux-musl",
+        .target_arg = "x86_64-linux-musl",
+        .query = .{ .cpu_arch = .x86_64, .cpu_model = .baseline, .os_tag = .linux, .abi = .musl },
+    },
+    .{
+        .name = "aarch64-macos",
+        .target_arg = "aarch64-macos",
+        .query = .{ .cpu_arch = .aarch64, .cpu_model = .baseline, .os_tag = .macos },
+    },
+    .{
+        .name = "x86_64-macos",
+        .target_arg = "x86_64-macos",
+        .query = .{ .cpu_arch = .x86_64, .cpu_model = .baseline, .os_tag = .macos },
+    },
+    .{
+        .name = "aarch64-netbsd",
+        .target_arg = "aarch64-netbsd",
+        .query = .{ .cpu_arch = .aarch64, .cpu_model = .baseline, .os_tag = .netbsd },
+    },
+    .{
+        .name = "x86_64-netbsd",
+        .target_arg = "x86_64-netbsd",
+        .query = .{ .cpu_arch = .x86_64, .cpu_model = .baseline, .os_tag = .netbsd },
+    },
+    .{
+        .name = "x86_64-linux-gnu-baseline-no-avx",
+        .target_arg = "x86_64-linux-gnu",
+        .cpu_arg = "baseline-avx",
+        .query = .{
+            .cpu_arch = .x86_64,
+            .cpu_model = .baseline,
+            .cpu_features_sub = std.Target.x86.featureSet(&.{.avx}),
+            .os_tag = .linux,
+            .abi = .gnu,
+        },
+        .baseline_dispatch = true,
+    },
+    .{
+        .name = "aarch64-linux-gnu-baseline-no-neon",
+        .target_arg = "aarch64-linux-gnu",
+        .cpu_arg = "baseline-neon",
+        .query = .{
+            .cpu_arch = .aarch64,
+            .cpu_model = .baseline,
+            .cpu_features_sub = std.Target.aarch64.featureSet(&.{.neon}),
+            .os_tag = .linux,
+            .abi = .gnu,
+        },
+        .baseline_dispatch = true,
+    },
+};
+
+fn addCheckPortabilitySteps(
+    b: *std.Build,
+    check_package_exe: *std.Build.Step.Compile,
+) void {
+    const controller_mod = b.createModule(.{
+        .root_source_file = b.path("tools/check_portability.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    const controller_exe = b.addExecutable(.{
+        .name = "check_portability",
+        .root_module = controller_mod,
+    });
+
+    for (portability_cells) |cell| {
+        addPortabilityCellSteps(b, check_package_exe, cell);
+    }
+
+    const run_matrix = b.addRunArtifact(controller_exe);
+    run_matrix.addArgs(&.{
+        "matrix_with_options",
+        b.graph.zig_exe,
+        b.fmt("{d}", .{portability_cells.len}),
+    });
+    for (portability_cells) |cell| run_matrix.addArg(cell.name);
+    const matrix_step = b.step(
+        "check-portability",
+        "Compile public API and allowlist consumers across the portability matrix",
+    );
+    matrix_step.dependOn(&run_matrix.step);
+
+    const run_options = b.addRunArtifact(controller_exe);
+    run_options.addArgs(&.{ "options_only", b.graph.zig_exe, "0" });
+    const options_step = b.step(
+        "check-portability-options",
+        "Compile every documented build-option value through its affected path",
+    );
+    options_step.dependOn(&run_options.step);
+
+    addPortabilityReportingControl(b, controller_exe);
+}
+
+fn addPortabilityCellSteps(
+    b: *std.Build,
+    check_package_exe: *std.Build.Step.Compile,
+    cell: PortabilityCell,
+) void {
+    const target = b.resolveTargetQuery(cell.query);
+
+    const control_mod = b.createModule(.{
+        .root_source_file = b.path("tools/check_portability_control.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+    });
+    const control_obj = b.addObject(.{
+        .name = b.fmt("rawr-portability-{s}-control", .{cell.name}),
+        .root_module = control_mod,
+    });
+    const control_step = b.step(
+        b.fmt("check-portability-{s}-control", .{cell.name}),
+        b.fmt("Compile the minimal target control for {s}", .{cell.name}),
+    );
+    control_step.dependOn(&control_obj.step);
+
+    const rawr_mod = b.createModule(.{
+        .root_source_file = b.path("src/roaring.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+    });
+    const probe_mod = b.createModule(.{
+        .root_source_file = b.path("tools/check_32_api.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+    });
+    probe_mod.addImport("rawr", rawr_mod);
+    const probe_obj = b.addObject(.{
+        .name = b.fmt("rawr-portability-{s}-probe", .{cell.name}),
+        .root_module = probe_mod,
+    });
+    const probe_step = b.step(
+        b.fmt("check-portability-{s}-probe", .{cell.name}),
+        b.fmt("Compile the public API probe for {s}", .{cell.name}),
+    );
+    probe_step.dependOn(&probe_obj.step);
+
+    if (cell.baseline_dispatch) {
+        const array_kernels_mod = b.createModule(.{
+            .root_source_file = b.path("src/array_kernels.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        });
+        const dispatch_mod = b.createModule(.{
+            .root_source_file = b.path("tools/check_feature_dispatch.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        });
+        dispatch_mod.addImport("array_kernels", array_kernels_mod);
+        const dispatch_obj = b.addObject(.{
+            .name = b.fmt("rawr-portability-{s}-dispatch", .{cell.name}),
+            .root_module = dispatch_mod,
+        });
+        probe_step.dependOn(&dispatch_obj.step);
+    }
+
+    const run_package = b.addRunArtifact(check_package_exe);
+    run_package.addArgs(&.{
+        b.graph.zig_exe,
+        "--build-only",
+        "--target",
+        cell.target_arg,
+        "--scratch-suffix",
+        cell.name,
+    });
+    if (cell.cpu_arg) |cpu| run_package.addArgs(&.{ "--cpu", cpu });
+    const package_step = b.step(
+        b.fmt("check-portability-{s}-package", .{cell.name}),
+        b.fmt("Build the allowlist-only package consumer for {s}", .{cell.name}),
+    );
+    package_step.dependOn(&run_package.step);
+
+    const cell_step = b.step(
+        b.fmt("check-portability-{s}", .{cell.name}),
+        b.fmt("Run all compile checks for {s}", .{cell.name}),
+    );
+    cell_step.dependOn(control_step);
+    cell_step.dependOn(probe_step);
+    cell_step.dependOn(package_step);
+}
+
+fn addPortabilityReportingControl(
+    b: *std.Build,
+    controller_exe: *std.Build.Step.Compile,
+) void {
+    const pass_mod = b.createModule(.{
+        .root_source_file = b.path("tools/check_portability_control.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    const pass_obj = b.addObject(.{
+        .name = "rawr-portability-report-pass",
+        .root_module = pass_mod,
+    });
+    const fail_mod = b.createModule(.{
+        .root_source_file = b.path("tools/check_portability_report_failure.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+    });
+    const fail_obj = b.addObject(.{
+        .name = "rawr-portability-report-fail",
+        .root_module = fail_mod,
+    });
+
+    const names = [_][]const u8{ "report-first", "report-middle", "report-last" };
+    for (names, 0..) |name, index| {
+        inline for (.{ "control", "probe", "package" }) |phase| {
+            const step = b.step(
+                b.fmt("check-portability-{s}-{s}", .{ name, phase }),
+                "Seeded portability reporting control",
+            );
+            if (index == 1 and std.mem.eql(u8, phase, "probe")) {
+                step.dependOn(&fail_obj.step);
+            } else {
+                step.dependOn(&pass_obj.step);
+            }
+        }
+    }
+
+    const run = b.addRunArtifact(controller_exe);
+    run.addArgs(&.{ "expect_broken", b.graph.zig_exe, "3" });
+    for (names) |name| run.addArg(name);
+    const step = b.step(
+        "check-portability-reporting-control",
+        "Prove a mid-matrix failure does not hide later cells",
+    );
+    step.dependOn(&run.step);
 }
 
 fn addCrossWidthFixtureSteps(
