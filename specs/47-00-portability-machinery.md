@@ -4,6 +4,29 @@
 
 Toplevel: [47-portability-matrix.md](47-portability-matrix.md).
 
+> **Outcome — complete.** `check-portability` now has independently invocable control, public-probe,
+> and allowlist-package steps for all 16 target triples and both baseline-feature configurations. Its
+> controller runs every requested cell after failures, requires the exact requested cell count, and
+> reports the three phase results separately. `tools/check_32_api.zig` reaches all six `OwnedBitmap`
+> methods and all nine `RoaringBitmap` `*Owned` producers, and native `check-package` retains its
+> build-and-run behaviour while portability cells use an explicit-target build-only mode.
+>
+> The documented option commands are pinned as:
+>
+> ```bash
+> zig build bench-parity-worker -Dtarget=aarch64-linux-gnu -Dcpu=baseline -Dcroaring-avx512=false
+> zig build bench-parity-worker -Dtarget=x86_64-linux-gnu -Dcpu=x86_64_v4+evex512 -Dcroaring-avx512=true
+> ```
+>
+> `scripts/check-portability-controls.sh` exercises all five controls in disposable `/tmp` copies. The
+> extended probe caught an `OwnedBitmap`-only width defect while the call-removed probe passed; the
+> allowlist consumer built the OpenBSD dependency path from the full checkout and then caught the real
+> missing `src/bench_openbsd.c` file in the packaged copy; removing the translate-c macro made the affected
+> option check fail while the plain library still built; inverting the x86 predicate tripped the baseline
+> dispatch assertion; the reporting controller printed the cell after a seeded middle-cell failure, and
+> a deliberately truncated controller failed its exact cell-count assertion.
+> The full target matrix was not run in this chunk.
+
 Builds the checks. **Runs nothing across the matrix** — that is `47-01`. **No evidence table, no README
 change**, which is `47-02`.
 
@@ -18,7 +41,9 @@ for the checks.
 today. Spec 40-01 established that **the probe's enumerated surface is the guard boundary** — an
 unenumerated type is invisible, not implicitly covered.
 
-- Add `OwnedBitmap` and its full method surface to the probe.
+- Add `OwnedBitmap`, its full method surface, and every public `RoaringBitmap` `*Owned` producer to the
+  probe. This states the guard boundary explicitly rather than claiming coverage beyond its enumerated
+  calls.
 - **Keep `check-32` and `check-portability` as separate steps.** They cover different axes — pointer
   width versus arch × OS. Merging them silently drops 32-bit coverage.
 
@@ -41,7 +66,8 @@ priority.
 Add a **per-target, allowlist-only package consumer that passes the target into `b.dependency`**, so the
 shipped `build.zig` is resolved and executed for every cell.
 
-**Control:** add a reference to a file outside `.paths` on the consumer path and show the check fails.
+**Control:** add a reference to an existing repository file outside `.paths` on the consumer path, show
+the in-repository build succeeds, and show the allowlist-only package build fails.
 This is the real defect shape — `build.zig`'s OpenBSD branch names `src/bench_openbsd.c`, which is not in
 the allowlist.
 
@@ -85,13 +111,15 @@ and every later cell goes unrecorded while looking merely absent.
 Require **independently invocable per-target substeps, or a controller** that runs each cell and records
 **pass, failure, or not-targetable** without skipping the rest.
 
-**Control:** make one mid-matrix target fail and show every other cell is still reported. This is the one
+**Control:** make one mid-matrix target fail and show every other cell is still reported. Also truncate
+the controller after that failure and show the exact expected-cell-count assertion fails. This is the one
 most likely to be skipped, and the failure it prevents — a table with silent holes read as coverage — is
 the failure this whole spec exists to avoid.
 
 ## Acceptance
 
-- Probe extended to `OwnedBitmap`; `check-32` and `check-portability` remain separate steps.
+- Probe extended to the six-method `OwnedBitmap` surface and all nine `RoaringBitmap` `*Owned` producers;
+  `check-32` and `check-portability` remain separate steps.
 - Per-target API probe compile **and** per-target allowlist-only package consumer, the latter passing the
   target into `b.dependency`.
 - Build-option check wired to a **CRoaring-backed step**, both values, `true` on x86_64 only, **both
@@ -104,6 +132,38 @@ the failure this whole spec exists to avoid.
   detail.
 - No matrix run, no evidence table, no README change.
 - Existing suites plus `check-32`, `check-docs`, `check-package` green.
+
+## Verification record — implemented, reviewed, ACCEPTED
+
+**Checked in the tree, not taken on report.** All six `OwnedBitmap` methods (`deinit`, `contains`,
+`asBitmap`, `cardinality`, `iterator`, `serialize`) and all nine `*Owned` producers are reached by the
+probe. The controller asserts `cells != expected_cells` (`check_portability.zig:69`), so truncation now
+fails rather than passing on a nonzero broken count.
+
+**Three review findings, all of which were guards that could not fail for their stated reason.** That is
+the failure this chunk was written to prevent, and finding them here rather than in `47-01` is the chunk
+working as intended:
+
+| finding | before | after |
+| --- | --- | --- |
+| reporting control | asserted only `broken != 0`; a controller halting at the middle cell gave `cells=2, broken=1` and **passed** | exact cell count required |
+| package control | referenced `src/not-in-package.zig`, which exists nowhere — failed on *file-not-found* in any mode, proving nothing about allowlist membership | real defect reproduced |
+| probe boundary | six `OwnedBitmap` methods covered, nine `*Owned` producers unenumerated and therefore invisible per spec 40-01 | all nine added |
+
+**The package control is now stronger than what was asked for.** The request was to reference an existing
+non-allowlisted file. The implementation instead injects `addBenchmarkPlatformShim(b, lib_mod, target)` —
+attaching the OpenBSD shim to `lib_mod`, which is **the exact risk the toplevel §1 finding describes** —
+then shows the full checkout builds under `-Dtarget=x86_64-openbsd` while the allowlist-only package build
+fails on the missing `src/bench_openbsd.c`. It reproduces the mechanism rather than simulating its
+symptom.
+
+**The cell-count fix was made falsifiable without being asked.** `mid-matrix-truncated` seeds a truncating
+controller and requires `CellCountMismatch`, so the assertion that catches truncation is itself
+controlled. Together with the two-sided `owned-bitmap-unextended` and `build-option-plain-library` arms,
+three of the six controls now prove their guard is load-bearing rather than merely correlated with a pass.
+
+**Controls run in disposable `/tmp` copies with a guarded cleanup** — the right handling for work that
+seeds defects into a source tree.
 
 ## Estimate
 
