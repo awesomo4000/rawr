@@ -5,6 +5,24 @@
 Toplevel: [47-portability-matrix.md](47-portability-matrix.md).
 Gated on: [47-00](47-00-portability-machinery.md) complete, **with all five controls exercised**.
 
+> **Outcome — complete.** All 16 target triples and both baseline-feature cells ran in the required
+> risk order. Every minimal control, public API probe, and allowlist-only package consumer compiled.
+> The two baseline profiles selected exactly the scalar array-intersection registry
+> `{ dispatch, gallop, merge }`; this says nothing about portable vector lowering elsewhere.
+>
+> The first run found one `broken` cell: `aarch64-windows-msvc` compiled its minimal control and package
+> consumer but failed the probe in Zig 0.16's `std.debug.SelfInfo.Windows`, where an internal `@ptrCast`
+> increased pointer alignment. The reference trace led back to the probe root's `runProbe() catch
+> unreachable`, whose panic path pulled Windows stack-trace machinery into a compile-only object. The
+> probe now uses `catch @trap()` and the root-local `std.debug.no_panic` handler: it still forces analysis
+> of every enumerated rawr call, including ReleaseSafe checks, without requiring platform stack-trace
+> machinery. The cell and then the full matrix passed after that tooling-only fix.
+> No production source, hot path, or OS-conditional shipped source changed.
+>
+> Final classification: all 16 target triples **compile**; no cell is described as verified because
+> nothing ran on a target host. There were no `not targetable` cells, no package-only failures, and both
+> documented `-Dcroaring-avx512` option values compiled through the affected CRoaring-backed step.
+
 Runs what `47-00` built and deals with what falls out. **No runtime hosts, no evidence table, no README** —
 those are `47-02`.
 

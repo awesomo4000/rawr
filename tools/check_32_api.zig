@@ -8,6 +8,8 @@
 const std = @import("std");
 const rawr = @import("rawr");
 
+pub const panic = std.debug.no_panic;
+
 const RoaringBitmap = rawr.RoaringBitmap;
 const Roaring64Bitmap = rawr.Roaring64Bitmap;
 const OwnedBitmap = rawr.OwnedBitmap;
@@ -18,7 +20,7 @@ var probe_storage: [2 * 1024 * 1024]u8 align(64) = undefined;
 var probe_sink: u64 = 0;
 
 export fn rawrCheck32Api() void {
-    runProbe() catch unreachable;
+    runProbe() catch @trap();
 }
 
 fn runProbe() !void {
