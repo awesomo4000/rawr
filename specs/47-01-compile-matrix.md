@@ -101,6 +101,46 @@ may be described as verified here — nothing has executed. The distinction is t
 - **No cell described as `verified`.** No evidence table, no README change.
 - Existing suites plus `check-32`, `check-docs`, `check-package` green on the dev host.
 
+## Verification record — implemented, reviewed, ACCEPTED
+
+**Checked in the tree, not taken on report.** `portability_cells` holds exactly **18 entries** — 16 target
+triples plus the two baseline-feature cells — and they are declared in §2 risk order: OpenBSD, FreeBSD,
+Windows GNU, Windows MSVC, then the rest. **The ordering is structural in `build.zig`, not a claim about
+how the run happened.** The controller's expected count is `b.fmt("{d}", .{portability_cells.len})`, so a
+passing run proves every declared cell was visited — the `47-00` cell-count fix paying off on its first
+real use.
+
+**The two-check design earned its keep immediately.** `aarch64-windows-msvc` failed the probe while its
+minimal control **and** its package consumer compiled. That combination is what distinguishes a harness
+defect from a library defect:
+
+- probe alone → the cell is recorded `broken` and rawr carries a **false portability defect**;
+- package alone → the failure never surfaces at all.
+
+The toplevel anticipated the mirror case (probe compiles, package fails = real defect). This was the
+opposite pairing, and the split discriminated both directions. Recording it here because the next reader
+will otherwise see only "one cell failed and was fixed".
+
+**The fix is two lines and touches no production source:** `pub const panic = std.debug.no_panic` and
+`runProbe() catch unreachable` → `catch @trap()`. `runProbe()` is still called, so analysis of every
+enumerated rawr call is preserved; only the error path changed, which is what pulled Windows stack-trace
+machinery into a compile-only object.
+
+### Two boundary notes, neither blocking
+
+**"including ReleaseSafe checks" is asserted, not demonstrated.** The probe is compile-only and the
+`47-00` control seeds a **type** defect, which semantic analysis catches regardless of panic handling. So
+the controls demonstrate that the enumerated calls are still analysed — they demonstrate nothing about
+safety-check analysis. The claim is likely true, since safety checks are still emitted and merely trap,
+but nothing in this chunk tests it and the probe's purpose is compile-time analysis rather than runtime
+checking. **The clause is doing no work; drop it or back it.**
+
+**`tools/check_32_api.zig` is now shared by two guards with only one set of controls.** `check-32` and
+`check-portability` both compile it, but `scripts/check-portability-controls.sh` exercises it only through
+`check-portability-*-probe`; **no seeded-defect control targets `check-32`.** A future probe edit could
+weaken `check-32` while every check still passed — the same invisible-boundary shape spec 40-01 recorded.
+Worth a control when `47-02` touches this area, and worth stating in the evidence table either way.
+
 ## Estimate
 
 **S/M** — mechanical to run. The size depends entirely on how much breakage falls out, which is the
