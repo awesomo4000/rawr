@@ -5,7 +5,7 @@
 Toplevel: [47-portability-matrix.md](47-portability-matrix.md).
 Gated on: [47-01](47-01-compile-matrix.md) complete.
 
-> **Outcome as of 10/02/2026: local work complete; remote execution pending approval.**
+> **Outcome as of 10/02/2026: complete, with partial runtime coverage.**
 > The two-sided `check-32` control rejects the seeded `OwnedBitmap.cardinality` type
 > defect and passes with that defect still present when the probing call is removed.
 > The full mutation-control script passed, and the unsupported ReleaseSafe clause
@@ -17,13 +17,22 @@ Gated on: [47-01](47-01-compile-matrix.md) complete.
 > ran, and both differential suites passed. The compile matrix reported all 18
 > cells with zero broken or not-targetable cells; `check-32` and `check-docs` passed.
 >
-> OpenBSD/x86_64 and Windows/x86_64 are reachable, and WSL2 is available through
-> `wsl.exe`. Automatic approval review blocked source transfer to isolated remote
-> directories; explicit transfer approval was requested. NetBSD/x86_64 was
-> unavailable due to jump-host name resolution. No FreeBSD runtime host was provided.
-> Remote cells remain `compiles` with Tier 2 `not-run`; reachable hosts are pending,
-> not treated as unprovisioned. No production source changed. This chunk remains
-> open until the pending authorization and remote runs are resolved.
+> After explicit source-transfer approval, isolated snapshots at `48135e4` ran
+> the full host-default runtime set on OpenBSD/x86_64, native Windows/x86_64 GNU,
+> and Linux/x86_64 GNU under WSL2. Their production sources and build configuration
+> match the local run. All five commands passed on each; each unit suite reported
+> the same 252 and 236 passes with two skips each. The resolved triples and
+> environment details are retained in the evidence table. In total, four cells
+> are Tier 1 `verified` and Tier 2 `passes`; the other 12 remain `compiles` and
+> `not-run`. Neither MSVC nor musl was promoted from a sibling ABI's results.
+>
+> OpenBSD's allowlist-only consumer built and ran without the benchmark shim,
+> answering its consumer-path question. NetBSD/x86_64 was unavailable due to
+> jump-host name resolution. No FreeBSD runtime host was provided, so its runtime
+> consumer question remains open despite successful cross-compilation. Native
+> Linux coverage remains separate from WSL2 and does not block completion.
+> No production source changed. The outcome and documentation updates are
+> committed together before review.
 
 Produces the deliverable. **Provisioning is owner-handled and is not a blocker** — a cell with no host
 stays `compiles`, and the chunk completes with partial runtime coverage.

@@ -2,6 +2,15 @@
 
 # Spec 47: Portability matrix — arch × OS verification
 
+> **Completed 10/02/2026 with partial runtime coverage.** See
+> [47-02's outcome](47-02-runtime-and-evidence.md) and the
+> [portability evidence](../docs/portability.md). All 16 target triples and two
+> baseline-feature cells compile. macOS/aarch64, OpenBSD/x86_64, native
+> Windows/x86_64 GNU, and Linux/x86_64 GNU under WSL2 passed both unit suites,
+> package-consumer execution, and both differential suites. Other cells remain
+> compile-only. The historical findings below motivated the checks; current
+> statuses and the shared-probe control boundary are recorded in the evidence.
+
 **Goal.** Establish, with evidence, what rawr actually supports across
 {**aarch64**, **x86_64**} × {**Linux**, **macOS**, **Windows**, **FreeBSD**, **NetBSD**, **OpenBSD**} —
 and record the result honestly rather than assuming.

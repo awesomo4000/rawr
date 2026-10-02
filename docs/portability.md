@@ -3,7 +3,8 @@
 # Portability evidence
 
 Results recorded on 10/02/2026 use Zig 0.16.0 and production source at `851ea48`.
-The compile matrix covers the enumerated public API
+Remote runs used isolated source snapshots at `48135e4`, with identical production
+sources, build configuration, and package checker. The compile matrix covers the enumerated public API
 probe and a consumer built from the package's 33-file allowlist. It does not prove
 that every public method works at runtime.
 
@@ -22,15 +23,15 @@ library's Tier 1 status.
 | Target triple | Tier 1 | Tier 2 | Runtime evidence |
 | --- | --- | --- | --- |
 | aarch64-openbsd | compiles | not-run | No runtime host provided |
-| x86_64-openbsd | compiles | not-run | Host reachable; source-transfer approval pending |
+| x86_64-openbsd | verified | passes | `x86_64-openbsd.7.8...7.8-none`; OpenBSD 7.8 VM; all five runtime commands passed |
 | aarch64-freebsd | compiles | not-run | No runtime host provided |
 | x86_64-freebsd | compiles | not-run | No runtime host provided |
 | aarch64-windows-gnu | compiles | not-run | No runtime host provided |
-| x86_64-windows-gnu | compiles | not-run | Windows host reachable; source-transfer approval pending; default ABI not yet recorded |
+| x86_64-windows-gnu | verified | passes | `x86_64-windows.win11_dt...win11_dt-gnu`; native Windows 11 via Git Bash; all five runtime commands passed |
 | aarch64-windows-msvc | compiles | not-run | No runtime host provided |
-| x86_64-windows-msvc | compiles | not-run | Windows host reachable; default ABI not yet recorded; no runtime run |
+| x86_64-windows-msvc | compiles | not-run | Non-default ABI; no targeted runtime run |
 | aarch64-linux-gnu | compiles | not-run | No runtime host provided |
-| x86_64-linux-gnu | compiles | not-run | WSL2 available; source-transfer approval pending; resolved Zig target not yet recorded |
+| x86_64-linux-gnu | verified | passes | `x86_64-linux.5.10...6.19-gnu.2.39`; Ubuntu 24.04 under WSL2, kernel `6.6.87.2-microsoft-standard-WSL2`; all five runtime commands passed |
 | aarch64-linux-musl | compiles | not-run | No runtime host provided |
 | x86_64-linux-musl | compiles | not-run | Non-default ABI; no targeted runtime run |
 | aarch64-macos | verified | passes | `aarch64-macos.26.7...26.7-none`; macOS 26.7; all five runtime commands passed |
@@ -42,16 +43,23 @@ The Linux/x86_64 environment available for this run is WSL2. Native Linux eviden
 remains separate; spec 52 Part A can add it when its required runtime checks pass.
 No runtime claim for an ABI transfers to its sibling.
 
-The local unit suites passed 252/254 and 236/238 tests respectively, with two
-skipped tests in each. The package consumer built and ran from 33 allowlisted
-files. Both differential commands exited successfully. Local raw logs are under
-gitignored `misc/portability-runtime/`; this document retains the results without
-machine names or user-specific paths.
+Each of the four tested environments passed 252/254 and 236/238 unit tests
+respectively, with two skipped tests in each suite. Each package consumer built
+and ran from 33 allowlisted files, and both differential commands exited
+successfully. Tests used the default Debug build; the package consumer used
+ReleaseSafe and differential executables used ReleaseFast, as defined by the
+existing build steps. No runtime command received `-Dtarget`.
 
-OpenBSD and Windows/WSL2 testing has not started: source transfer to isolated
-remote directories requires additional approval in the execution environment.
-The OpenBSD consumer path passed cross-compilation in `47-01`; its runtime result
-is still open. FreeBSD has no provided runtime host for this run.
+Local raw logs are under gitignored `misc/portability-runtime/`. Retrieved remote
+logs are under `misc/portability-47-openbsd/`, `misc/portability-47-windows/`, and
+`misc/portability-47-wsl/`, each with a nested `misc/portability-runtime/` directory.
+This document retains the results without machine names or user-specific paths.
+
+The OpenBSD consumer path passed both cross-compilation and native execution from
+the allowlist without the benchmark shim. FreeBSD's consumer passed
+cross-compilation, but no FreeBSD runtime host was provided, so its runtime
+consumer result remains open. The NetBSD host was unavailable; no runtime failure
+of rawr was observed there.
 
 ## Feature dispatch
 

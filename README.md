@@ -31,11 +31,15 @@ The 64-bit compile matrix covers `aarch64` and `x86_64` on OpenBSD, FreeBSD,
 Windows (GNU and MSVC ABIs), Linux (GNU and musl ABIs), macOS, and NetBSD.
 Run it with `zig build check-portability`.
 
-See the [portability evidence](docs/portability.md) for runtime-tested targets,
-resolved target triples, and separate CRoaring tooling results. `verified` means
+With Zig 0.16.0, both unit suites and the package consumer have run successfully
+on macOS/aarch64, OpenBSD/x86_64, native Windows/x86_64 GNU, and Linux/x86_64 GNU
+under WSL2. Both CRoaring differential suites also pass on those environments.
+
+See the [portability evidence](docs/portability.md) for resolved target triples
+and results for the other cells. `verified` means
 both unit suites and the package consumer ran successfully; `compiles` means
-cross-compilation only. Linux/x86_64 runtime evidence is identified as WSL2 when
-that is the environment tested. A CRoaring tooling gap is not a library support
+cross-compilation only. Native Linux runtime coverage remains untested in this
+matrix. A CRoaring tooling gap is not a library support
 failure.
 
 ### 32-bit targets
