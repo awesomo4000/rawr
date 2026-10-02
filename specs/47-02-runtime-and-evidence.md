@@ -25,12 +25,16 @@ required exactly that, which would have been a command that silently mislabels: 
 builds its checker for `b.graph.host` and ignores `-Dtarget` for the consumer, and `check_package.zig:91`
 **rejects** the combination outright with `RunTargetOverride`.
 
-**That rejection is correct and should not be worked around here.** A foreign-ABI binary cannot be
-executed on the host, so the runtime path is host-only by design. Extending it would also buy very
-little: the ABI pair that actually matters — `windows-msvc` against `windows-gnu` — can only be separated
-on a Windows host, where the host default already selects one of them. The single case it would help is
-`x86_64-linux-musl`, whose static binaries do run on a glibc host. **That is build-system machinery, which
-is `47-00`'s category, and it is recorded as a follow-up rather than smuggled into this chunk.**
+**That rejection is correct and should not be worked around here.** The current package checker supports
+runtime execution only for the host-default target. Extending it to compatible non-default ABIs is
+outside this chunk; those cells remain `compiles` pending explicit runtime coverage.
+
+*(An earlier draft justified this by claiming a foreign-ABI binary cannot execute on the host. **That is
+false**, and the same paragraph contradicted it two sentences later: `x86_64-linux-musl` static binaries
+do run on a glibc host. The limit is the checker's, not the ABI's.)*
+
+Extending it is build-system machinery, which is `47-00`'s category, so it is recorded as a follow-up
+rather than smuggled into this chunk.
 
 So: **an ABI not executed on a host that resolves to it stays `compiles`**, no matter what else ran on
 that machine.
