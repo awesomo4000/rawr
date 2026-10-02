@@ -15,7 +15,7 @@ Gated on: [47-00](47-00-portability-machinery.md) complete, **with all five cont
 > increased pointer alignment. The reference trace led back to the probe root's `runProbe() catch
 > unreachable`, whose panic path pulled Windows stack-trace machinery into a compile-only object. The
 > probe now uses `catch @trap()` and the root-local `std.debug.no_panic` handler: it still forces analysis
-> of every enumerated rawr call, including ReleaseSafe checks, without requiring platform stack-trace
+> of every enumerated rawr call without requiring platform stack-trace
 > machinery. The cell and then the full matrix passed after that tooling-only fix.
 > No production source, hot path, or OS-conditional shipped source changed.
 >

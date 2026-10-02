@@ -66,10 +66,14 @@ perl -0pi -e \
     "$owned_dir/src/bitmap.zig"
 expect_failure owned-bitmap-extended "expected type 'u32'" "$owned_dir" \
     "$zig_exe" build check-portability-x86_64-linux-gnu-probe --summary none
+expect_failure check-32-owned-extended "expected type 'u32'" "$owned_dir" \
+    "$zig_exe" build check-32 --summary none
 perl -0pi -e 's/    try probeOwnedBitmap\(allocator, &left, &right, bytes\);\n//' \
     "$owned_dir/tools/check_32_api.zig"
 expect_success owned-bitmap-unextended "$owned_dir" \
     "$zig_exe" build check-portability-x86_64-linux-gnu-probe --summary none
+expect_success check-32-owned-unextended "$owned_dir" \
+    "$zig_exe" build check-32 --summary none
 
 package_dir="$(fresh_copy package-allowlist)"
 perl -0pi -e \

@@ -25,6 +25,19 @@ supported or tested by rawr's 64-bit serializer.
 
 See [API.md](API.md) for the full API reference.
 
+### Platform testing
+
+The 64-bit compile matrix covers `aarch64` and `x86_64` on OpenBSD, FreeBSD,
+Windows (GNU and MSVC ABIs), Linux (GNU and musl ABIs), macOS, and NetBSD.
+Run it with `zig build check-portability`.
+
+See the [portability evidence](docs/portability.md) for runtime-tested targets,
+resolved target triples, and separate CRoaring tooling results. `verified` means
+both unit suites and the package consumer ran successfully; `compiles` means
+cross-compilation only. Linux/x86_64 runtime evidence is identified as WSL2 when
+that is the environment tested. A CRoaring tooling gap is not a library support
+failure.
+
 ### 32-bit targets
 
 rawr is compile-checked on `wasm32-freestanding`, `x86-linux-musl`,

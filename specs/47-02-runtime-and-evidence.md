@@ -5,6 +5,26 @@
 Toplevel: [47-portability-matrix.md](47-portability-matrix.md).
 Gated on: [47-01](47-01-compile-matrix.md) complete.
 
+> **Outcome as of 10/02/2026: local work complete; remote execution pending approval.**
+> The two-sided `check-32` control rejects the seeded `OwnedBitmap.cardinality` type
+> defect and passes with that defect still present when the probing call is removed.
+> The full mutation-control script passed, and the unsupported ReleaseSafe clause
+> was removed from the `47-01` outcome.
+>
+> Both evidence tables are in `docs/portability.md`, linked from the README.
+> Zig 0.16.0 resolved the local runtime target to `aarch64-macos.26.7...26.7-none`.
+> Both unit suites passed (252 and 236 tests, two skips each), the allowlist consumer
+> ran, and both differential suites passed. The compile matrix reported all 18
+> cells with zero broken or not-targetable cells; `check-32` and `check-docs` passed.
+>
+> OpenBSD/x86_64 and Windows/x86_64 are reachable, and WSL2 is available through
+> `wsl.exe`. Automatic approval review blocked source transfer to isolated remote
+> directories; explicit transfer approval was requested. NetBSD/x86_64 was
+> unavailable due to jump-host name resolution. No FreeBSD runtime host was provided.
+> Remote cells remain `compiles` with Tier 2 `not-run`; reachable hosts are pending,
+> not treated as unprovisioned. No production source changed. This chunk remains
+> open until the pending authorization and remote runs are resolved.
+
 Produces the deliverable. **Provisioning is owner-handled and is not a blocker** — a cell with no host
 stays `compiles`, and the chunk completes with partial runtime coverage.
 
