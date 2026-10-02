@@ -6,7 +6,8 @@
 > [47-02's outcome](47-02-runtime-and-evidence.md) and the
 > [portability evidence](../docs/portability.md). All 16 target triples and two
 > baseline-feature cells compile. macOS/aarch64, OpenBSD/x86_64, native
-> Windows/x86_64 GNU, and Linux/x86_64 GNU under WSL2 passed both unit suites,
+> Windows/x86_64 GNU, Linux/x86_64 GNU under WSL2, native Linux/aarch64 GNU,
+> and OpenBSD/aarch64 passed both unit suites,
 > package-consumer execution, and both differential suites. Other cells remain
 > compile-only. The historical findings below motivated the checks; current
 > statuses and the shared-probe control boundary are recorded in the evidence.
