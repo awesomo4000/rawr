@@ -24,16 +24,16 @@ Gated on: [47-01](47-01-compile-matrix.md) complete.
 > the same 252 and 236 passes with two skips each. The resolved triples and
 > environment details are retained in the evidence table. Additional snapshots
 > at `ee63c47`, with production sources and build configuration unchanged, passed
-> all five commands on native Linux/aarch64 GNU and OpenBSD/aarch64, with the same
-> unit-test counts. In total, six cells
-> are Tier 1 `verified` and Tier 2 `passes`; the other 10 remain `compiles` and
+> all five commands on native Linux/aarch64 GNU, OpenBSD/aarch64, FreeBSD/aarch64,
+> and NetBSD/aarch64, with the same unit-test counts. In total, eight cells
+> are Tier 1 `verified` and Tier 2 `passes`; the other eight remain `compiles` and
 > `not-run`. Neither MSVC nor musl was promoted from a sibling ABI's results.
 >
 > OpenBSD's allowlist-only consumer built and ran without the benchmark shim,
 > answering its consumer-path question. NetBSD/x86_64 was unavailable due to
-> jump-host name resolution. FreeBSD/aarch64 and NetBSD/aarch64 VMs were provided
-> subsequently, but the execution environment blocked their source transfers
-> pending explicit approval. Their runtime checks remain pending, not failures.
+> jump-host name resolution. After explicit approval, the subsequently provided
+> FreeBSD/aarch64 and NetBSD/aarch64 VMs passed the full runtime set, including
+> allowlist-only consumer execution. Neither required production or build changes.
 > Native Linux/aarch64 coverage does not upgrade Linux/x86_64 beyond WSL2.
 > No production source changed. The outcome and documentation updates are
 > committed together before review.

@@ -25,7 +25,7 @@ library's Tier 1 status.
 | --- | --- | --- | --- |
 | aarch64-openbsd | verified | passes | `aarch64-openbsd.7.9...7.9-none`; OpenBSD 7.9 VM; all five runtime commands passed |
 | x86_64-openbsd | verified | passes | `x86_64-openbsd.7.8...7.8-none`; OpenBSD 7.8 VM; all five runtime commands passed |
-| aarch64-freebsd | compiles | not-run | FreeBSD 15.1 VM provided; source-transfer approval pending |
+| aarch64-freebsd | verified | passes | `aarch64-freebsd.15.1...15.1-none`; FreeBSD 15.1-RELEASE-p1 VM; all five runtime commands passed |
 | x86_64-freebsd | compiles | not-run | No runtime host provided |
 | aarch64-windows-gnu | compiles | not-run | No runtime host provided |
 | x86_64-windows-gnu | verified | passes | `x86_64-windows.win11_dt...win11_dt-gnu`; native Windows 11 via Git Bash; all five runtime commands passed |
@@ -37,7 +37,7 @@ library's Tier 1 status.
 | x86_64-linux-musl | compiles | not-run | Non-default ABI; no targeted runtime run |
 | aarch64-macos | verified | passes | `aarch64-macos.26.7...26.7-none`; macOS 26.7; all five runtime commands passed |
 | x86_64-macos | compiles | not-run | No runtime host provided |
-| aarch64-netbsd | compiles | not-run | NetBSD 10.1 VM provided; source-transfer approval pending |
+| aarch64-netbsd | verified | passes | `aarch64-netbsd.10.1...10.1-none`; NetBSD 10.1 VM; all five runtime commands passed |
 | x86_64-netbsd | compiles | not-run | Previously provided host unavailable: jump-host name resolution failed |
 
 The Linux/x86_64 environment available for this run is WSL2. Native Linux evidence
@@ -45,7 +45,7 @@ remains separate; spec 52 Part A can add it when its required runtime checks pas
 The native Linux/aarch64 run does not upgrade the x86_64 cell. No runtime claim for
 an ABI transfers to its sibling.
 
-Each of the six tested environments passed 252/254 and 236/238 unit tests
+Each of the eight tested environments passed 252/254 and 236/238 unit tests
 respectively, with two skipped tests in each suite. Each package consumer built
 and ran from 33 allowlisted files, and both differential commands exited
 successfully. Tests used the default Debug build; the package consumer used
@@ -54,17 +54,17 @@ existing build steps. No runtime command received `-Dtarget`.
 
 Local raw logs are under gitignored `misc/portability-runtime/`. Retrieved remote
 logs are under `misc/portability-47-openbsd/`, `misc/portability-47-windows/`, and
-`misc/portability-47-wsl/`, plus `misc/portability-47-linux-arm/` and
-`misc/portability-47-openbsd-arm/` for the additional aarch64 runs, each with a
+`misc/portability-47-wsl/`, plus `misc/portability-47-linux-arm/`,
+`misc/portability-47-openbsd-arm/`, `misc/portability-47-freebsd-arm/`, and
+`misc/portability-47-netbsd-arm/` for the additional aarch64 runs, each with a
 nested `misc/portability-runtime/` directory.
 This document retains the results without machine names or user-specific paths.
 
 The OpenBSD consumer path passed both cross-compilation and native execution from
-the allowlist without the benchmark shim. FreeBSD's consumer passed
-cross-compilation. A FreeBSD/aarch64 VM and a NetBSD/aarch64 VM were subsequently
-provided, but source transfers to those two hosts await explicit approval from
-the execution environment. Their runtime checks have not started. The
-NetBSD/x86_64 host was unavailable; no runtime failure of rawr was observed there.
+the allowlist without the benchmark shim. FreeBSD/aarch64 and NetBSD/aarch64 also
+passed the allowlist consumer and both tiers after source-transfer approval.
+No production or build changes were needed. FreeBSD/x86_64 remains compile-only;
+the NetBSD/x86_64 host was unavailable, so its runtime result remains open.
 
 ## Feature dispatch
 
