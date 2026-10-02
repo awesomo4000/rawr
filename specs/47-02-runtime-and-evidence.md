@@ -26,6 +26,22 @@ targeted and executed stays `compiles`**, no matter what ran on that machine.
 gap, never a library defect**, and it may not be reported as an unsupported platform. Their result goes in
 the Tier 2 column, independently of Tier 1.
 
+## 1.1 Close the shared-probe control gap
+
+`tools/check_32_api.zig` is compiled by **two** guards — `check-32` and `check-portability` — but
+`scripts/check-portability-controls.sh` exercises it only through `check-portability-*-probe`. **No
+seeded-defect control targets `check-32`**, so a future probe edit could weaken it while every check still
+passed. That is the invisible-boundary shape spec 40-01 recorded, and `47-01`'s two-line probe change is
+exactly the kind of edit that would travel through it unnoticed.
+
+**Add a seeded-defect control through `check-32`**, in the same two-sided form the `47-00` controls use:
+seed a defect reachable through the probe, show `check-32` fails, and show it passes once the probing call
+is removed. Without the second half the control proves a failure happened, not that the probe caused it.
+
+**Also drop the "including ReleaseSafe checks" clause from `47-01`'s outcome.** The probe is compile-only
+and its controls seed a **type** defect, caught at semantic analysis regardless of panic handling, so
+nothing in either chunk tests safety-check analysis. The clause does no work.
+
 ## 2. The evidence table
 
 In `docs/`, repo-only. **Two tables, and each cell carries two independent statuses — not one.**
@@ -95,6 +111,10 @@ uniformly reassuring would be less useful than none.
 - Linux/x86_64 recorded as **WSL2**, with a note that `52-00` Part A upgrades it.
 - README support statement matches the table, **`verified` and `compiles` distinguished**, no performance
   claims, **Tier 2 gaps not presented as unsupported platforms**.
+- **Seeded-defect control added through `check-32`** per §1.1, **two-sided**, and the
+  "including ReleaseSafe checks" clause removed from `47-01`'s outcome.
+- **The shared-probe boundary stated in the evidence table** — one source file, two guards — so it is not
+  rediscovered.
 - `check-docs` green — the README change is exactly the kind of drift it exists to catch.
 - Existing suites plus `check-32`, `check-portability`, `check-package` green on the dev host.
 
