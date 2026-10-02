@@ -17,10 +17,23 @@ stays `compiles`, and the chunk completes with partial runtime coverage.
    whether a consumer resolving the shipped `build.zig` ever reaches its OpenBSD or FreeBSD branches.
    Run it there first if either host is available.
 
-**Record the resolved target triple for every runtime cell, and use an explicit `-Dtarget` for any
-non-default ABI.** These commands otherwise resolve to the host default — on a glibc Linux host,
-`zig build test` verifies `linux-gnu` and says nothing about `linux-musl`. **An ABI not explicitly
-targeted and executed stays `compiles`**, no matter what ran on that machine.
+**Record the resolved target triple for every runtime cell.** These commands resolve to the host default
+— on a glibc Linux host, `zig build test` verifies `linux-gnu` and says nothing about `linux-musl`.
+
+**Non-default ABIs stay at `compiles`. Do not pass `-Dtarget` to a runtime check.** An earlier draft
+required exactly that, which would have been a command that silently mislabels: `addCheckPackageStep`
+builds its checker for `b.graph.host` and ignores `-Dtarget` for the consumer, and `check_package.zig:91`
+**rejects** the combination outright with `RunTargetOverride`.
+
+**That rejection is correct and should not be worked around here.** A foreign-ABI binary cannot be
+executed on the host, so the runtime path is host-only by design. Extending it would also buy very
+little: the ABI pair that actually matters — `windows-msvc` against `windows-gnu` — can only be separated
+on a Windows host, where the host default already selects one of them. The single case it would help is
+`x86_64-linux-musl`, whose static binaries do run on a glibc host. **That is build-system machinery, which
+is `47-00`'s category, and it is recorded as a follow-up rather than smuggled into this chunk.**
+
+So: **an ABI not executed on a host that resolves to it stays `compiles`**, no matter what else ran on
+that machine.
 
 `difftest` / `difftest64` are **Tier 2** — they link CRoaring. Run where they work; **absence is a testing
 gap, never a library defect**, and it may not be reported as an unsupported platform. Their result goes in
@@ -107,7 +120,9 @@ uniformly reassuring would be less useful than none.
   requires them.
 - **No cell forced to a single status** across the two tiers, and **no baseline cell folded into Table 1**.
 - **No ABI sibling promoted by association**, and **every runtime cell recording its resolved target
-  triple**; any non-default ABI verified only via an explicit `-Dtarget` run, else left at `compiles`.
+  triple**. **No `-Dtarget` passed to a runtime check** — `check_package.zig` rejects it by design, so
+  non-default ABIs are left at `compiles` and the `x86_64-linux-musl` runtime path is recorded as a
+  follow-up, not attempted here.
 - Linux/x86_64 recorded as **WSL2**, with a note that `52-00` Part A upgrades it.
 - README support statement matches the table, **`verified` and `compiles` distinguished**, no performance
   claims, **Tier 2 gaps not presented as unsupported platforms**.
