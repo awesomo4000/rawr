@@ -15,6 +15,9 @@
 > cells and native Linux/x86_64 GNU, bringing coverage to 12 of 16 target cells.
 > It adds a guarded same-architecture musl execution mode; other non-default
 > ABIs remain compile-only. Spec 52's performance experiment is separate.
+> [47-04](47-04-windows-msvc-runtime.md) then verified Windows/x86_64 MSVC through
+> explicit native execution. Coverage is now 13 of 16 cells; Windows/aarch64
+> GNU/MSVC and macOS/x86_64 remain compile-only by owner choice.
 
 **Goal.** Establish, with evidence, what rawr actually supports across
 {**aarch64**, **x86_64**} × {**Linux**, **macOS**, **Windows**, **FreeBSD**, **NetBSD**, **OpenBSD**} —

@@ -8,6 +8,8 @@ Gated on: [47-01](47-01-compile-matrix.md) complete.
 Follow-up: [47-03](47-03-linux-musl-runtime.md) adds explicit same-architecture
 Linux/musl execution. The host-default-only rules below describe this chunk;
 the follow-up defines the narrow exception and its controls.
+[47-04](47-04-windows-msvc-runtime.md) adds the corresponding Windows/x86_64
+MSVC exception.
 
 > **Outcome as of 10/03/2026: complete, with partial runtime coverage.**
 > The two-sided `check-32` control rejects the seeded `OwnedBitmap.cardinality` type

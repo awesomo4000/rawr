@@ -14,9 +14,13 @@ The subsequent native Linux GNU and Linux/musl runs used `add5f61` plus the chec
 committed with [47-03](../specs/47-03-linux-musl-runtime.md). Library sources and
 the shipped build configuration were unchanged.
 
+Windows/MSVC used `89c422b` plus the checker and script changes committed with
+[47-04](../specs/47-04-windows-msvc-runtime.md), with the same library/build files.
+
 `verified` requires both unit suites and the allowlist package consumer to execute
 successfully. Host-default commands are `zig build test`, `zig build test64`, and
-`zig build check-package`. Explicit Linux/musl execution uses the commands below.
+`zig build check-package`. Explicit Linux/musl and Windows/MSVC execution use
+the commands below.
 `compiles` records cross-compilation without runtime evidence for that ABI.
 
 Tier 2 is independent: `passes` requires both `zig build difftest` and
@@ -35,7 +39,7 @@ library's Tier 1 status.
 | aarch64-windows-gnu | compiles | not-run | Runtime provisioning deferred by owner |
 | x86_64-windows-gnu | verified | passes | `x86_64-windows.win11_dt...win11_dt-gnu`; native Windows 11 via Git Bash; all five runtime commands passed |
 | aarch64-windows-msvc | compiles | not-run | Runtime provisioning deferred by owner |
-| x86_64-windows-msvc | compiles | not-run | Non-default ABI; no targeted runtime run |
+| x86_64-windows-msvc | verified | passes | Explicit `x86_64-windows-msvc` baseline binaries executed on native Windows 11 via Git Bash; all five runtime commands passed |
 | aarch64-linux-gnu | verified | passes | `aarch64-linux.6.18.34...6.18.34-gnu.2.41`; native Raspberry Pi Linux, kernel `6.18.34+rpt-rpi-2712`; all five runtime commands passed |
 | x86_64-linux-gnu | verified | passes | Native `x86_64-linux.6.8...6.8-gnu.2.39`, kernel `6.8.0-146-generic`, and WSL2 `x86_64-linux.5.10...6.19-gnu.2.39`, kernel `6.6.87.2-microsoft-standard-WSL2`; all five runtime commands passed in each environment |
 | aarch64-linux-musl | verified | passes | Explicit `aarch64-linux-musl` baseline binaries executed on native Raspberry Pi Linux; all five checks passed |
@@ -47,8 +51,8 @@ library's Tier 1 status.
 
 Linux/x86_64 GNU now has separate native and WSL2 correctness evidence. These
 runs do not perform spec 52 Part A's paired performance measurement. No runtime
-claim for an ABI transfers to its sibling. Twelve target cells are verified;
-the remaining four stay compile-only.
+claim for an ABI transfers to its sibling. Thirteen target cells are verified;
+the remaining three stay compile-only by owner choice.
 
 Each of the initial ten tested environments passed 252/254 and 236/238 unit tests
 respectively, with two skipped tests in each suite. Each package consumer built
@@ -64,6 +68,10 @@ so the two x86-specific tests skip alongside the two NEON tests. Both package
 consumers and both differential suites passed on each architecture.
 The additional native Linux/x86_64 GNU run passed 252/254 and 236/238 tests,
 with two skips each, and all three other runtime checks.
+Windows/x86_64 MSVC baseline passed 250/254 and 234/238 tests, with four SIMD
+skips per suite for the same baseline-feature reason as x86_64 musl. Its
+33-file package consumer and both CRoaring differential suites passed. The
+host-default Zig target remained GNU; only explicit MSVC commands count here.
 
 Local raw logs are under gitignored `misc/portability-runtime/`. Retrieved remote
 logs are under `misc/portability-47-openbsd/`, `misc/portability-47-windows/`, and
@@ -77,6 +85,7 @@ Musl logs are under `misc/portability-47-musl-arm/` and
 `misc/portability-47-musl-x86/`, each with nested `misc/portability-musl/`.
 Native Linux/x86_64 GNU logs are under `misc/portability-47-linux-x86/`, with
 nested `misc/portability-runtime/`.
+MSVC logs are under `misc/portability-47-msvc-x86/misc/portability-msvc/`.
 This document retains the results without machine names or user-specific paths.
 
 The OpenBSD consumer path passed both cross-compilation and native execution from
@@ -150,4 +159,18 @@ must fail with `ExpectedLinuxMuslConsumer`. Invalid combinations must also fail.
 The opt-in mode accepts only Linux hosts with the matching aarch64 or x86_64
 architecture. Arbitrary runtime target/CPU overrides still fail. Running static
 musl binaries on glibc hosts is musl ABI execution evidence, not evidence of a
-musl-based distribution. Other non-default ABI execution remains a follow-up.
+musl-based distribution.
+
+For native Windows/x86_64 MSVC execution, use Git Bash, not WSL:
+
+```sh
+sh scripts/check-windows-msvc-runtime.sh
+```
+
+This explicitly targets `x86_64-windows-msvc` for both unit and differential
+suites. `zig run check_package.zig -- zig --run-windows-msvc` executes the
+allowlist consumer with a compiled Windows/MSVC assertion. A seeded GNU target
+must fail with `ExpectedWindowsMsvcConsumer`. Mixed modes, build-only, duplicate
+flags and runtime overrides are rejected. The mode requires Windows/x86_64;
+it does not permit arbitrary target execution or prove compilation with cl.exe.
+Other non-default ABI execution remains a follow-up.
