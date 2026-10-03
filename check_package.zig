@@ -3,6 +3,7 @@
 //! Rebuilds a consumer from exactly the files allowed by build.zig.zon.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const manifest = @import("build.zig.zon");
 
 const package_build =
@@ -70,6 +71,7 @@ pub fn main(init: std.process.Init) !void {
     var target: ?[]const u8 = null;
     var cpu: ?[]const u8 = null;
     var run_consumer = true;
+    var run_linux_musl = false;
     var scratch_suffix: ?[]const u8 = null;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--target")) {
@@ -78,6 +80,9 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, arg, "--cpu")) {
             if (cpu != null) return error.DuplicateCpu;
             cpu = args.next() orelse return error.MissingCpu;
+        } else if (std.mem.eql(u8, arg, "--run-linux-musl")) {
+            if (run_linux_musl) return error.DuplicateMuslMode;
+            run_linux_musl = true;
         } else if (std.mem.eql(u8, arg, "--build-only")) {
             run_consumer = false;
         } else if (std.mem.eql(u8, arg, "--scratch-suffix")) {
@@ -90,6 +95,15 @@ pub fn main(init: std.process.Init) !void {
     }
     if (run_consumer and (target != null or cpu != null)) return error.RunTargetOverride;
     if (cpu != null and target == null) return error.CpuWithoutTarget;
+    if (run_linux_musl) {
+        if (!run_consumer) return error.MuslRequiresExecution;
+        if (builtin.os.tag != .linux) return error.MuslRequiresLinuxHost;
+        target = switch (builtin.cpu.arch) {
+            .x86_64 => "x86_64-linux-musl",
+            .aarch64 => "aarch64-linux-musl",
+            else => return error.UnsupportedMuslHostArchitecture,
+        };
+    }
 
     const io = init.io;
     const cwd = std.Io.Dir.cwd();
@@ -116,7 +130,19 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try consumer_dir.writeFile(io, .{ .sub_path = "build.zig", .data = package_build });
-    try consumer_dir.writeFile(io, .{ .sub_path = "main.zig", .data = consumer_source });
+    const musl_assertion =
+        \\comptime {
+        \\    const target = @import("builtin");
+        \\    if (target.os.tag != .linux or target.abi != .musl)
+        \\        @compileError("ExpectedLinuxMuslConsumer");
+        \\}
+    ;
+    const source = if (run_linux_musl)
+        try std.mem.concat(allocator, u8, &.{ consumer_source, "\n", musl_assertion })
+    else
+        try allocator.dupe(u8, consumer_source);
+    defer allocator.free(source);
+    try consumer_dir.writeFile(io, .{ .sub_path = "main.zig", .data = source });
     try consumer_dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = consumer_manifest });
 
     var argv: [8][]const u8 = undefined;
@@ -165,7 +191,9 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("check-package: consumer failed\n{s}{s}", .{ result.stdout, result.stderr });
         return error.PackageConsumerFailed;
     }
-    if (run_consumer) {
+    if (run_linux_musl) {
+        std.debug.print("check-package: OK ({d} allowlisted files, executed {s})\n", .{ manifest.paths.len, target.? });
+    } else if (run_consumer) {
         std.debug.print("check-package: OK ({d} allowlisted files)\n", .{manifest.paths.len});
     } else {
         std.debug.print("check-package: OK ({d} allowlisted files, cross-target build)\n", .{

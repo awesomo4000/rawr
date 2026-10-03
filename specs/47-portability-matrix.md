@@ -11,6 +11,10 @@
 > package-consumer execution, and both differential suites. Other cells remain
 > compile-only. The historical findings below motivated the checks; current
 > statuses and the shared-probe control boundary are recorded in the evidence.
+> [47-03](47-03-linux-musl-runtime.md) subsequently verified both Linux/musl
+> cells and native Linux/x86_64 GNU, bringing coverage to 12 of 16 target cells.
+> It adds a guarded same-architecture musl execution mode; other non-default
+> ABIs remain compile-only. Spec 52's performance experiment is separate.
 
 **Goal.** Establish, with evidence, what rawr actually supports across
 {**aarch64**, **x86_64**} × {**Linux**, **macOS**, **Windows**, **FreeBSD**, **NetBSD**, **OpenBSD**} —

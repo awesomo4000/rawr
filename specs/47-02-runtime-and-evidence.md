@@ -5,6 +5,10 @@
 Toplevel: [47-portability-matrix.md](47-portability-matrix.md).
 Gated on: [47-01](47-01-compile-matrix.md) complete.
 
+Follow-up: [47-03](47-03-linux-musl-runtime.md) adds explicit same-architecture
+Linux/musl execution. The host-default-only rules below describe this chunk;
+the follow-up defines the narrow exception and its controls.
+
 > **Outcome as of 10/03/2026: complete, with partial runtime coverage.**
 > The two-sided `check-32` control rejects the seeded `OwnedBitmap.cardinality` type
 > defect and passes with that defect still present when the probing call is removed.

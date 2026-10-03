@@ -10,10 +10,14 @@ also with those files unchanged. The compile matrix covers the enumerated public
 probe and a consumer built from the package's 33-file allowlist. It does not prove
 that every public method works at runtime.
 
-`verified` requires all three host-default commands to succeed: `zig build test`,
-`zig build test64`, and `zig build check-package`. `compiles` records successful
-cross-compilation without that runtime evidence. Non-default ABIs remain
-`compiles`; the runtime package checker deliberately accepts only the host default.
+The subsequent native Linux GNU and Linux/musl runs used `add5f61` plus the checker and script extension
+committed with [47-03](../specs/47-03-linux-musl-runtime.md). Library sources and
+the shipped build configuration were unchanged.
+
+`verified` requires both unit suites and the allowlist package consumer to execute
+successfully. Host-default commands are `zig build test`, `zig build test64`, and
+`zig build check-package`. Explicit Linux/musl execution uses the commands below.
+`compiles` records cross-compilation without runtime evidence for that ABI.
 
 Tier 2 is independent: `passes` requires both `zig build difftest` and
 `zig build difftest64` to run successfully. `gap` identifies unavailable or failing
@@ -28,30 +32,38 @@ library's Tier 1 status.
 | x86_64-openbsd | verified | passes | `x86_64-openbsd.7.8...7.8-none`; OpenBSD 7.8 VM; all five runtime commands passed |
 | aarch64-freebsd | verified | passes | `aarch64-freebsd.15.1...15.1-none`; FreeBSD 15.1-RELEASE-p1 VM; all five runtime commands passed |
 | x86_64-freebsd | verified | passes | `x86_64-freebsd.15.0.68...15.0.68-none`; FreeBSD 15.0-RELEASE-p8 on Hyper-V; all five runtime commands passed |
-| aarch64-windows-gnu | compiles | not-run | No runtime host provided |
+| aarch64-windows-gnu | compiles | not-run | Runtime provisioning deferred by owner |
 | x86_64-windows-gnu | verified | passes | `x86_64-windows.win11_dt...win11_dt-gnu`; native Windows 11 via Git Bash; all five runtime commands passed |
-| aarch64-windows-msvc | compiles | not-run | No runtime host provided |
+| aarch64-windows-msvc | compiles | not-run | Runtime provisioning deferred by owner |
 | x86_64-windows-msvc | compiles | not-run | Non-default ABI; no targeted runtime run |
 | aarch64-linux-gnu | verified | passes | `aarch64-linux.6.18.34...6.18.34-gnu.2.41`; native Raspberry Pi Linux, kernel `6.18.34+rpt-rpi-2712`; all five runtime commands passed |
-| x86_64-linux-gnu | verified | passes | `x86_64-linux.5.10...6.19-gnu.2.39`; Ubuntu 24.04 under WSL2, kernel `6.6.87.2-microsoft-standard-WSL2`; all five runtime commands passed |
-| aarch64-linux-musl | compiles | not-run | No runtime host provided |
-| x86_64-linux-musl | compiles | not-run | Non-default ABI; no targeted runtime run |
+| x86_64-linux-gnu | verified | passes | Native `x86_64-linux.6.8...6.8-gnu.2.39`, kernel `6.8.0-146-generic`, and WSL2 `x86_64-linux.5.10...6.19-gnu.2.39`, kernel `6.6.87.2-microsoft-standard-WSL2`; all five runtime commands passed in each environment |
+| aarch64-linux-musl | verified | passes | Explicit `aarch64-linux-musl` baseline binaries executed on native Raspberry Pi Linux; all five checks passed |
+| x86_64-linux-musl | verified | passes | Explicit `x86_64-linux-musl` baseline binaries executed on native Linux 6.8.0-146-generic, glibc 2.39; all five checks passed |
 | aarch64-macos | verified | passes | `aarch64-macos.26.7...26.7-none`; macOS 26.7; all five runtime commands passed |
-| x86_64-macos | compiles | not-run | No runtime host provided |
+| x86_64-macos | compiles | not-run | Runtime provisioning deferred by owner |
 | aarch64-netbsd | verified | passes | `aarch64-netbsd.10.1...10.1-none`; NetBSD 10.1 VM; all five runtime commands passed |
 | x86_64-netbsd | verified | passes | `x86_64-netbsd.10.1...10.1-none`; NetBSD 10.1 on Hyper-V; all five runtime commands passed |
 
-The Linux/x86_64 environment available for this run is WSL2. Native Linux evidence
-remains separate; spec 52 Part A can add it when its required runtime checks pass.
-The native Linux/aarch64 run does not upgrade the x86_64 cell. No runtime claim for
-an ABI transfers to its sibling.
+Linux/x86_64 GNU now has separate native and WSL2 correctness evidence. These
+runs do not perform spec 52 Part A's paired performance measurement. No runtime
+claim for an ABI transfers to its sibling. Twelve target cells are verified;
+the remaining four stay compile-only.
 
-Each of the ten tested environments passed 252/254 and 236/238 unit tests
+Each of the initial ten tested environments passed 252/254 and 236/238 unit tests
 respectively, with two skipped tests in each suite. Each package consumer built
 and ran from 33 allowlisted files, and both differential commands exited
 successfully. Tests used the default Debug build; the package consumer used
 ReleaseSafe and differential executables used ReleaseFast, as defined by the
 existing build steps. No runtime command received `-Dtarget`.
+
+The later musl runs explicitly targeted the named ABI. Aarch64 passed 252/254 and
+236/238 tests with two skips per suite. Baseline x86_64 passed 250/254 and 234/238
+with four skips per suite: its target lacks the AVX/SSSE3 array-intersection path,
+so the two x86-specific tests skip alongside the two NEON tests. Both package
+consumers and both differential suites passed on each architecture.
+The additional native Linux/x86_64 GNU run passed 252/254 and 236/238 tests,
+with two skips each, and all three other runtime checks.
 
 Local raw logs are under gitignored `misc/portability-runtime/`. Retrieved remote
 logs are under `misc/portability-47-openbsd/`, `misc/portability-47-windows/`, and
@@ -61,6 +73,10 @@ logs are under `misc/portability-47-openbsd/`, `misc/portability-47-windows/`, a
 nested `misc/portability-runtime/` directory.
 The 10/03/2026 Hyper-V logs are under `misc/portability-47-freebsd-x86/` and
 `misc/portability-47-netbsd-x86/`, with the same nested directory.
+Musl logs are under `misc/portability-47-musl-arm/` and
+`misc/portability-47-musl-x86/`, each with nested `misc/portability-musl/`.
+Native Linux/x86_64 GNU logs are under `misc/portability-47-linux-x86/`, with
+nested `misc/portability-runtime/`.
 This document retains the results without machine names or user-specific paths.
 
 The OpenBSD consumer path passed both cross-compilation and native execution from
@@ -118,6 +134,20 @@ For runtime evidence, record `zig version` and `zig env`, then run the three Tie
 and two Tier 2 commands above without `-Dtarget`. Retain each command's exit status
 and output. A successful compile-only run never upgrades a row to `verified`.
 
-Support for running compatible non-default ABIs through the package checker is
-a follow-up. This run does not extend that checker or infer execution from
-cross-compilation.
+For same-architecture Linux/musl execution, run:
+
+```sh
+sh scripts/check-linux-musl-runtime.sh
+```
+
+The script explicitly targets `aarch64-linux-musl` or `x86_64-linux-musl` for
+both unit suites and both differential suites. It invokes the checker with
+`zig run check_package.zig -- zig --run-linux-musl`; set `ZIG` to an absolute
+compiler path if needed. That mode executes the allowlist consumer and asserts
+Linux/musl in the consumer's compiled target. A deliberate GNU-target mutation
+must fail with `ExpectedLinuxMuslConsumer`. Invalid combinations must also fail.
+
+The opt-in mode accepts only Linux hosts with the matching aarch64 or x86_64
+architecture. Arbitrary runtime target/CPU overrides still fail. Running static
+musl binaries on glibc hosts is musl ABI execution evidence, not evidence of a
+musl-based distribution. Other non-default ABI execution remains a follow-up.

@@ -33,16 +33,14 @@ Run it with `zig build check-portability`.
 
 With Zig 0.16.0, both unit suites and the package consumer have run successfully
 on macOS/aarch64, OpenBSD, FreeBSD, and NetBSD on both aarch64 and x86_64,
-native Windows/x86_64 GNU, native Linux/aarch64 GNU, and Linux/x86_64 GNU
-under WSL2. Both CRoaring
-differential suites also pass on those environments.
+native Windows/x86_64 GNU, and native Linux on both architectures with GNU and
+musl targets. Linux/x86_64 GNU also passed under WSL2. Both CRoaring differential
+suites pass on those environments. The musl binaries ran on glibc Linux hosts.
 
 See the [portability evidence](docs/portability.md) for resolved target triples
 and results for the other cells. `verified` means
 both unit suites and the package consumer ran successfully; `compiles` means
-cross-compilation only. Native Linux/x86_64 runtime coverage remains untested in this
-matrix. A CRoaring tooling gap is not a library support
-failure.
+cross-compilation only. A CRoaring tooling gap is not a library support failure.
 
 ### 32-bit targets
 
