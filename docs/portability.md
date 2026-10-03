@@ -2,10 +2,11 @@
 
 # Portability evidence
 
-Results recorded on 10/02/2026 use Zig 0.16.0 and production source at `851ea48`.
+Results recorded on 10/02/2026 and 10/03/2026 use Zig 0.16.0 and production source at `851ea48`.
 Remote runs used isolated source snapshots at `48135e4`, with identical production
 sources, build configuration, and package checker. Additional aarch64 hosts used
-`ee63c47`, also with those files unchanged. The compile matrix covers the enumerated public API
+`ee63c47`; FreeBSD/x86_64 and NetBSD/x86_64 used `16e2bf5` on 10/03/2026,
+also with those files unchanged. The compile matrix covers the enumerated public API
 probe and a consumer built from the package's 33-file allowlist. It does not prove
 that every public method works at runtime.
 
@@ -26,7 +27,7 @@ library's Tier 1 status.
 | aarch64-openbsd | verified | passes | `aarch64-openbsd.7.9...7.9-none`; OpenBSD 7.9 VM; all five runtime commands passed |
 | x86_64-openbsd | verified | passes | `x86_64-openbsd.7.8...7.8-none`; OpenBSD 7.8 VM; all five runtime commands passed |
 | aarch64-freebsd | verified | passes | `aarch64-freebsd.15.1...15.1-none`; FreeBSD 15.1-RELEASE-p1 VM; all five runtime commands passed |
-| x86_64-freebsd | compiles | not-run | No runtime host provided |
+| x86_64-freebsd | verified | passes | `x86_64-freebsd.15.0.68...15.0.68-none`; FreeBSD 15.0-RELEASE-p8 on Hyper-V; all five runtime commands passed |
 | aarch64-windows-gnu | compiles | not-run | No runtime host provided |
 | x86_64-windows-gnu | verified | passes | `x86_64-windows.win11_dt...win11_dt-gnu`; native Windows 11 via Git Bash; all five runtime commands passed |
 | aarch64-windows-msvc | compiles | not-run | No runtime host provided |
@@ -38,14 +39,14 @@ library's Tier 1 status.
 | aarch64-macos | verified | passes | `aarch64-macos.26.7...26.7-none`; macOS 26.7; all five runtime commands passed |
 | x86_64-macos | compiles | not-run | No runtime host provided |
 | aarch64-netbsd | verified | passes | `aarch64-netbsd.10.1...10.1-none`; NetBSD 10.1 VM; all five runtime commands passed |
-| x86_64-netbsd | compiles | not-run | Previously provided host unavailable: jump-host name resolution failed |
+| x86_64-netbsd | verified | passes | `x86_64-netbsd.10.1...10.1-none`; NetBSD 10.1 on Hyper-V; all five runtime commands passed |
 
 The Linux/x86_64 environment available for this run is WSL2. Native Linux evidence
 remains separate; spec 52 Part A can add it when its required runtime checks pass.
 The native Linux/aarch64 run does not upgrade the x86_64 cell. No runtime claim for
 an ABI transfers to its sibling.
 
-Each of the eight tested environments passed 252/254 and 236/238 unit tests
+Each of the ten tested environments passed 252/254 and 236/238 unit tests
 respectively, with two skipped tests in each suite. Each package consumer built
 and ran from 33 allowlisted files, and both differential commands exited
 successfully. Tests used the default Debug build; the package consumer used
@@ -58,13 +59,15 @@ logs are under `misc/portability-47-openbsd/`, `misc/portability-47-windows/`, a
 `misc/portability-47-openbsd-arm/`, `misc/portability-47-freebsd-arm/`, and
 `misc/portability-47-netbsd-arm/` for the additional aarch64 runs, each with a
 nested `misc/portability-runtime/` directory.
+The 10/03/2026 Hyper-V logs are under `misc/portability-47-freebsd-x86/` and
+`misc/portability-47-netbsd-x86/`, with the same nested directory.
 This document retains the results without machine names or user-specific paths.
 
 The OpenBSD consumer path passed both cross-compilation and native execution from
 the allowlist without the benchmark shim. FreeBSD/aarch64 and NetBSD/aarch64 also
 passed the allowlist consumer and both tiers after source-transfer approval.
-No production or build changes were needed. FreeBSD/x86_64 remains compile-only;
-the NetBSD/x86_64 host was unavailable, so its runtime result remains open.
+FreeBSD/x86_64 and NetBSD/x86_64 subsequently passed the same runtime checks on
+Hyper-V. No production or build changes were needed on any of these hosts.
 
 ## Feature dispatch
 

@@ -32,7 +32,7 @@ Windows (GNU and MSVC ABIs), Linux (GNU and musl ABIs), macOS, and NetBSD.
 Run it with `zig build check-portability`.
 
 With Zig 0.16.0, both unit suites and the package consumer have run successfully
-on macOS/aarch64, OpenBSD/aarch64 and x86_64, FreeBSD/aarch64, NetBSD/aarch64,
+on macOS/aarch64, OpenBSD, FreeBSD, and NetBSD on both aarch64 and x86_64,
 native Windows/x86_64 GNU, native Linux/aarch64 GNU, and Linux/x86_64 GNU
 under WSL2. Both CRoaring
 differential suites also pass on those environments.
