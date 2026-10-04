@@ -47,7 +47,7 @@ library's Tier 1 status.
 | x86_64-freebsd | verified | passes | `x86_64-freebsd.15.0.68...15.0.68-none`; FreeBSD 15.0-RELEASE-p8 on Hyper-V; all five runtime commands passed |
 | aarch64-windows-gnu | verified | passes | Explicit `aarch64-windows-gnu` baseline binaries on Windows 11 ARM64 build 26200 under UTM; all five checks passed using the x64-compiler workaround below |
 | x86_64-windows-gnu | verified | passes | `x86_64-windows.win11_dt...win11_dt-gnu`; native Windows 11 via Git Bash; all five runtime commands passed |
-| aarch64-windows-msvc | verified | gap | Explicit `aarch64-windows-msvc` baseline binaries on the same VM; both unit suites and package consumer passed with the compiler workaround; differential builds fail with `LibCStdLibHeaderNotFound` |
+| aarch64-windows-msvc | verified | passes | Explicit `aarch64-windows-msvc` baseline binaries on the same VM; both unit suites and package consumer passed with the compiler workaround; both differential suites passed after installing Microsoft Build Tools and the Windows SDK |
 | x86_64-windows-msvc | verified | passes | Explicit `x86_64-windows-msvc` baseline binaries executed on native Windows 11 via Git Bash; all five runtime commands passed |
 | aarch64-linux-gnu | verified | passes | `aarch64-linux.6.18.34...6.18.34-gnu.2.41`; native Raspberry Pi Linux, kernel `6.18.34+rpt-rpi-2712`; all five runtime commands passed |
 | x86_64-linux-gnu | verified | passes | Native `x86_64-linux.6.8...6.8-gnu.2.39`, kernel `6.8.0-146-generic`, and WSL2 `x86_64-linux.5.10...6.19-gnu.2.39`, kernel `6.6.87.2-microsoft-standard-WSL2`; all five runtime commands passed in each environment |
@@ -61,7 +61,7 @@ library's Tier 1 status.
 Linux/x86_64 GNU now has separate native and WSL2 correctness evidence. These
 runs do not perform spec 52 Part A's paired performance measurement. No runtime
 claim for an ABI transfers to its sibling. Fifteen target cells are Tier 1
-verified. Windows/aarch64 MSVC has a Tier 2 tooling gap; macOS/x86_64 remains
+verified, and both differential suites passed for all 15. macOS/x86_64 remains
 compile-only by owner choice.
 
 Each of the initial ten tested environments passed 252/254 and 236/238 unit tests
@@ -85,11 +85,14 @@ host-default Zig target remained GNU; only explicit MSVC commands count here.
 
 Windows/aarch64 GNU and MSVC each passed 252/254 and 236/238 unit tests with two
 skips, plus execution of their 33-file package consumers. GNU differential
-suites passed. MSVC differential builds could not find the required libc headers;
-neither differential suite executed. This is a tooling gap, not a library test
-failure. No SDK was installed during this run. The ARM compiler crashes and
-missing MSVC headers are separate findings. Neither is resolved by labelling
-the ARM library binaries verified with the x64 compiler workaround.
+suites passed initially. MSVC initially failed to find libc headers. On
+10/04/2026, installing Build Tools 2022 17.14.37710.0 with ARM64 tools and
+Windows SDK 10.0.26100 resolved that prerequisite. Both explicit ARM64 MSVC
+differential suites then compiled and ran successfully, with 1,000 randomized
+iterations each. The compiler discovered the SDK without custom include paths.
+The installation completed with exit 0 after resuming an interruption caused
+by the Mac host running out of disk space. The native ARM compiler crashes
+remain a separate issue; these reruns retained the x64 compiler workaround.
 
 Local raw logs are under gitignored `misc/portability-runtime/`. Retrieved remote
 logs are under `misc/portability-47-openbsd/`, `misc/portability-47-windows/`, and
@@ -107,6 +110,7 @@ MSVC logs are under `misc/portability-47-msvc-x86/misc/portability-msvc/`.
 ARM Windows logs are under `misc/portability-47-armwin/misc/`, in
 `portability-armwin-native/` for the initial build failures and direct unit
 controls, and `portability-armwin-fallback/` for the final guarded runs.
+`portability-armwin-sdk/` holds the successful post-install MSVC differential logs.
 This document retains the results without machine names or user-specific paths.
 
 The OpenBSD consumer path passed both cross-compilation and native execution from

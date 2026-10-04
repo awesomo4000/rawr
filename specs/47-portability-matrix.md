@@ -20,8 +20,9 @@
 > GNU/MSVC and macOS/x86_64 remain compile-only by owner choice.
 > [47-05](47-05-windows-arm-runtime.md) subsequently verified both ARM Windows
 > library-runtime cells with an x64-compiler workaround producing ARM64 binaries.
-> Current coverage is 15 Tier 1 verified cells; ARM Windows MSVC retains a
-> Tier 2 missing-libc-header gap. Only macOS/x86_64 remains compile-only.
+> Current coverage is 15 Tier 1 verified cells, all passing both Tier 2 suites.
+> Installing Microsoft Build Tools and the Windows SDK closed the ARM Windows
+> MSVC missing-header gap. Only macOS/x86_64 remains compile-only.
 
 **Goal.** Establish, with evidence, what rawr actually supports across
 {**aarch64**, **x86_64**} × {**Linux**, **macOS**, **Windows**, **FreeBSD**, **NetBSD**, **OpenBSD**} —

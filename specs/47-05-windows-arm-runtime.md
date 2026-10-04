@@ -7,6 +7,24 @@ VM on 10/04/2026. Parent: [47](47-portability-matrix.md).
 
 ## Outcome, 10/04/2026
 
+### SDK follow-up
+
+Owner authorized installing the missing Microsoft components. Build Tools 2022
+17.14.37710.0, ARM64 tools and Windows SDK 10.0.26100 installed successfully
+with exit 0 after resuming a host-disk-full interruption. The existing 2019
+installation was left untouched. Both `zig build difftest` and
+`zig build difftest64`, explicitly targeting `aarch64-windows-msvc`, then built
+and ran successfully with the same x64 Zig 0.16.0 compiler workaround and source
+snapshot as below. Each ran 1,000 randomized iterations. No custom SDK paths,
+library changes or build changes were needed. Logs are retained under
+`misc/portability-47-armwin/misc/portability-armwin-sdk/`.
+
+This closes the Tier 2 missing-header gap. All 15 runtime-tested target cells
+now pass both differential suites. The native ARM compiler issue remains open;
+macOS/x86_64 remains compile-only by owner choice.
+
+### Initial run
+
 Complete with a Tier 2 gap. Both ARM64 ABI cells passed the 252/254 and 236/238
 unit suites with two skips each and executed 33-file allowlist consumers.
 GNU also passed both differential suites. MSVC differential builds failed in
