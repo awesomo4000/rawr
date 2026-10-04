@@ -2,7 +2,7 @@
 
 # Portability evidence
 
-Results recorded on 10/02/2026 and 10/03/2026 use Zig 0.16.0 and production source at `851ea48`.
+Results recorded on 10/02/2026 through 10/04/2026 use Zig 0.16.0 and production source at `851ea48`.
 Remote runs used isolated source snapshots at `48135e4`, with identical production
 sources, build configuration, and package checker. Additional aarch64 hosts used
 `ee63c47`; FreeBSD/x86_64 and NetBSD/x86_64 used `16e2bf5` on 10/03/2026,
@@ -16,6 +16,15 @@ the shipped build configuration were unchanged.
 
 Windows/MSVC used `89c422b` plus the checker and script changes committed with
 [47-04](../specs/47-04-windows-msvc-runtime.md), with the same library/build files.
+
+Windows/aarch64 testing on 10/04/2026 used `95a187e` plus
+[47-05](../specs/47-05-windows-arm-runtime.md)'s checker/driver changes in a
+Windows 11 ARM64 UTM VM, OS build 26200. The installed ARM64 Zig 0.16.0 compiler
+crashed during several build-runner operations, although direct invocation of
+both unit suites passed for both ABIs. Minimal no-I/O executables also compiled
+and ran under both ABIs. These facts do not establish the cause of the crashes.
+The documented fallback compiler is the official x86_64 Zig 0.16.0 release under
+Windows emulation; emitted checkers, consumers and tests explicitly target ARM64.
 
 `verified` requires both unit suites and the allowlist package consumer to execute
 successfully. Host-default commands are `zig build test`, `zig build test64`, and
@@ -36,9 +45,9 @@ library's Tier 1 status.
 | x86_64-openbsd | verified | passes | `x86_64-openbsd.7.8...7.8-none`; OpenBSD 7.8 VM; all five runtime commands passed |
 | aarch64-freebsd | verified | passes | `aarch64-freebsd.15.1...15.1-none`; FreeBSD 15.1-RELEASE-p1 VM; all five runtime commands passed |
 | x86_64-freebsd | verified | passes | `x86_64-freebsd.15.0.68...15.0.68-none`; FreeBSD 15.0-RELEASE-p8 on Hyper-V; all five runtime commands passed |
-| aarch64-windows-gnu | compiles | not-run | Runtime provisioning deferred by owner |
+| aarch64-windows-gnu | verified | passes | Explicit `aarch64-windows-gnu` baseline binaries on Windows 11 ARM64 build 26200 under UTM; all five checks passed using the x64-compiler workaround below |
 | x86_64-windows-gnu | verified | passes | `x86_64-windows.win11_dt...win11_dt-gnu`; native Windows 11 via Git Bash; all five runtime commands passed |
-| aarch64-windows-msvc | compiles | not-run | Runtime provisioning deferred by owner |
+| aarch64-windows-msvc | verified | gap | Explicit `aarch64-windows-msvc` baseline binaries on the same VM; both unit suites and package consumer passed with the compiler workaround; differential builds fail with `LibCStdLibHeaderNotFound` |
 | x86_64-windows-msvc | verified | passes | Explicit `x86_64-windows-msvc` baseline binaries executed on native Windows 11 via Git Bash; all five runtime commands passed |
 | aarch64-linux-gnu | verified | passes | `aarch64-linux.6.18.34...6.18.34-gnu.2.41`; native Raspberry Pi Linux, kernel `6.18.34+rpt-rpi-2712`; all five runtime commands passed |
 | x86_64-linux-gnu | verified | passes | Native `x86_64-linux.6.8...6.8-gnu.2.39`, kernel `6.8.0-146-generic`, and WSL2 `x86_64-linux.5.10...6.19-gnu.2.39`, kernel `6.6.87.2-microsoft-standard-WSL2`; all five runtime commands passed in each environment |
@@ -51,8 +60,9 @@ library's Tier 1 status.
 
 Linux/x86_64 GNU now has separate native and WSL2 correctness evidence. These
 runs do not perform spec 52 Part A's paired performance measurement. No runtime
-claim for an ABI transfers to its sibling. Thirteen target cells are verified;
-the remaining three stay compile-only by owner choice.
+claim for an ABI transfers to its sibling. Fifteen target cells are Tier 1
+verified. Windows/aarch64 MSVC has a Tier 2 tooling gap; macOS/x86_64 remains
+compile-only by owner choice.
 
 Each of the initial ten tested environments passed 252/254 and 236/238 unit tests
 respectively, with two skipped tests in each suite. Each package consumer built
@@ -73,6 +83,14 @@ skips per suite for the same baseline-feature reason as x86_64 musl. Its
 33-file package consumer and both CRoaring differential suites passed. The
 host-default Zig target remained GNU; only explicit MSVC commands count here.
 
+Windows/aarch64 GNU and MSVC each passed 252/254 and 236/238 unit tests with two
+skips, plus execution of their 33-file package consumers. GNU differential
+suites passed. MSVC differential builds could not find the required libc headers;
+neither differential suite executed. This is a tooling gap, not a library test
+failure. No SDK was installed during this run. The ARM compiler crashes and
+missing MSVC headers are separate findings. Neither is resolved by labelling
+the ARM library binaries verified with the x64 compiler workaround.
+
 Local raw logs are under gitignored `misc/portability-runtime/`. Retrieved remote
 logs are under `misc/portability-47-openbsd/`, `misc/portability-47-windows/`, and
 `misc/portability-47-wsl/`, plus `misc/portability-47-linux-arm/`,
@@ -86,6 +104,9 @@ Musl logs are under `misc/portability-47-musl-arm/` and
 Native Linux/x86_64 GNU logs are under `misc/portability-47-linux-x86/`, with
 nested `misc/portability-runtime/`.
 MSVC logs are under `misc/portability-47-msvc-x86/misc/portability-msvc/`.
+ARM Windows logs are under `misc/portability-47-armwin/misc/`, in
+`portability-armwin-native/` for the initial build failures and direct unit
+controls, and `portability-armwin-fallback/` for the final guarded runs.
 This document retains the results without machine names or user-specific paths.
 
 The OpenBSD consumer path passed both cross-compilation and native execution from
@@ -171,6 +192,20 @@ This explicitly targets `x86_64-windows-msvc` for both unit and differential
 suites. `zig run check_package.zig -- zig --run-windows-msvc` executes the
 allowlist consumer with a compiled Windows/MSVC assertion. A seeded GNU target
 must fail with `ExpectedWindowsMsvcConsumer`. Mixed modes, build-only, duplicate
-flags and runtime overrides are rejected. The mode requires Windows/x86_64;
+flags and runtime overrides are rejected. The mode now accepts Windows/x86_64
+or Windows/aarch64, selecting the checker's compiled architecture;
 it does not permit arbitrary target execution or prove compilation with cl.exe.
 Other non-default ABI execution remains a follow-up.
+
+For the ARM Windows VM workaround, run native ARM64 PowerShell in the checkout:
+
+```powershell
+./scripts/check-windows-arm-runtime.ps1 -Zig "$HOME/zig-x86_64-windows-0.16.0/zig.exe"
+```
+
+The x64 compiler runs under Windows emulation but builds an ARM64 checker and
+explicit ARM64 test executables. The checker has separate `--run-windows-gnu`
+and `--run-windows-msvc` modes. Generated consumers assert architecture as well
+as ABI; controls deliberately swap both ABI directions and select x64 instead
+of ARM64, requiring the named assertions to fail. The script returns nonzero
+if any suite fails, including a missing SDK, and retains each outcome separately.

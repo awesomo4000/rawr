@@ -10,6 +10,8 @@ Linux/musl execution. The host-default-only rules below describe this chunk;
 the follow-up defines the narrow exception and its controls.
 [47-04](47-04-windows-msvc-runtime.md) adds the corresponding Windows/x86_64
 MSVC exception.
+[47-05](47-05-windows-arm-runtime.md) extends the explicit Windows modes to
+aarch64 with ABI/architecture guards and records its compiler workaround.
 
 > **Outcome as of 10/03/2026: complete, with partial runtime coverage.**
 > The two-sided `check-32` control rejects the seeded `OwnedBitmap.cardinality` type

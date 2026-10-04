@@ -33,9 +33,12 @@ Run it with `zig build check-portability`.
 
 With Zig 0.16.0, both unit suites and the package consumer have run successfully
 on macOS/aarch64, OpenBSD, FreeBSD, and NetBSD on both aarch64 and x86_64,
-native Windows/x86_64 with GNU and MSVC targets, and native Linux on both architectures with GNU and
+Windows on both architectures with GNU and MSVC targets, and native Linux on both architectures with GNU and
 musl targets. Linux/x86_64 GNU also passed under WSL2. Both CRoaring differential
-suites pass on those environments. The musl binaries ran on glibc Linux hosts.
+suites pass except Windows/aarch64 MSVC, whose builds require missing libc headers
+on the tested VM. Windows/aarch64 used an x64 Zig compiler workaround to build
+and run ARM64 binaries after the ARM compiler crashed in build operations.
+The musl binaries ran on glibc Linux hosts.
 
 See the [portability evidence](docs/portability.md) for resolved target triples
 and results for the other cells. `verified` means

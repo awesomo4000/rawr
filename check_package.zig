@@ -73,6 +73,7 @@ pub fn main(init: std.process.Init) !void {
     var run_consumer = true;
     var run_linux_musl = false;
     var run_windows_msvc = false;
+    var run_windows_gnu = false;
     var scratch_suffix: ?[]const u8 = null;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--target")) {
@@ -87,6 +88,9 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, arg, "--run-windows-msvc")) {
             if (run_windows_msvc) return error.DuplicateMsvcMode;
             run_windows_msvc = true;
+        } else if (std.mem.eql(u8, arg, "--run-windows-gnu")) {
+            if (run_windows_gnu) return error.DuplicateWindowsGnuMode;
+            run_windows_gnu = true;
         } else if (std.mem.eql(u8, arg, "--build-only")) {
             run_consumer = false;
         } else if (std.mem.eql(u8, arg, "--scratch-suffix")) {
@@ -99,7 +103,8 @@ pub fn main(init: std.process.Init) !void {
     }
     if (run_consumer and (target != null or cpu != null)) return error.RunTargetOverride;
     if (cpu != null and target == null) return error.CpuWithoutTarget;
-    if (run_linux_musl and run_windows_msvc) return error.ConflictingExecutionModes;
+    if ((run_linux_musl and (run_windows_msvc or run_windows_gnu)) or
+        (run_windows_msvc and run_windows_gnu)) return error.ConflictingExecutionModes;
     if (run_linux_musl) {
         if (!run_consumer) return error.MuslRequiresExecution;
         if (builtin.os.tag != .linux) return error.MuslRequiresLinuxHost;
@@ -112,8 +117,20 @@ pub fn main(init: std.process.Init) !void {
     if (run_windows_msvc) {
         if (!run_consumer) return error.MsvcRequiresExecution;
         if (builtin.os.tag != .windows) return error.MsvcRequiresWindowsHost;
-        if (builtin.cpu.arch != .x86_64) return error.UnsupportedMsvcHostArchitecture;
-        target = "x86_64-windows-msvc";
+        target = switch (builtin.cpu.arch) {
+            .x86_64 => "x86_64-windows-msvc",
+            .aarch64 => "aarch64-windows-msvc",
+            else => return error.UnsupportedMsvcHostArchitecture,
+        };
+    }
+    if (run_windows_gnu) {
+        if (!run_consumer) return error.WindowsGnuRequiresExecution;
+        if (builtin.os.tag != .windows) return error.WindowsGnuRequiresWindowsHost;
+        target = switch (builtin.cpu.arch) {
+            .x86_64 => "x86_64-windows-gnu",
+            .aarch64 => "aarch64-windows-gnu",
+            else => return error.UnsupportedWindowsGnuHostArchitecture,
+        };
     }
 
     const io = init.io;
@@ -155,14 +172,28 @@ pub fn main(init: std.process.Init) !void {
         \\        @compileError("ExpectedWindowsMsvcConsumer");
         \\}
     ;
+    const windows_gnu_assertion =
+        \\comptime {
+        \\    const target = @import("builtin");
+        \\    if (target.os.tag != .windows or target.abi != .gnu)
+        \\        @compileError("ExpectedWindowsGnuConsumer");
+        \\}
+    ;
     const source = if (run_linux_musl)
         try std.mem.concat(allocator, u8, &.{ consumer_source, "\n", musl_assertion })
     else if (run_windows_msvc)
         try std.mem.concat(allocator, u8, &.{ consumer_source, "\n", msvc_assertion })
+    else if (run_windows_gnu)
+        try std.mem.concat(allocator, u8, &.{ consumer_source, "\n", windows_gnu_assertion })
     else
         try allocator.dupe(u8, consumer_source);
     defer allocator.free(source);
-    try consumer_dir.writeFile(io, .{ .sub_path = "main.zig", .data = source });
+    const checked_source = if (run_linux_musl or run_windows_msvc or run_windows_gnu)
+        try std.fmt.allocPrint(allocator, "{s}\ncomptime {{ if (@import(\"builtin\").cpu.arch != .{s}) @compileError(\"ExpectedConsumerArchitecture\"); }}\n", .{ source, @tagName(builtin.cpu.arch) })
+    else
+        try allocator.dupe(u8, source);
+    defer allocator.free(checked_source);
+    try consumer_dir.writeFile(io, .{ .sub_path = "main.zig", .data = checked_source });
     try consumer_dir.writeFile(io, .{ .sub_path = "build.zig.zon", .data = consumer_manifest });
 
     var argv: [8][]const u8 = undefined;
@@ -211,7 +242,7 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("check-package: consumer failed\n{s}{s}", .{ result.stdout, result.stderr });
         return error.PackageConsumerFailed;
     }
-    if (run_linux_musl or run_windows_msvc) {
+    if (run_linux_musl or run_windows_msvc or run_windows_gnu) {
         std.debug.print("check-package: OK ({d} allowlisted files, executed {s})\n", .{ manifest.paths.len, target.? });
     } else if (run_consumer) {
         std.debug.print("check-package: OK ({d} allowlisted files)\n", .{manifest.paths.len});

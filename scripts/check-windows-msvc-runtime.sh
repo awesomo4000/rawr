@@ -28,7 +28,7 @@ expect_error mixed-modes ConflictingExecutionModes --run-windows-msvc --run-linu
 
 mutation=$(mktemp ./check_package_msvc_control_XXXXXX.zig)
 trap 'rm -f "$mutation"' EXIT HUP INT TERM
-sed 's/target = "x86_64-windows-msvc"/target = "x86_64-windows-gnu"/' check_package.zig > "$mutation"
+sed 's/=> "x86_64-windows-msvc"/=> "x86_64-windows-gnu"/' check_package.zig > "$mutation"
 if "$zig" run "$mutation" -- "$zig" --run-windows-msvc --scratch-suffix msvc-control > "$logs/gnu-control.log" 2>&1; then
     echo "GNU mutation unexpectedly passed" >&2
     exit 1
