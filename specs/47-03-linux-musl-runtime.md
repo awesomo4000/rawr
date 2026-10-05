@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: MPL-2.0 -->
 
-# Spec 47-03: Native Linux and musl runtime evidence
+# Spec 47-03: Linux and musl runtime evidence
 
 Parent: [47](47-portability-matrix.md). Owner requested Linux/aarch64 musl
 and Linux/x86_64 musl coverage on the available Linux hosts on 10/03/2026.
@@ -8,15 +8,19 @@ Windows/aarch64 and macOS/x86_64 remain compile-only by owner choice.
 
 ## Outcome, 10/03/2026
 
-Complete. Both musl targets passed all five checks on real Linux hosts, without
-an emulator. Native Linux/x86_64 GNU independently passed all five checks.
+Complete. Both musl targets passed all five checks on Linux, without
+instruction-set emulation. Linux/x86_64 GNU independently passed all five checks.
 Source was `add5f61` plus this chunk's checker/script changes; library sources,
 package allowlist and shipped build configuration were unchanged.
 
-Native GNU resolved to `x86_64-linux.6.8...6.8-gnu.2.39`, kernel
+The KVM guest GNU target resolved to `x86_64-linux.6.8...6.8-gnu.2.39`, kernel
 `6.8.0-146-generic`. Musl targets were explicitly `x86_64-linux-musl` and
-`aarch64-linux-musl`, using baseline CPUs on the supplied native Linux hosts.
-Native GNU and aarch64 musl passed 252/254 and 236/238 unit tests, two skips each.
+`aarch64-linux-musl`, using baseline CPUs on the supplied Linux hosts.
+The x86_64 host is a KVM guest exposing two AMD EPYC vCPUs with AVX2 and no
+AVX-512, not the Zen 4 machine dual-booted; its physical CPU model is unknown.
+The aarch64 host is a Raspberry Pi. Earlier "native Linux" wording meant
+outside WSL2, not bare metal. These runs do not supply spec 52's same-machine cell.
+KVM GNU and aarch64 musl passed 252/254 and 236/238 unit tests, two skips each.
 Baseline x86_64 musl passed 250/254 and 234/238, four skips each: its absent
 AVX/SSSE3 path also skips the two x86-specific SIMD tests. Every package consumer
 executed from 33 allowlisted files and both differential suites passed per cell.
@@ -35,7 +39,7 @@ coverage only and does not complete spec 52 Part A.
 
 ## Scope
 
-Run the five host-default checks on native Linux/x86_64. Run `test`, `test64`,
+Run the five host-default checks on the Linux/x86_64 KVM guest. Run `test`, `test64`,
 `difftest`, and `difftest64` with explicit same-architecture Linux/musl targets
 on both Linux hosts. No library changes or performance conclusions.
 
@@ -51,13 +55,13 @@ mode is selected. Seed a GNU target in a disposable checker copy and require
 that assertion to fail. This prevents host-default execution posing as musl.
 Record target triples, source revision, commands and logs. Static musl binaries
 executed on glibc Linux establish that ABI's coverage, not a musl distribution.
-Native x86_64 correctness runs do not complete spec 52's performance experiment.
+KVM x86_64 correctness runs do not complete spec 52's performance experiment.
 
 ## Acceptance
 
 - [x] Original override guard and new invalid combinations reject as named.
 - [x] A deliberately GNU-built musl consumer fails its target assertion.
-- [x] Both Linux/musl cells run all five checks, with no emulator.
-- [x] Native Linux/x86_64 host-default commands run independently.
+- [x] Both Linux/musl cells run all five checks, without instruction-set emulation.
+- [x] KVM Linux/x86_64 host-default commands run independently.
 - [x] Evidence tables, README and outcome committed together; no ABI promotion
       from another cell and no performance claim.
