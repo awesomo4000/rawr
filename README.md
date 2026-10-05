@@ -33,8 +33,9 @@ Run it with `zig build check-portability`.
 
 With Zig 0.16.0, both unit suites and the package consumer have run successfully
 on macOS/aarch64, OpenBSD, FreeBSD, and NetBSD on both aarch64 and x86_64,
-Windows on both architectures with GNU and MSVC targets, and native Linux on both architectures with GNU and
-musl targets. Linux/x86_64 GNU also passed under WSL2. Both CRoaring differential
+Windows on both architectures with GNU and MSVC targets, and Linux on both architectures with GNU and
+musl targets. Linux/aarch64 ran on a Raspberry Pi; Linux/x86_64 ran in a KVM guest,
+with GNU also tested under WSL2. Both CRoaring differential
 suites pass on all of those runtime-tested targets. Windows/aarch64 MSVC required
 Microsoft Build Tools and the Windows SDK. Windows/aarch64 used an x64 Zig compiler workaround to build
 and run ARM64 binaries after the ARM compiler crashed in build operations.

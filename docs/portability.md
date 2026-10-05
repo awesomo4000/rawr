@@ -10,7 +10,7 @@ also with those files unchanged. The compile matrix covers the enumerated public
 probe and a consumer built from the package's 33-file allowlist. It does not prove
 that every public method works at runtime.
 
-The subsequent native Linux GNU and Linux/musl runs used `add5f61` plus the checker and script extension
+The subsequent Linux GNU and Linux/musl runs used `add5f61` plus the checker and script extension
 committed with [47-03](../specs/47-03-linux-musl-runtime.md). Library sources and
 the shipped build configuration were unchanged.
 
@@ -50,16 +50,20 @@ library's Tier 1 status.
 | aarch64-windows-msvc | verified | passes | Explicit `aarch64-windows-msvc` baseline binaries on the same VM; both unit suites and package consumer passed with the compiler workaround; both differential suites passed after installing Microsoft Build Tools and the Windows SDK |
 | x86_64-windows-msvc | verified | passes | Explicit `x86_64-windows-msvc` baseline binaries executed on native Windows 11 via Git Bash; all five runtime commands passed |
 | aarch64-linux-gnu | verified | passes | `aarch64-linux.6.18.34...6.18.34-gnu.2.41`; native Raspberry Pi Linux, kernel `6.18.34+rpt-rpi-2712`; all five runtime commands passed |
-| x86_64-linux-gnu | verified | passes | Native `x86_64-linux.6.8...6.8-gnu.2.39`, kernel `6.8.0-146-generic`, and WSL2 `x86_64-linux.5.10...6.19-gnu.2.39`, kernel `6.6.87.2-microsoft-standard-WSL2`; all five runtime commands passed in each environment |
+| x86_64-linux-gnu | verified | passes | KVM guest `x86_64-linux.6.8...6.8-gnu.2.39`, kernel `6.8.0-146-generic`, and WSL2 `x86_64-linux.5.10...6.19-gnu.2.39`, kernel `6.6.87.2-microsoft-standard-WSL2`; all five runtime commands passed in each environment |
 | aarch64-linux-musl | verified | passes | Explicit `aarch64-linux-musl` baseline binaries executed on native Raspberry Pi Linux; all five checks passed |
-| x86_64-linux-musl | verified | passes | Explicit `x86_64-linux-musl` baseline binaries executed on native Linux 6.8.0-146-generic, glibc 2.39; all five checks passed |
+| x86_64-linux-musl | verified | passes | Explicit `x86_64-linux-musl` baseline binaries executed on the Linux KVM guest, kernel 6.8.0-146-generic, glibc 2.39; all five checks passed |
 | aarch64-macos | verified | passes | `aarch64-macos.26.7...26.7-none`; macOS 26.7; all five runtime commands passed |
 | x86_64-macos | compiles | not-run | Runtime provisioning deferred by owner |
 | aarch64-netbsd | verified | passes | `aarch64-netbsd.10.1...10.1-none`; NetBSD 10.1 VM; all five runtime commands passed |
 | x86_64-netbsd | verified | passes | `x86_64-netbsd.10.1...10.1-none`; NetBSD 10.1 on Hyper-V; all five runtime commands passed |
 
-Linux/x86_64 GNU now has separate native and WSL2 correctness evidence. These
-runs do not perform spec 52 Part A's paired performance measurement. No runtime
+Linux/x86_64 GNU has separate KVM-guest and WSL2 correctness evidence. The KVM
+guest exposes two AMD EPYC vCPUs with AVX2 and no AVX-512; the physical CPU model
+is unknown. Earlier wording used "native Linux" to mean outside WSL2, not bare
+metal. This is not the Zen 4 machine dual-booted into Linux, so it does not
+satisfy spec 52 Part A's same-machine comparison. Comparing these environments
+would confound CPU, exposed features, virtualization and OS environment. No runtime
 claim for an ABI transfers to its sibling. Fifteen target cells are Tier 1
 verified, and both differential suites passed for all 15. macOS/x86_64 remains
 compile-only by owner choice.
@@ -76,7 +80,7 @@ The later musl runs explicitly targeted the named ABI. Aarch64 passed 252/254 an
 with four skips per suite: its target lacks the AVX/SSSE3 array-intersection path,
 so the two x86-specific tests skip alongside the two NEON tests. Both package
 consumers and both differential suites passed on each architecture.
-The additional native Linux/x86_64 GNU run passed 252/254 and 236/238 tests,
+The additional KVM Linux/x86_64 GNU run passed 252/254 and 236/238 tests,
 with two skips each, and all three other runtime checks.
 Windows/x86_64 MSVC baseline passed 250/254 and 234/238 tests, with four SIMD
 skips per suite for the same baseline-feature reason as x86_64 musl. Its
@@ -104,7 +108,7 @@ The 10/03/2026 Hyper-V logs are under `misc/portability-47-freebsd-x86/` and
 `misc/portability-47-netbsd-x86/`, with the same nested directory.
 Musl logs are under `misc/portability-47-musl-arm/` and
 `misc/portability-47-musl-x86/`, each with nested `misc/portability-musl/`.
-Native Linux/x86_64 GNU logs are under `misc/portability-47-linux-x86/`, with
+KVM Linux/x86_64 GNU logs are under `misc/portability-47-linux-x86/`, with
 nested `misc/portability-runtime/`.
 MSVC logs are under `misc/portability-47-msvc-x86/misc/portability-msvc/`.
 ARM Windows logs are under `misc/portability-47-armwin/misc/`, in
