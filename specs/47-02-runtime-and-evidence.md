@@ -36,8 +36,10 @@ aarch64 with ABI/architecture guards and records its compiler workaround.
 > and NetBSD/aarch64, with the same unit-test counts. On 10/03/2026, snapshots at
 > `16e2bf5` passed all five checks on FreeBSD/x86_64 and NetBSD/x86_64 under Hyper-V,
 > again with the same unit-test counts and unchanged production/build files.
-> In total, ten cells are Tier 1 `verified` and Tier 2 `passes`; the other six remain `compiles` and
-> `not-run`. Neither MSVC nor musl was promoted from a sibling ABI's results.
+> *(Count superseded by later commits — see the verification record below. As of the final state,
+> **15 of 16 target triples are Tier 1 `verified` and Tier 2 `passes`**, with only `x86_64-macos` at
+> `compiles` / `not-run`. The MSVC and musl cells were executed explicitly, never promoted from a sibling
+> ABI's results.)*
 >
 > OpenBSD's allowlist-only consumer built and ran without the benchmark shim,
 > answering its consumer-path question. NetBSD/x86_64 was initially unavailable;
@@ -63,21 +65,26 @@ stays `compiles`, and the chunk completes with partial runtime coverage.
 **Record the resolved target triple for every runtime cell.** These commands resolve to the host default
 — on a glibc Linux host, `zig build test` verifies `linux-gnu` and says nothing about `linux-musl`.
 
-**Non-default ABIs stay at `compiles`. Do not pass `-Dtarget` to a runtime check.** An earlier draft
-required exactly that, which would have been a command that silently mislabels: `addCheckPackageStep`
-builds its checker for `b.graph.host` and ignores `-Dtarget` for the consumer, and `check_package.zig:91`
-**rejects** the combination outright with `RunTargetOverride`.
+**Do not pass a general `-Dtarget` to a runtime check.** `addCheckPackageStep` builds its checker for
+`b.graph.host` and ignores `-Dtarget` for the consumer, and `check_package.zig:91` **rejects** the
+combination with `RunTargetOverride`. A command that silently verified the host default while the table
+recorded a non-default ABI is exactly the mislabelling this spec exists to prevent.
 
-**That rejection is correct and should not be worked around here.** The current package checker supports
-runtime execution only for the host-default target. Extending it to compatible non-default ABIs is
-outside this chunk; those cells remain `compiles` pending explicit runtime coverage.
+**Superseded in implementation, correctly.** An earlier draft concluded from this that non-default ABIs
+must stay at `compiles`. That was contingent on the checker lacking targeted support, and the checker now
+has it: dedicated opt-in modes (`--run-linux-musl`, `--run-windows-msvc`) that **assert the ABI in the
+consumer's compiled target**, backed by a mutation control — a deliberate GNU target must fail with
+`ExpectedLinuxMuslConsumer` — while arbitrary target and CPU overrides still fail and the mode accepts
+only a matching host architecture. **An asserted-and-controlled targeted mode is a legitimate route to
+`verified`; a silently-ignored flag is not.** That distinction, not the prohibition, is the rule.
 
-*(An earlier draft justified this by claiming a foreign-ABI binary cannot execute on the host. **That is
-false**, and the same paragraph contradicted it two sentences later: `x86_64-linux-musl` static binaries
-do run on a glibc host. The limit is the checker's, not the ABI's.)*
+**One scope line must travel with the musl cells:** running static musl binaries on a glibc host is
+**musl ABI execution evidence, not evidence of a musl-based distribution.**
 
-Extending it is build-system machinery, which is `47-00`'s category, so it is recorded as a follow-up
-rather than smuggled into this chunk.
+*(An earlier draft justified leaving these cells at `compiles` by claiming a foreign-ABI binary cannot
+execute on the host. **That is false**, and the same paragraph contradicted it two sentences later:
+`x86_64-linux-musl` static binaries do run on a glibc host. The limit was the checker's, not the ABI's —
+and it has since been lifted for the two ABIs that matter.)*
 
 So: **an ABI not executed on a host that resolves to it stays `compiles`**, no matter what else ran on
 that machine.
@@ -179,6 +186,51 @@ uniformly reassuring would be less useful than none.
   rediscovered.
 - `check-docs` green — the README change is exactly the kind of drift it exists to catch.
 - Existing suites plus `check-32`, `check-portability`, `check-package` green on the dev host.
+
+## Verification record — implemented, reviewed, ACCEPTED
+
+**Counted from `docs/portability.md`, not from the prose.** 15 of 16 target triples are Tier 1 `verified`
+and Tier 2 `passes`; only `x86_64-macos` is `compiles` / `not-run`, with provisioning deferred. Table 2
+carries both baseline cells as scalar. **The chunk's own outcome paragraph was stale by five cells** —
+the musl pair, native `x86_64-linux-gnu`, and both Windows/aarch64 cells landed in later commits and the
+summary was not refolded. Corrected above.
+
+**The musl and MSVC cells are the substantive result, and they overturned a rule I wrote.** §1 had said
+non-default ABIs must stay at `compiles`. The implementation instead built the targeted runtime support
+properly:
+
+- dedicated opt-in modes rather than a general `-Dtarget`, with arbitrary target and CPU overrides still
+  refused;
+- the mode **asserts the ABI in the consumer's compiled target**, so a silently-ignored flag cannot
+  produce a `verified`;
+- a **mutation control** — a deliberate GNU target must fail with `ExpectedLinuxMuslConsumer`;
+- the mode accepts only a host of matching architecture.
+
+**That is the distinction that matters**: an asserted-and-controlled targeted mode earns `verified`; a
+flag that might be ignored does not. My prohibition was aimed at the second and over-applied to the
+first. The two-sided control discipline from `47-00` was carried into new machinery without being asked
+for — the third time this family.
+
+**The scope sentence in the docs is the right one and better than I would have written:** *running static
+musl binaries on a glibc host is musl ABI execution evidence, not evidence of a musl-based distribution.*
+That is the exact overclaim I made twice in this campaign, pre-empted.
+
+**Qualifications recorded where a reader will hit them**, not buried: Windows/aarch64 used an emulated
+x64 compiler to emit native ARM64 binaries (`docs/portability.md:27`), and the musl cells ran on glibc
+hosts. Both are stated in the evidence table.
+
+**Acceptance items confirmed:** two-sided `check-32` control rejecting the seeded
+`OwnedBitmap.cardinality` defect and passing once the probing call is removed; the unsupported ReleaseSafe
+clause removed from `47-01`; both tables keyed as required with independent Tier 1 and Tier 2 columns; the
+shared-probe boundary stated (`docs/portability.md:139`); `x86_64-linux-gnu` recorded with both native and
+WSL2 resolutions rather than collapsing them; and the explicit note that native Linux/aarch64 coverage
+does not upgrade Linux/x86_64.
+
+**No cell was promoted by ABI association**, which was the failure mode most likely to inflate this table.
+
+**Spec 47 is complete.** `x86_64-macos` is the one open cell and it is an owner provisioning choice, not a
+finding. This is correctness and buildability coverage only — **no performance claim attaches to any
+newly verified platform**, and the parity board remains M4 plus Zen 4.
 
 ## Estimate
 
