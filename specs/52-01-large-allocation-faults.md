@@ -74,9 +74,14 @@ Mmap-backed allocations **are** returned on free. What makes glibc fast here is 
 threshold **adapts dynamically** — after observing frees of mapped blocks it raises the threshold, moving
 subsequent allocations of that size into the reusable heap, which is not unmapped.
 
-**That has a direct consequence for §4.4:** setting an explicit threshold **disables the adaptation**, so
-the induction arm changes two things at once. It must therefore **record the tunables in force and verify
-the mapping behaviour actually obtained**, not infer it from the setting.
+**Adaptation is a candidate explanation, not a measured one.** Nothing in this chunk has established
+that it is why glibc is fast on these rows, and an earlier draft asserted it. It is the leading
+hypothesis for the glibc arm, to be tested by §4.4.
+
+**It has a direct consequence for §4.4:** setting an explicit threshold **disables the adaptation**, so
+the induction arm changes two things at once — threshold value *and* adaptation. It must therefore
+**record the tunables in force and verify the mapping behaviour actually obtained**, not infer it from the
+setting.
 
 References: GNU allocator documentation and the glibc memory-allocation tunables page.
 
@@ -104,22 +109,44 @@ into the report. **Counter semantics are not uniform:** on Linux it reports `get
 Darwin the available counters are Mach faults and page-ins, which are **not** equivalent to minor/major
 faults. Report the tag per host and do not compare across hosts without naming the difference.
 
-**Derive predicted counts, do not assert them.** Expected faults = payload bytes ÷ page size. An earlier
-draft wrote "~1024 faults", which assumes 4 MiB over 4 KiB pages; **M4 uses 16 KiB pages**, giving 256 for
-the same payload. **Record the page size and any huge-page policy in force** per host.
+**Derive a page-touch prediction, and call it that.** It is **not** an exact fault count. The span
+depends on **rounding and the starting-address offset**: a 32 KiB + 1 payload covers 9 base pages when
+page-aligned and 10 when not, so the prediction is a **range**. An earlier draft wrote "~1024 faults" as a
+bare division, which also assumes 4 KiB pages; **M4 uses 16 KiB pages**, giving 256 for the same payload.
+**Record the page size, the observed allocation alignment, and any huge-page policy in force** per host,
+and state the prediction as touches rather than faults.
 
-**Syscall counts.** Pin the method: count `mmap`/`munmap` by tracing (`strace -c -f -e trace=mmap,munmap`
-or the platform equivalent) in **separate, non-authoritative runs**. **Tracing must not appear in timing
-runs** — its overhead would contaminate exactly what is being measured. Report the two from different runs
-and say so.
+**Syscall counts must be region-aware, which `strace -c` cannot provide.** An earlier draft specified it
+and then asked for per-region counts; `-c` aggregates process startup, corpus initialisation, warmup and
+the timed region into one total, so it cannot answer the question it was given.
+
+Use an **event trace with explicit phase markers and a parser**: trace `mmap`, `munmap` **and `write`**,
+have the worker emit marker writes to a dedicated fd at each phase transition, and segment the event
+stream between markers. Any other region-aware method is acceptable if it produces per-phase counts.
+
+**Control for the segmentation:** a cell with a **pooled** payload size must show **zero `mmap`/`munmap`
+inside the timed region**, with initialisation mappings appearing only before the first marker. If
+initialisation mappings leak into the timed segment, the parser is wrong and the counts are
+uninterpretable.
+
+**Tracing must not appear in timing runs** — its overhead contaminates exactly what is measured. Report
+counts and timings from different runs and say so.
 
 **Region and protocol.** Count and time **only the operation region**: `alloc`, payload write, `free`.
 Distinguish warmup from timed iterations and report both counts. Spec 22 protocol: fresh process per
 cell, warmup then timed, **≥5 process medians with full ranges**.
 
-**Pin the operation itself**, since the whole result depends on it: the exact payload write (`@memset`
-versus a strided touch), the **optimizer barrier** preventing its elision, the **batch size** per timed
-iteration, and for §4.3 whether the retained buffer is **pre-touched** before timing begins.
+**The operation is pinned here, not left to implementation.** An earlier draft listed these as choices,
+which would have let materially different experiments all satisfy acceptance:
+
+| choice | pinned value |
+| --- | --- |
+| payload write | **`@memset(buf, 0xA5)`** — full touch of every page. A strided touch would under-touch and confound the §3 page prediction. |
+| optimizer barrier | **`std.mem.doNotOptimizeAway`** applied to the buffer after the write, inside the timed region |
+| write survival | **verify in the emitted code that the `@memset` was not elided**; a loop that compiled its writes away would measure nothing and pass every other check |
+| batch size | **derived, not guessed**: enough `alloc`/write/`free` cycles per timed iteration that the iteration exceeds **1 ms**, with the resulting count **recorded per cell** |
+| retained buffer (§4.3) | **pre-touched** with one full `@memset` outside the timed region, so the first iteration does not carry the faults |
+| induction tunables (§4.4) | **`MALLOC_MMAP_THRESHOLD_=16384`, `MALLOC_TRIM_THRESHOLD_=0`, `MALLOC_TOP_PAD_=0`**, recorded verbatim in the artifact |
 
 ## 4. Controls — and what each can and cannot establish
 
@@ -128,29 +155,52 @@ An earlier draft conflated them, and three of its controls claimed more than the
 
 **4.1 Size sweep across the real boundary.** Sizes **4 KiB, 16 KiB, 32 KiB, 32 KiB + 1, 64 KiB, 256 KiB,
 1 MiB, 4 MiB, 16 MiB**, at a pinned alignment, with the boundary re-derived per §1.2. **The 32 KiB and
-32 KiB + 1 pair is the decisive one** — adjacent lengths on either side of the pooled ceiling. A split
-that does not track the source-established route refutes §1.2.
+32 KiB + 1 pair is the decisive one** — adjacent lengths on either side of the pooled ceiling.
 
-**4.2 Allocation and free without a payload write.** This is the control that separates the two claims:
-it retains mapping churn while removing the payload touch. **A gap that survives here is mapping and
-kernel-side cost; a gap that disappears implicates the payload write and its faults.** Neither outcome is
-a failure.
+**A missing timing discontinuity refutes the cost hypothesis, not the route.** The route is established by
+source and no timing result can overturn it. If the two adjacent cells time the same, the conclusion is
+that **taking `PageAllocator.map` is not where the cost lives** — which is a real and useful negative
+result, and the §1.2 wording must not be read as putting the route itself at stake.
+
+**4.2 Allocation and free without a payload write.** This separates the two claims: it retains mapping
+churn while removing the payload touch.
+
+**A gap that survives here is allocator bookkeeping plus mapping cost** — not "kernel-side cost", as an
+earlier draft put it, since SMP's own class selection and freelist work are still running. **A gap that
+disappears implicates the payload write and the page touches it forces.** Neither outcome is a failure,
+and §4.5 is what apportions between them.
 
 **4.3 Retained buffer.** Allocate once, reuse, free at the end. **A win here does not isolate fault
 cost** — it removes allocation, mapping, unmapping *and* repeated faults together. Read it only as an
 upper bound on the total cost of per-iteration churn, and interpret it against §4.2.
 
-**4.4 Induce the behaviour in glibc.** Force mapping with explicit tunables, per §1.3 **recording the
-tunables and verifying the mapping behaviour obtained**. If glibc then shows the fault counts and a
-slowdown, the mechanism is confirmed by reproduction in the control arm, which is stronger evidence than
-observing it once in the suspect. **Do not require an identical slowdown** — the tunables also disable
-threshold adaptation, so the arms are not otherwise matched. **Linux and glibc only**; state that scope.
+**4.4 Induce the behaviour in glibc.** Force mapping with the §3 tunables, **recording them verbatim and
+verifying the mapping behaviour obtained** rather than inferring it from the setting.
 
-**4.5 Faults versus time, at fixed size.** Spec 36 refuted first-touch for lazy-OR because **40 faults
-could not explain 2.426 ms**. Apply that test, but **not by observing that both grow with bytes** — write
-bandwidth grows with bytes too, so co-scaling across §4.1 establishes nothing. **Compare at fixed payload
-size** between the pooled and mapped routes, and against §4.2. A count that does not account for the
-timing is **contributing or incidental, and must be reported as such**.
+**What a positive result establishes is bounded.** If glibc then maps per iteration and slows down, that
+is **evidence that per-iteration release and re-touch carries real cost** — reproduced in the control arm,
+which beats observing it once in the suspect. It is **not** a quantitative attribution to fault handling,
+because the tunables change mapping overhead and disable threshold adaptation at the same time. **Do not
+require an identical slowdown**; the arms are not otherwise matched. **Linux and glibc only.**
+
+**4.5 Faults versus time, at one fixed size, with three named arms.** Spec 36 refuted first-touch for
+lazy-OR because **40 faults could not explain 2.426 ms**. Apply that test — but **not by observing that
+both grow with bytes**, since write bandwidth grows with bytes too and co-scaling across §4.1 establishes
+nothing.
+
+**At a fixed length and alignment SMP takes exactly one route**, so the comparison cannot come from SMP
+alone; an earlier draft asked for pooled-versus-mapped at fixed size, which is not available. The arms at
+one fixed size above the ceiling are:
+
+| arm | what it supplies |
+| --- | --- |
+| **SMP** | maps per iteration, plus SMP's own bookkeeping |
+| **`PageAllocator` directly** | maps per iteration with **no SMP bookkeeping** — isolates map/unmap and page touches from SMP's handling of them |
+| **libc** | the fast reference, heap-reused under default tunables |
+
+**`SMP` against `PageAllocator` is the arm that says whether the cost is mapping itself or SMP's handling
+of it.** Read all three against §4.2. A count that does not account for the timing is **contributing or
+incidental, and must be reported as such**.
 
 **No control here requires the gap to vanish or to match exactly.** **Partial explanation and
 inconclusive are reportable outcomes**, and a residual gap does not refute a contributing mechanism.
@@ -169,14 +219,27 @@ run; see `52-00` §A.0.
 
 ## 6. Reproduce before explaining
 
-**The §1 table is WSL2 and historical. Run Layer 2 on the primary host first.**
+**The §1 table is WSL2 and historical. Run Layer 2 on the primary host first**, and apply this
+**independently to `serialize` and to `toArrayAlloc`** — they are different allocation sizes and may not
+behave alike.
+
+**Range rule per row**, matching `52-00` §A.4 rather than inventing a second convention:
+
+| condition | outcome |
+| --- | --- |
+| `SMP_min / libc_max > 1.10` | **split present** on this host |
+| `SMP_max / libc_min <= 1.10` | **split absent** on this host |
+| otherwise | **unresolved** — rerun once, then report as unresolved |
 
 | outcome | what may be claimed |
 | --- | --- |
-| split reproduces on KVM | proceed to explain it, and state that the WSL2 figures were not re-measured |
-| split does not reproduce | Layer 1 still characterises **that host's** allocator behaviour; **the WSL2 result is not explained** and stays open |
+| present | explain the **KVM** result. **Transfer of the mechanism to the historical WSL2 figures is unverified** — the WSL2 numbers were not re-measured and remain a separate claim. |
+| absent | Layer 1 still characterises **that host's** allocator behaviour; the WSL2 result is **not explained** and stays open |
+| unresolved | no explanation of either host; report the ranges |
 
-**Do not explain a gap that the measured host does not show.**
+**Even a clean reproduction explains the host it was measured on.** An earlier draft let a KVM result
+stand in for the WSL2 one. **Do not explain a gap the measured host does not show, and do not transfer an
+explanation across hosts without measuring there.**
 
 ## 7. What this chunk may not conclude
 
@@ -192,19 +255,25 @@ run; see `52-00` §A.0.
   **alignment pinned per cell**.
 - Layer 1 bare reproducer and Layer 2 production replay, both allocators, with **Layer 2 reporting actual
   length and alignment** and **preserving canonical corpus initialisation and validation-after-timing**.
-- §3 boundaries pinned and recorded: operation region only, warmup separated from timed, payload write and
-  optimizer barrier specified, batch size stated, retained-buffer pre-touch stated.
-- **Syscall counts collected in non-authoritative runs**, with tracing absent from timing runs and both
-  provenances stated.
-- **Predicted fault counts derived from payload bytes and the host page size**, with page size and
-  huge-page policy recorded, and the **counter source tag per host**.
-- §4.1 sweep complete including **32 KiB and 32 KiB + 1**; §4.2, §4.3 and §4.4 run; §4.5 evaluated **at
-  fixed size**, not from co-scaling.
-- **§4.4 reports the tunables in force and the mapping behaviour verified**, not inferred.
+- §3 operation **pinned as specified** — `@memset(buf, 0xA5)`, `doNotOptimizeAway`, derived batch size
+  recorded per cell, pre-touched retained buffer, verbatim tunables — and **the emitted code checked to
+  confirm the `@memset` was not elided**.
+- **Syscall counts collected by a region-aware event trace with phase markers**, not `strace -c`, in
+  non-authoritative runs, with the **pooled-size segmentation control** showing zero `mmap`/`munmap` in
+  the timed region and initialisation mappings outside it.
+- **Page-touch prediction stated as a range** derived from payload bytes, page size and starting-address
+  offset — labelled touches, not faults — with page size, observed alignment, huge-page policy and the
+  **counter source tag** recorded per host.
+- §4.1 sweep complete including **32 KiB and 32 KiB + 1**, with a missing discontinuity reported as
+  refuting the **cost** hypothesis and **not** the source-established route.
+- §4.2, §4.3 and §4.4 run; **§4.5 run at one fixed size with all three arms — SMP, `PageAllocator`,
+  libc** — and not inferred from co-scaling.
+- **§4.4 reports the tunables verbatim and the mapping behaviour verified**, with its conclusion limited
+  to release/re-touch cost rather than quantitative fault attribution.
 - **Mapping churn and fault-explains-timing reported as separate conclusions**, with partial or
   inconclusive outcomes stated as such rather than forced.
-- §6 applied: Layer 2 reproduction on the primary host **before** any explanation of the historical
-  figures, and the WSL2 result left open if it does not reproduce.
+- §6 applied **per row** to `serialize` and `toArrayAlloc` under the stated range rule, with
+  **unresolved** available as an outcome, and **no transfer of a KVM explanation to the WSL2 figures**.
 - Spec 37's **ordering** mechanism recorded as excluded for this shape, with other layout and residency
   effects **not** claimed excluded.
 - Second host is the **aarch64 Linux** machine; any macOS run labelled with Mach counter semantics.
