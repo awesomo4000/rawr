@@ -283,9 +283,11 @@ campaign figures remain scoped to the default-off reference build.
   environment. **Part B needs no new hardware and can start immediately.** No production change.
 - **[`52-01`](52-01-large-allocation-faults.md) — why SMP loses on single large allocations.** Diagnosis
   only, no hardware beyond the existing x86_64 Linux KVM guest. Takes the two largest rows
-  (`serialize`, `toArrayAlloc`), **rules out spec 37's address-order mechanism** — both make a single
-  allocation, so there is no traversal order — and tests a size-threshold hypothesis instead, with a
-  control that **induces the same defect in libc** by forcing its mmap threshold.
+  (`serialize`, `toArrayAlloc`), excludes spec 37's many-buffer **ordering** mechanism — both make a
+  single allocation — and tests a **route threshold at SMP's pooled size ceiling of 32 KiB** instead,
+  where `32769` bytes already takes `PageAllocator.map`. Controls separate *mapping churn* from *fault
+  cost* and attempt to **induce the behaviour in glibc** via its allocation tunables. Reproduction on the
+  measured host is required before the historical WSL2 figures are explained.
 - **Stage 1 attribution is deliberately unwritten.** Its arms depend on which rows survive Stage 0 and on
   whether the allocator-localized cluster is real. Writing them now would be guessing — the same reason
   `51`'s Stage 2 stayed unwritten until `51-00` reported.
