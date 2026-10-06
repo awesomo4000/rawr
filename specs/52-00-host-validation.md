@@ -30,12 +30,26 @@ different instructions than it does on Zen 4. Board ratios from such a host are 
 within one machine and one run. That is an allocator-behaviour question, largely independent of cache size
 and vector width, and a 3.5x effect is unlikely to be erased by either.
 
-**So any bare-metal x86_64 Linux host is useful for this even if its absolute numbers are not**, including
-hardware too old to serve as a board reference. It would be the only bare-metal data point available, and
-removing the hypervisor layer is the one variable nothing in the fleet can currently vary. If the split
-reproduces there, it is a property of `SmpAllocator` and spec 37's address-order mechanism becomes the
-leading candidate; if it vanishes, that is equally informative. **Record the host's class honestly and
-make no board claim from it.**
+**Bare metal is a refinement here, not a prerequisite — an earlier version of this section overstated
+it.** Two reasons:
+
+- **The split is already validly measured.** SMP against libc runs within one machine and one run, on the
+  same hypervisor, cache and kernel. The host class does not threaten that comparison, so no bare-metal
+  run is needed to establish that the gap is real.
+- **A hypervisor guest is arguably the representative environment**, not a compromised one. If most
+  deployment is cloud or hypervisor Linux, bare metal is the outlier. Treating virtualization as
+  contamination had the representativeness backwards.
+
+What a bare-metal run would add is **mechanism attribution** — whether virtualization causes or amplifies
+the split, versus `SmpAllocator` behaving this way everywhere. Worth having opportunistically, including
+from hardware too old to serve as a board reference, and worth nothing more than that. **Record the host's
+class honestly and make no board claim from it.** Spec 37's address-order mechanism is testable in the
+environments already available, so attribution does not wait on new hardware.
+
+**One question is separate and is not answered by any host change:** Part B found rawr/SMP `serialize` at
+**0.824 ms** historically and **2.004 ms** now, on unchanged code, in the same WSL2 environment. That is
+drift within the environment we are calling representative, it is still unexplained, and it is not an
+SMP-versus-libc question.
 
 ### A.1 Both environments measured fresh
 
