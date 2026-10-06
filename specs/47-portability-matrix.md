@@ -12,7 +12,7 @@
 > compile-only. The historical findings below motivated the checks; current
 > statuses and the shared-probe control boundary are recorded in the evidence.
 > [47-03](47-03-linux-musl-runtime.md) subsequently verified both Linux/musl
-> cells and Linux/x86_64 GNU in a KVM guest, bringing coverage to **15 of 16 target cells**; only `x86_64-macos` remains `compiles`. All x86_64 Linux evidence is from a KVM guest, not bare metal.
+> cells and Linux/x86_64 GNU in a KVM guest, bringing coverage to **15 of 16 target cells**; only `x86_64-macos` remains `compiles`. All x86_64 Linux evidence is from a KVM guest or WSL2; no bare-metal x86_64 Linux host is currently available, which is why spec 52 Part A is paused.
 > It adds a guarded same-architecture musl execution mode; other non-default
 > ABIs remain compile-only. Spec 52's performance experiment is separate.
 > [47-04](47-04-windows-msvc-runtime.md) then verified Windows/x86_64 MSVC through

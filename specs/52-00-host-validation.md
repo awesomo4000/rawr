@@ -12,6 +12,31 @@ being provisioned.
 
 ## Part A — the same board in two environments
 
+> **PAUSED (10/06/2026) — hardware, not design.** The comparison below requires bare-metal x86_64 Linux on
+> the same physical machine as the WSL2 host. No such machine is currently available: spec 47 established
+> that **every** x86_64 Linux cell in the fleet is a **KVM guest or WSL2**, never bare metal, and the one
+> non-WSL2 cloud host is a 2-vCPU KVM guest on an unidentified EPYC with 8 MiB L3. **Part A is not
+> withdrawn and its design is not in question** — it is waiting on a host. See §A.0 for what can proceed
+> meanwhile.
+
+### A.0 What a lesser host can still answer
+
+**Not the board.** A 4x smaller last-level cache changes the character of the memory-shaped rows, and
+`-Dcpu=native` on a host without AVX-512 makes rawr's own `@Vector(VEC_SIZE, u64)` bitset path lower to
+different instructions than it does on Zen 4. Board ratios from such a host are not comparable.
+
+**But the allocator question is separable, and it is the highest-value one open.** `serialize` and
+`toArrayAlloc` show SMP against libc at 2.771x/0.805x and 2.914x/1.043x — a ~3.5x split on identical code,
+within one machine and one run. That is an allocator-behaviour question, largely independent of cache size
+and vector width, and a 3.5x effect is unlikely to be erased by either.
+
+**So any bare-metal x86_64 Linux host is useful for this even if its absolute numbers are not**, including
+hardware too old to serve as a board reference. It would be the only bare-metal data point available, and
+removing the hypervisor layer is the one variable nothing in the fleet can currently vary. If the split
+reproduces there, it is a property of `SmpAllocator` and spec 37's address-order mechanism becomes the
+leading candidate; if it vanishes, that is equally informative. **Record the host's class honestly and
+make no board claim from it.**
+
 ### A.1 Both environments measured fresh
 
 **Run the canonical board on native Linux x86_64 and on WSL2, on the same physical machine, from the same
