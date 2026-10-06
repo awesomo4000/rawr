@@ -8,136 +8,210 @@ Toplevel: [52-x86-64-parity.md](52-x86-64-parity.md).
 
 ## 1. What this is about
 
-`SmpAllocator` is **bimodal** against libc on the x86_64 board, not slower:
+`SmpAllocator` is **bimodal** against libc, not slower. **These are rawr/CRoaring wall-time ratios from
+the clean-`b3ab49f` Zen 4 board of 08/28 under WSL2** — historical, and the `SMP/libc` column divides two
+such ratios, so it is a shape indicator rather than a measurement:
 
-| row | SMP | libc | SMP/libc |
+| row | SMP ratio | libc ratio | SMP/libc |
 | --- | ---: | ---: | ---: |
-| `serialize` | 2.771 | 0.805 | **3.44** |
-| `toArrayAlloc (1M values)` | 2.914 | 1.043 | **2.79** |
-| `bitwiseOr (sparse)` | 0.555 | 1.450 | 0.38 |
-| `deserialize` | 0.462 | 1.320 | 0.35 |
-| `bitwiseAnd (array balanced)` | 2.688 | 9.138 | 0.29 |
-| `lazyOr construction` | 0.241 | 1.012 | 0.24 |
+| `serialize` | 2.771x | 0.805x | **3.44** |
+| `toArrayAlloc (1M values)` | 2.914x | 1.043x | **2.79** |
+| `bitwiseOr (sparse)` | 0.555x | 1.450x | 0.38 |
+| `deserialize` | 0.462x | 1.320x | 0.35 |
+| `bitwiseAnd (array balanced)` | 2.688x | 9.138x | 0.29 |
+| `lazyOr construction` | 0.241x | 1.012x | 0.24 |
 
-**So this is not an allocator-selection question.** Switching the default to libc would break five rows to
+**This is not an allocator-selection question.** Switching the default to libc would break five rows to
 fix two. The question is **which allocation shape SMP serves badly**.
 
-### 1.1 Spec 37's mechanism is ruled out, not assumed forward
+**§6 requires fresh reproduction on the measured host before any of this is explained.** The table is
+WSL2 and the work runs on a KVM guest; a bare experiment that does not reproduce the split describes that
+host's allocator behaviour and **cannot explain the WSL2 numbers**.
 
-Spec 37 established that SMP is **order-sensitive**: its cost came from the *address order* returned
-across **16,364 separate 8KB buffers** traversed in allocation sequence, and address-sorting the identical
-buffers recovered nearly all of it.
+### 1.1 What the single allocation does and does not rule out
 
-**That cannot be the cause here.** Both losing rows make **one allocation**:
+Spec 37's mechanism was **address order across 16,364 separate 8KB output buffers**, where sorting the
+identical buffers recovered nearly all of the cost. Both losing rows make **one** allocation:
 
-- `serialize` — `allocator.alloc(u8, size_bytes)` for the whole output buffer (`serialize.zig:153`);
-- `toArrayAlloc` — `allocator.alloc(u32, total)`, **4 MB** at 1M values (`bitmap.zig:793`).
+- `serialize` — `allocator.alloc(u8, size_bytes)` (`serialize.zig:153`);
+- `toArrayAlloc` — `allocator.alloc(u32, total)` (`bitmap.zig:793`).
 
-**With one allocation there is no traversal order to get wrong.** Carrying spec 37's pathology forward
-would have been the same mistake spec 51 made when it assumed a vectorized reference it had not checked.
+**One output allocation excludes spec 37's many-output-buffer *ordering* mechanism. It does not exclude
+every layout or residency effect**, and an earlier draft overstated this. What is ruled out is
+specifically the ordering pathology; other address- or residency-sensitive explanations remain open.
 
-### 1.2 The hypothesis under test
+### 1.2 The allocation route is source-established; only its cost is hypothesis
 
-`SmpAllocator` uses **64KB slabs**. A request larger than a slab cannot be served from one, so it is
-expected to go to the OS and to return its pages on free. The benchmarks allocate and free **per
-iteration**, so every iteration would re-fault and the kernel would re-zero the whole buffer. glibc
-retains blocks above its mmap threshold rather than returning them, handing back the same warm pages.
+From Zig 0.16 `std/heap/SmpAllocator.zig`:
 
-**This is a hypothesis with a numeric prediction**, which is what makes it worth testing:
-**~1024 minor faults per iteration for a 4 MB buffer under SMP, near zero under libc.**
+```
+min_class        = log2(@sizeOf(usize))            = 3
+slab_len         = @max(page_size_max, 64 * 1024)  = 65536
+size_class_count = log2(slab_len) - min_class      = 13
+sizeClassIndex(len, alignment)
+                 = @max(@bitSizeOf(usize) - @clz(len - 1), @intFromEnum(alignment), min_class) - min_class
+alloc: if (class >= size_class_count) return PageAllocator.map(len, alignment);
+```
 
-It also predicts the bimodality without appealing to hardware: SMP should win where allocations are small
-and slab-served and lose only where one allocation exceeds the slab.
+**Pooled classes stop at 32 KiB.** `32768` is class 12 and pooled; **`32769` is class 13 and already
+takes `PageAllocator.map`**, whose free unmaps. *(An earlier draft put the boundary at 64 KiB. Wrong —
+and the sweep it specified would have shown a threshold while locating it in the wrong place.)*
+
+**Alignment participates in the class**, so a high-alignment request can leave the pool at a smaller
+length. **Pin the alignment used in every cell** and state it.
+
+**Re-derive the boundary from the Zig actually under test** rather than trusting these constants;
+`slab_len` depends on `page_size_max`, which is target-dependent.
+
+**Hypothesis:** mapping and unmapping per iteration makes the kernel re-establish and re-zero the pages
+each time, and that dominates. **The route is established by source. The timing consequence is what this
+chunk tests.**
+
+### 1.3 What glibc actually does
+
+An earlier draft said glibc "retains blocks above its mmap threshold". **That is backwards.**
+Mmap-backed allocations **are** returned on free. What makes glibc fast here is that the default mmap
+threshold **adapts dynamically** — after observing frees of mapped blocks it raises the threshold, moving
+subsequent allocations of that size into the reusable heap, which is not unmapped.
+
+**That has a direct consequence for §4.4:** setting an explicit threshold **disables the adaptation**, so
+the induction arm changes two things at once. It must therefore **record the tunables in force and verify
+the mapping behaviour actually obtained**, not infer it from the setting.
+
+References: GNU allocator documentation and the glibc memory-allocation tunables page.
 
 ## 2. Two layers
 
-**Layer 1 — bare reproducer, zero rawr and zero CRoaring code.** Allocator, one large `alloc`, write the
-buffer, `free`, in a loop. This is spec 37's shape, and it is what made spec 37 decisive: if a bare
-reproducer shows the split, the mechanism belongs to the allocator and nothing else is implicated.
+**Layer 1 — bare reproducer, zero rawr and zero CRoaring code.** Allocator, one `alloc`, payload write,
+`free`, in a loop. Spec 37's shape, and what made spec 37 decisive: if a bare loop shows the split, the
+mechanism belongs to the allocator.
 
-*(Using `c_allocator` directly is normally discouraged in rawr paths because it hides leaks. Here the
-allocator **is** the subject, exactly as in spec 37, and the scope is this reproducer only.)*
+*(`c_allocator` is normally discouraged in rawr paths because it hides leaks. Here the allocator **is**
+the subject, as in spec 37, and the scope is this reproducer.)*
 
 **Layer 2 — the real rows.** Replay the production `serialize` and `toArrayAlloc` paths under both
-allocators with the same instrumentation, and **report the allocation size each one actually requests**
-rather than assuming. Without Layer 2 this chunk would explain a synthetic case and assume it is the same
-thing.
+allocators, **reporting each path's actual requested length and alignment** rather than assuming.
 
-## 3. Instrumentation
+**Layer 2 must preserve the canonical harness order**: corpus initialisation as the canonical worker does
+it, and **validation after timing, never before**. Spec 35's 1.52 ms artifact came from validation
+preconditioning SMP ahead of the timed cell, and reproducing that here would manufacture exactly the
+effect under study.
 
-**Reuse spec 36's fault counter.** It already reads `getrusage` → `ru_minflt` and reports *which* source
-it used (`RAWR_RESIDENCY_FAULT_LINUX_RUSAGE`, `bench_lazy_or_residency.zig:217`). Do not rebuild it, and
-**carry the source tag into this report** — a fault count whose provenance is unstated is not evidence.
+## 3. Instrumentation and measurement boundaries
 
-Per cell, report:
+**Fault counts.** Reuse spec 36's counter (`bench_lazy_or_residency.zig:217`) and **carry its source tag**
+into the report. **Counter semantics are not uniform:** on Linux it reports `getrusage` `ru_minflt`; on
+Darwin the available counters are Mach faults and page-ins, which are **not** equivalent to minor/major
+faults. Report the tag per host and do not compare across hosts without naming the difference.
 
-- **minor and major faults per iteration**;
-- **`mmap` and `munmap` call counts**, which test "goes to the OS per allocation" directly rather than by
-  inference;
-- wall time under the spec 22 protocol: fresh process per cell, warmup then timed, **≥5 process medians
-  with full ranges**.
+**Derive predicted counts, do not assert them.** Expected faults = payload bytes ÷ page size. An earlier
+draft wrote "~1024 faults", which assumes 4 MiB over 4 KiB pages; **M4 uses 16 KiB pages**, giving 256 for
+the same payload. **Record the page size and any huge-page policy in force** per host.
 
-## 4. Controls — each can refute the hypothesis
+**Syscall counts.** Pin the method: count `mmap`/`munmap` by tracing (`strace -c -f -e trace=mmap,munmap`
+or the platform equivalent) in **separate, non-authoritative runs**. **Tracing must not appear in timing
+runs** — its overhead would contaminate exactly what is being measured. Report the two from different runs
+and say so.
 
-**4.1 Size sweep across the slab boundary.** Sizes **16 KB, 32 KB, 64 KB, 128 KB, 256 KB, 1 MB, 4 MB,
-16 MB**. If the mechanism is "exceeds the 64KB slab", the fault and time split must **appear at or above
-the boundary and be absent below it**. **A split with no size threshold refutes the size-class
-hypothesis** and this is the central falsification.
+**Region and protocol.** Count and time **only the operation region**: `alloc`, payload write, `free`.
+Distinguish warmup from timed iterations and report both counts. Spec 22 protocol: fresh process per
+cell, warmup then timed, **≥5 process medians with full ranges**.
 
-**4.2 Retained buffer.** Allocate once, reuse across all iterations, free at the end. If the cost is
-re-faulting after release, the gap must **vanish for both allocators**. If it persists, the cause is not
-allocate/free churn and §1.2 is wrong.
+**Pin the operation itself**, since the whole result depends on it: the exact payload write (`@memset`
+versus a strided touch), the **optimizer barrier** preventing its elision, the **batch size** per timed
+iteration, and for §4.3 whether the retained buffer is **pre-touched** before timing begins.
 
-**4.3 Induce the defect in the fast arm.** glibc's mmap threshold is tunable:
-`MALLOC_MMAP_THRESHOLD_=131072 MALLOC_TRIM_THRESHOLD_=0` forces it to mmap and release large blocks.
-**Under that setting libc should acquire the same fault count and the same slowdown.** This is the
-strongest arm in the design — confirming a mechanism by reproducing it in the control is far better
-evidence than observing it once in the suspect. **Linux and glibc only**; state that scope rather than
-implying portability.
+## 4. Controls — and what each can and cannot establish
 
-**4.4 The faults must account for the time.** Spec 36 refuted first-touch for lazy-OR precisely because
-**40 faults could not explain 2.426 ms**. Apply the same test here: report faults per iteration *and*
-time, and check they move **together** across the §4.1 sweep. **A large fault count that does not track
-the timing is incidental, not causal**, and must be reported as such.
+**Separate two claims throughout: "mapping churn observed" and "fault handling explains the timing."**
+An earlier draft conflated them, and three of its controls claimed more than they could.
+
+**4.1 Size sweep across the real boundary.** Sizes **4 KiB, 16 KiB, 32 KiB, 32 KiB + 1, 64 KiB, 256 KiB,
+1 MiB, 4 MiB, 16 MiB**, at a pinned alignment, with the boundary re-derived per §1.2. **The 32 KiB and
+32 KiB + 1 pair is the decisive one** — adjacent lengths on either side of the pooled ceiling. A split
+that does not track the source-established route refutes §1.2.
+
+**4.2 Allocation and free without a payload write.** This is the control that separates the two claims:
+it retains mapping churn while removing the payload touch. **A gap that survives here is mapping and
+kernel-side cost; a gap that disappears implicates the payload write and its faults.** Neither outcome is
+a failure.
+
+**4.3 Retained buffer.** Allocate once, reuse, free at the end. **A win here does not isolate fault
+cost** — it removes allocation, mapping, unmapping *and* repeated faults together. Read it only as an
+upper bound on the total cost of per-iteration churn, and interpret it against §4.2.
+
+**4.4 Induce the behaviour in glibc.** Force mapping with explicit tunables, per §1.3 **recording the
+tunables and verifying the mapping behaviour obtained**. If glibc then shows the fault counts and a
+slowdown, the mechanism is confirmed by reproduction in the control arm, which is stronger evidence than
+observing it once in the suspect. **Do not require an identical slowdown** — the tunables also disable
+threshold adaptation, so the arms are not otherwise matched. **Linux and glibc only**; state that scope.
+
+**4.5 Faults versus time, at fixed size.** Spec 36 refuted first-touch for lazy-OR because **40 faults
+could not explain 2.426 ms**. Apply that test, but **not by observing that both grow with bytes** — write
+bandwidth grows with bytes too, so co-scaling across §4.1 establishes nothing. **Compare at fixed payload
+size** between the pooled and mapped routes, and against §4.2. A count that does not account for the
+timing is **contributing or incidental, and must be reported as such**.
+
+**No control here requires the gap to vanish or to match exactly.** **Partial explanation and
+inconclusive are reportable outcomes**, and a residual gap does not refute a contributing mechanism.
 
 ## 5. Hosts
 
-**The x86_64 Linux KVM guest is the primary host** and is sufficient. §4.3 needs Linux and glibc, so that
-arm runs there only.
+**The x86_64 Linux KVM guest is the primary host.** §4.4 needs Linux and glibc and runs there only.
 
-**Run Layers 1 and 2 on the aarch64 host as well.** `getrusage` provides `ru_minflt` there too, and the
-bimodality is an x86_64 observation that has never been checked on aarch64 — if SMP shows the same
-size-threshold behaviour on both, the finding is about the allocator's design rather than one platform.
-**Report the fault-source tag per host**, since the mechanism differs.
+**Second host: the aarch64 Linux machine**, not the aarch64 macOS machine. An earlier draft said "the
+aarch64 host" ambiguously. Linux keeps the counter semantics comparable with the primary host; macOS would
+introduce the Mach-counter difference of §3 on top of everything else. **Running the macOS host is
+optional and, if done, its counters must be labelled as Mach faults and page-ins, not minor faults.**
 
 **No board run, and no bare-metal host is required.** The split is measured within one machine and one
-run, so the host class does not threaten it; see `52-00` §A.0.
+run; see `52-00` §A.0.
 
-## 6. What this chunk may not conclude
+## 6. Reproduce before explaining
 
-- **No fix, no allocator change, no default change.** SMP wins 3–4x on five rows; a switch is not on the
+**The §1 table is WSL2 and historical. Run Layer 2 on the primary host first.**
+
+| outcome | what may be claimed |
+| --- | --- |
+| split reproduces on KVM | proceed to explain it, and state that the WSL2 figures were not re-measured |
+| split does not reproduce | Layer 1 still characterises **that host's** allocator behaviour; **the WSL2 result is not explained** and stays open |
+
+**Do not explain a gap that the measured host does not show.**
+
+## 7. What this chunk may not conclude
+
+- **No fix, no allocator change, no default change.** SMP wins 3–4x on five rows; no switch is on the
   table and this chunk does not evaluate one.
-- **No claim that SMP is "slow".** The finding, if it holds, is a **size threshold**, and the honest
-  statement names the shape rather than the allocator.
+- **No claim that SMP is "slow".** If it holds, the finding is a **route threshold at the pooled size
+  ceiling**, named by shape rather than by allocator.
 - **No performance claim for any newly measured host.**
 
 ## Acceptance
 
-- Layer 1 bare reproducer and Layer 2 production replay, both allocators, per §2, with **Layer 2
-  reporting each path's actual requested allocation size**.
-- Faults, `mmap`/`munmap` counts, and timing per §3, with the **fault-source tag recorded per host**.
-- **§4.1 size sweep complete**, with the threshold located or its **absence reported as refuting §1.2**.
-- **§4.2 retained-buffer control run**, with the gap vanishing or §1.2 reported as wrong.
-- **§4.3 induction control run on Linux/glibc**, stating whether forcing libc to mmap reproduces both the
-  fault count and the slowdown.
-- **§4.4 fault-versus-time check stated explicitly**, including the case where counts do not track timing.
-- Spec 37's order mechanism **recorded as ruled out for this shape**, with the one-allocation reason, so it
-  is not reintroduced.
-- Both hosts for Layers 1 and 2; §4.3 Linux only and scoped as such.
-- No production change; existing suites plus `check-32`, `check-docs`, `check-package`, `check-portability`
-  green.
+- Boundary **re-derived from the Zig under test** and reported, with the pooled ceiling and the
+  **alignment pinned per cell**.
+- Layer 1 bare reproducer and Layer 2 production replay, both allocators, with **Layer 2 reporting actual
+  length and alignment** and **preserving canonical corpus initialisation and validation-after-timing**.
+- §3 boundaries pinned and recorded: operation region only, warmup separated from timed, payload write and
+  optimizer barrier specified, batch size stated, retained-buffer pre-touch stated.
+- **Syscall counts collected in non-authoritative runs**, with tracing absent from timing runs and both
+  provenances stated.
+- **Predicted fault counts derived from payload bytes and the host page size**, with page size and
+  huge-page policy recorded, and the **counter source tag per host**.
+- §4.1 sweep complete including **32 KiB and 32 KiB + 1**; §4.2, §4.3 and §4.4 run; §4.5 evaluated **at
+  fixed size**, not from co-scaling.
+- **§4.4 reports the tunables in force and the mapping behaviour verified**, not inferred.
+- **Mapping churn and fault-explains-timing reported as separate conclusions**, with partial or
+  inconclusive outcomes stated as such rather than forced.
+- §6 applied: Layer 2 reproduction on the primary host **before** any explanation of the historical
+  figures, and the WSL2 result left open if it does not reproduce.
+- Spec 37's **ordering** mechanism recorded as excluded for this shape, with other layout and residency
+  effects **not** claimed excluded.
+- Second host is the **aarch64 Linux** machine; any macOS run labelled with Mach counter semantics.
+- No production change; existing suites plus `check-32`, `check-docs`, `check-package`,
+  `check-portability` green.
 
 ## Estimate
 
-**S/M** — the reproducer is small and the fault counter already exists. The controls are most of the work,
-and §4.3 is the one that would settle it.
+**S/M** — the reproducer is small and the fault counter exists. The controls and the measurement pinning
+are the work, and §4.2 plus §4.4 are what would settle it.
