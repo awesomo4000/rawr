@@ -281,6 +281,11 @@ campaign figures remain scoped to the default-off reference build.
   boards may not be reused, since assuming this environment has not drifted is assuming the answer.
   **Part B**: reconcile the §2.1 `serialize` discrepancy by running `2ba714a` and `HEAD` in the current
   environment. **Part B needs no new hardware and can start immediately.** No production change.
+- **[`52-01`](52-01-large-allocation-faults.md) — why SMP loses on single large allocations.** Diagnosis
+  only, no hardware beyond the existing x86_64 Linux KVM guest. Takes the two largest rows
+  (`serialize`, `toArrayAlloc`), **rules out spec 37's address-order mechanism** — both make a single
+  allocation, so there is no traversal order — and tests a size-threshold hypothesis instead, with a
+  control that **induces the same defect in libc** by forcing its mmap threshold.
 - **Stage 1 attribution is deliberately unwritten.** Its arms depend on which rows survive Stage 0 and on
   whether the allocator-localized cluster is real. Writing them now would be guessing — the same reason
   `51`'s Stage 2 stayed unwritten until `51-00` reported.
