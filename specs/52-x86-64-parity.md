@@ -286,8 +286,14 @@ campaign figures remain scoped to the default-off reference build.
   (`serialize`, `toArrayAlloc`), excludes spec 37's many-buffer **ordering** mechanism — both make a
   single allocation — and tests a **route threshold at SMP's pooled size ceiling of 32 KiB** instead,
   where `32769` bytes already takes `PageAllocator.map`. Controls separate *mapping churn* from *fault
-  cost* and attempt to **induce the behaviour in glibc** via its allocation tunables. Reproduction on the
-  measured host is required before the historical WSL2 figures are explained.
+  cost* and attempt to **induce the behaviour in glibc** via its allocation tunables. Reproduction only
+  explains the measured host; transfer to historical WSL2 figures requires fresh WSL2 evidence.
+  **Implemented 10/06/2026**, with results in
+  [the diagnosis report](../docs/large-allocation-faults.md). The bare boundary discontinuity resolves
+  on both Linux hosts, and glibc induction reproduces release/re-touch cost. This does not isolate
+  fault-handler time. Production KVM serialize reproduces the split; KVM toArrayAlloc remains
+  unresolved after its retry. Neither aarch64 row exceeds the 10% range gate. WSL2 transfer stays
+  unverified. No production change, allocator decision, or board update follows from this diagnosis.
 - **Stage 1 attribution is deliberately unwritten.** Its arms depend on which rows survive Stage 0 and on
   whether the allocator-localized cluster is real. Writing them now would be guessing — the same reason
   `51`'s Stage 2 stayed unwritten until `51-00` reported.

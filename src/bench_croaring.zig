@@ -1347,6 +1347,29 @@ pub fn parityPrepare(row: ParityRow, implementation: ParityImplementation) void 
     }
 }
 
+/// Spec 52-01: observe one real allocation after timing, without wrapping the
+/// allocator in the canonical timed path. This adapter is benchmark-only.
+pub fn parityLargeOutputObservation(row: ParityRow, kind: ParityAllocator) !struct { bytes: usize, alignment: usize, address: usize } {
+    const a = switch (kind) {
+        .smp => std.heap.smp_allocator,
+        .libc => libc_allocator,
+        else => return error.BadAllocator,
+    };
+    switch (row) {
+        .serialize => {
+            const bytes = try rawr_contains_bm.?.serialize(a);
+            defer a.free(bytes);
+            return .{ .bytes = bytes.len, .alignment = @alignOf(u8), .address = @intFromPtr(bytes.ptr) };
+        },
+        .to_array_alloc => {
+            const values = try rawr_contains_bm.?.toArrayAlloc(a);
+            defer a.free(values);
+            return .{ .bytes = values.len * @sizeOf(u32), .alignment = @alignOf(u32), .address = @intFromPtr(values.ptr) };
+        },
+        else => return error.BadRow,
+    }
+}
+
 pub const ParityRawrSparseInputs = struct {
     left: *const RoaringBitmap,
     right: *const RoaringBitmap,

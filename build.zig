@@ -460,6 +460,33 @@ pub fn build(b: *std.Build) void {
     );
     bench_tiny_mixed_worker_step.dependOn(&b.addInstallArtifact(bench_tiny_mixed_worker_exe, .{}).step);
 
+    // Spec 52-01 keeps the bare worker free of bitmap implementation code.
+    const large_step = b.step("bench-large-alloc", "Build large allocation fault diagnosis workers");
+    inline for (.{ "bench_large_alloc", "bench_large_alloc_replay" }) |name| {
+        const mod = b.createModule(.{
+            .root_source_file = b.path("src/" ++ name ++ ".zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        });
+        mod.link_libc = true;
+        mod.addIncludePath(b.path("tools"));
+        mod.addCSourceFile(.{ .file = b.path("tools/bench_residency_diag.c"), .flags = &.{"-O3"} });
+        mod.addCSourceFile(.{ .file = b.path("tools/bench_large_alloc_diag.c"), .flags = &.{"-O3"} });
+        if (comptime std.mem.eql(u8, name, "bench_large_alloc_replay")) {
+            mod.addImport("rawr", bench_lib_mod);
+            addTranslatedCImport(b, mod, .{
+                .header = "tools/bench_residency_diag.h",
+                .include_dir = "tools/",
+                .c_source = "vendor/roaring.c",
+                .extra_c_sources = &.{ "tools/croaring_iterate_diag.c", "tools/croaring_select_diag.c" },
+                .croaring_avx512 = croaring_avx512,
+                .target = target,
+                .optimize = .ReleaseFast,
+            });
+        }
+        large_step.dependOn(&b.addInstallArtifact(b.addExecutable(.{ .name = name, .root_module = mod }), .{}).step);
+    }
+
     // Fresh-process lazy-OR page-residency diagnosis worker.
     const bench_lazy_residency_mod = b.createModule(.{
         .root_source_file = b.path("src/bench_lazy_or_residency.zig"),

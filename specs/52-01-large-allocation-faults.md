@@ -6,6 +6,50 @@ Toplevel: [52-x86-64-parity.md](52-x86-64-parity.md).
 
 **Diagnosis only. No production change, no allocator change, no default change.**
 
+## Implementation outcome, 10/06/2026
+
+Completed on Linux x86_64 under KVM and Linux aarch64. The durable report,
+commands, full timing ranges, worker hashes, controls, and validation results
+are in [large-allocation-faults.md](../docs/large-allocation-faults.md).
+
+- The installed Zig 0.16.0 sources give a 32,768-byte pooled ceiling on both
+  hosts at alignment 1. The bare 32,768/32,769 pair has separated timing ranges
+  on both. Traces change from zero mappings to one map/unmap per cycle, with
+  9/3 minor faults at 32,769 bytes on x86_64/aarch64.
+- At a fixed 4 MiB, direct PageAllocator and SMP have overlapping full-write
+  ranges and the same 1,024/256 minor faults per cycle. No-write retains
+  mapping but removes payload faults. Retained buffers remove timed mapping
+  and faults; x86_64 still has a separated SMP/libc residual. Overlap on
+  aarch64 is not a claim of identical cost.
+- The prescribed glibc tunables induce one map/unmap per cycle at 4 MiB.
+  Full-write libc rises from 1.730 [1.556,1.929] ms to
+  4.107 [3.724,4.141] ms, with 1,025 minor faults instead of zero. This supports
+  release/re-touch cost, not a quantitative attribution to fault handling.
+- Production replay preserves canonical preparation and batching, with
+  validation and allocation observation after timing. Actual requests are
+  2,524,082 bytes/alignment 1 for serialize and 3,999,572 bytes/alignment 4
+  for toArrayAlloc. The x86_64 serialize split is present; toArrayAlloc remains
+  unresolved after one paired retry. On aarch64 serialize is absent after
+  its paired retry and toArrayAlloc is absent on its first run under the
+  greater-than-10% range rule. Neither absence means equal cost.
+- Historical WSL2 transfer remains unverified. No board, production code,
+  public API, or default allocator changed. One output allocation excludes
+  spec 37's many-output-buffer ordering explanation, not every layout effect.
+
+All acceptance items below were exercised. The campaigns contain 140 cells
+and 720 authoritative timing processes including retries, plus disposable
+calibration and separate trace processes. Positive exact-count tracing,
+malformed-marker rejection, the pooled negative case, and worker-protocol
+mutation controls passed. Disassembly confirms the fill survives on both
+architectures as a call to `compiler_rt.memset`.
+
+Validation passed: normal build; both unit suites on both hosts; both
+differential suites and check-32 on x86_64; check-docs and check-package on
+both; and the 18-cell check-portability matrix on aarch64. The package
+allowlist remains 33 files. A separate ReleaseSafe bare build passed write,
+retained, and no-write smoke cases. This outcome is committed with the
+implementation before review handoff.
+
 ## 1. What this is about
 
 `SmpAllocator` is **bimodal** against libc, not slower. **These are rawr/CRoaring wall-time ratios from
